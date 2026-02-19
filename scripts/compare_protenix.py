@@ -76,7 +76,7 @@ def compare_conditioning(ptx_sd: OrderedDict):
     hf_cond = HfCond(config).to(DEVICE)
 
     # Transfer weights via our mapping
-    from load_protenix import load_protenix_state_dict
+    from helico.load_protenix import load_protenix_state_dict
     from helico.model import Helico
     model = Helico(config)
     stats = load_protenix_state_dict(ptx_sd, model)
@@ -177,7 +177,7 @@ def compare_full_module(ptx_sd: OrderedDict):
     # ── Instantiate Helico ──
     config = HelicoConfig()
     from helico.model import Helico
-    from load_protenix import load_protenix_state_dict
+    from helico.load_protenix import load_protenix_state_dict
     model = Helico(config)
     stats = load_protenix_state_dict(ptx_sd, model)
     hf_diff = model.diffusion.to(DEVICE).eval()
@@ -337,7 +337,7 @@ def compare_pairformer(ptx_sd: OrderedDict):
     # ── Instantiate Helico ──
     config = HelicoConfig()
     model = Helico(config)
-    from load_protenix import load_protenix_state_dict as load_ptx_sd
+    from helico.load_protenix import load_protenix_state_dict as load_ptx_sd
     stats = load_ptx_sd(ptx_sd, model)
     hf_pf = model.pairformer.to(DEVICE).eval()
     print(f"  Helico Pairformer: {sum(p.numel() for p in hf_pf.parameters()):,} params")
@@ -401,7 +401,7 @@ def compare_msa(ptx_sd: OrderedDict):
     # ── Instantiate Helico ──
     config = HelicoConfig()
     model = Helico(config)
-    from load_protenix import load_protenix_state_dict as load_ptx_sd
+    from helico.load_protenix import load_protenix_state_dict as load_ptx_sd
     stats = load_ptx_sd(ptx_sd, model)
     hf_msa = model.msa_module.to(DEVICE).eval()
     print(f"  Helico MSAModule: {sum(p.numel() for p in hf_msa.parameters()):,} params")

@@ -5,7 +5,7 @@ Usage:
     python scripts/load_protenix.py --protenix-checkpoint path/to/model_v0.5.0.pt --output helico_from_protenix.pt
 
 Programmatic:
-    from scripts.load_protenix import load_protenix_checkpoint
+    from helico.load_protenix import load_protenix_checkpoint
     stats = load_protenix_checkpoint("model_v0.5.0.pt", helico_model)
 """
 

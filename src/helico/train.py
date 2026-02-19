@@ -590,7 +590,7 @@ def infer_main():
     # Load model
     if args.protenix is not None:
         from collections import OrderedDict
-        from scripts.load_protenix import load_protenix_state_dict
+        from helico.load_protenix import load_protenix_state_dict
         config = HelicoConfig()  # default = Protenix dimensions
         model = Helico(config)
         ckpt = torch.load(args.protenix, map_location="cpu", weights_only=False)

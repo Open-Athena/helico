@@ -978,7 +978,7 @@ class TestLoadProtenix:
     @pytest.fixture(scope="class")
     def loaded_model(self, protenix_sd):
         """Load Protenix weights into a full-size Helico model."""
-        from scripts.load_protenix import load_protenix_state_dict
+        from helico.load_protenix import load_protenix_state_dict
         model = Helico(HelicoConfig())
         stats = load_protenix_state_dict(protenix_sd, model)
         return model, stats
@@ -994,7 +994,7 @@ class TestLoadProtenix:
 
     def test_weights_actually_changed(self, loaded_model, protenix_sd):
         """Verify transferred weights are the actual Protenix values, not random init."""
-        from scripts.load_protenix import (
+        from helico.load_protenix import (
             build_mapping, build_pairformer_mapping, build_msa_mapping,
             build_trunk_init_mapping, build_input_embedder_mapping,
             build_template_mapping, build_confidence_mapping, build_distogram_mapping,
