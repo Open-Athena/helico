@@ -1,5 +1,5 @@
-# Project helico
-Helico's goal is to enable robust experimentation around modeling and data improvements for AlphaFold3-like architectures.
+# Helico
+Our goal is to enable robust experimentation around modeling and data improvements for AlphaFold3-like architectures.
 
 ## Key ideas
 
@@ -19,7 +19,7 @@ We aim for a low-abstraction codebase that is easy for agents to work with. Test
 
 ## Project status
 
-We are just getting started. Our initial implementation closely follows [Protenix](https://github.com/bytedance/Protenix) and our model can load protenix weights. Before we do expensive training runs from scratch we are planning to iterate on modeling improvements starting from these weights. (Code coming soon!)
+We are just getting started. Our initial implementation closely follows [Protenix](https://github.com/bytedance/Protenix) and our model can load protenix weights. Before we do expensive training runs from scratch we are planning to iterate on modeling improvements starting from these weights.
 
 
 ## Architecture
