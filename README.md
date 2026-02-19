@@ -1,7 +1,7 @@
 # Project helico
 Helico's goal is to enable robust experimentation around modeling and data improvements for AlphaFold3-like architectures.
 
-## Motivation and key ideas
+## Key ideas
 
 Open source [AlphaFold3](https://www.nature.com/articles/s41586-024-07487-w) clones have so far kept the AF3 architecture remarkably intact with mostly small tweaks and limited ablations.
 
