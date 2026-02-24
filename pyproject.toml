@@ -19,11 +19,17 @@ dependencies = [
 dev = [
     "pytest>=7",
 ]
+bench = [
+    "tmtools",
+    "DockQ",
+    "tqdm",
+]
 
 [project.scripts]
 helico-train = "helico.train:main"
 helico-infer = "helico.train:infer_main"
 helico-preprocess = "helico.data:preprocess_main"
+helico-bench = "helico.bench:main"
 
 [build-system]
 requires = ["hatchling"]
