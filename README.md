@@ -41,6 +41,8 @@ src/helico/
     model.py                  All neural network modules in a single file
     data.py                   Data pipeline (CCD, mmCIF, tokenizer, MSA, cropping)
     train.py                  Training loop, DDP, checkpointing, inference
+    bench.py                  FoldBench benchmark (prediction + scoring)
+    load_protenix.py          Protenix checkpoint weight transfer
   tests/
     test_data.py              Integration tests for the data pipeline
     test_model.py             Integration tests for all model components
@@ -120,6 +122,9 @@ uv pip install -e ".[dev]"
 | `numpy`, `scipy` | Numerical operations |
 | `pyyaml>=6.0` | YAML input parsing for inference |
 | `pytest>=7` | Testing (dev dependency) |
+| `tmtools` | TM-score computation (bench dependency) |
+| `DockQ` | Interface quality scoring (bench dependency) |
+| `tqdm` | Progress bars (bench dependency) |
 
 ## Training Data
 
@@ -487,6 +492,194 @@ coords = results["coords"]      # (B, N_atoms, 3)
 plddt = results["plddt"]        # (B, N_tokens) in [0, 1]
 ptm = results["ptm"]            # (B,) in [0, 1]
 ```
+
+## Benchmarking (FoldBench)
+
+`helico-bench` evaluates prediction accuracy against ground truth structures from the [FoldBench](https://github.com/BEAM-Labs/FoldBench) benchmark (1,522 biological assemblies across 9 categories). Results are directly comparable to the FoldBench leaderboard (AlphaFold3, Boltz-2, Protenix, etc.).
+
+### Install Benchmark Dependencies
+
+```bash
+uv pip install -e ".[bench]"
+```
+
+This adds `tmtools` (TM-score), `DockQ` (interface scoring), and `tqdm`.
+
+### Download FoldBench Data
+
+```bash
+# Clone the FoldBench repository
+git clone https://github.com/BEAM-Labs/FoldBench.git
+cd FoldBench
+
+# Download ground truth structures (1.06 GB tar from Google Drive)
+pip install gdown
+gdown 17KdWDXKATaeHF6inPxhPHIRuIzeqiJxS -O ground_truths.tar
+tar xf ground_truths.tar
+```
+
+After extraction, the directory layout should be:
+
+```
+FoldBench/
+  targets/                              # 9 CSV files (one per category)
+    interface_protein_protein.csv
+    interface_antibody_antigen.csv
+    interface_protein_peptide.csv
+    interface_protein_ligand.csv
+    interface_protein_dna.csv
+    interface_protein_rna.csv
+    monomer_protein.csv
+    monomer_rna.csv
+    monomer_dna.csv
+  examples/
+    alphafold3_inputs.json              # AF3-style input JSON (4 example targets)
+  ground_truth_20250520/                # Ground truth CIF files
+    *.cif                               # One CIF per target assembly
+```
+
+### Download CCD (if not already available)
+
+The Chemical Component Dictionary is needed for tokenization. If you already have it from training setup, point `--ccd` at your existing cache. Otherwise:
+
+```bash
+wget https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz
+gunzip components.cif.gz
+
+# Place it where helico expects it
+export HELICO_RAW_DIR=/path/to/dir/containing/components.cif
+export HELICO_PROCESSED_DIR=/path/to/processed
+```
+
+The CCD cache (`ccd_cache.pkl`) will be built automatically on first run and reused subsequently.
+
+### Running the Benchmark
+
+```bash
+# Set environment variables (required for CCD loading)
+export HELICO_RAW_DIR=/path/to/raw       # Directory containing components.cif
+export HELICO_PROCESSED_DIR=/path/to/processed  # Directory for ccd_cache.pkl
+
+# Run on all categories with Protenix weights
+helico-bench \
+    --protenix checkpoints/protenix_base_default_v1.0.0.pt \
+    --foldbench-dir /path/to/FoldBench \
+    --output-dir bench_results/
+
+# Run a single category
+helico-bench \
+    --protenix checkpoints/protenix_base_default_v1.0.0.pt \
+    --foldbench-dir /path/to/FoldBench \
+    --output-dir bench_results/ \
+    --categories monomer_protein
+
+# Run multiple specific categories
+helico-bench \
+    --protenix checkpoints/protenix_base_default_v1.0.0.pt \
+    --foldbench-dir /path/to/FoldBench \
+    --output-dir bench_results/ \
+    --categories monomer_protein,interface_protein_ligand
+
+# With a Helico checkpoint instead of Protenix
+helico-bench \
+    --checkpoint checkpoints/final.pt \
+    --foldbench-dir /path/to/FoldBench \
+    --output-dir bench_results/
+
+# Resume a partially completed run (reuses cached predictions)
+helico-bench \
+    --protenix checkpoints/protenix_base_default_v1.0.0.pt \
+    --foldbench-dir /path/to/FoldBench \
+    --output-dir bench_results/ \
+    --resume
+```
+
+### Input Sources
+
+For each target, `helico-bench` tries two input sources in order:
+
+1. **AF3-style JSON** (`examples/alphafold3_inputs.json`) — used if the target name matches an entry in the JSON. Supports protein, DNA, RNA, ligands, and modifications.
+2. **Ground truth CIF fallback** — extracts chain sequences directly from the ground truth CIF file. This works for all targets but only captures sequences (no ligand CCD codes or modifications).
+
+### Metrics
+
+| Metric | Method | Categories |
+|--------|--------|------------|
+| **LDDT** | Hard thresholds at 0.5/1/2/4 Å, 15 Å distance cutoff | All |
+| **TM-score** | `tmtools` (C-alpha atoms, wraps TMalign) | Monomers |
+| **GDT-TS** | Fraction within 1/2/4/8 Å after Kabsch superposition | Monomers |
+| **RMSD** | Kabsch superposition via `scipy.spatial.transform.Rotation` | Monomers |
+| **DockQ** | `DockQ` package on predicted PDB vs native CIF | Interfaces |
+| **LDDT-PLI** | LDDT restricted to protein-ligand cross-boundary pairs | Protein-ligand |
+| **LRMSD** | Ligand RMSD after superposing on receptor atoms | Protein-ligand |
+
+Success criteria: DockQ >= 0.23 (interfaces), LRMSD < 2 Å AND LDDT-PLI > 0.8 (protein-ligand).
+
+### Output
+
+Results are saved to `--output-dir`:
+
+```
+bench_results/
+  results/
+    monomer_protein.csv           # Per-target metrics for each category
+    interface_protein_ligand.csv
+    ...
+  predictions/                    # Cached prediction pickles (for --resume)
+    5sbj-assembly1.pkl
+    ...
+  summary.csv                     # Aggregate metrics across all categories
+```
+
+A summary table is also printed to stdout:
+
+```
+==========================================================================================
+Category                            |    N | Predicted | Success% | Mean LDDT | Mean DockQ
+------------------------------------------------------------------------------------------
+monomer_protein                     |  334 |       330 |        - |      0.85 |          -
+interface_protein_protein           |  279 |       275 |    45.1% |      0.72 |       0.38
+interface_protein_ligand            |  558 |       550 |    12.3% |      0.65 |          -
+...
+==========================================================================================
+```
+
+### Benchmark CLI Reference
+
+```
+helico-bench [OPTIONS]
+
+Model (one required):
+  --checkpoint PATH       Path to Helico checkpoint
+  --protenix PATH         Path to Protenix checkpoint (.pt)
+
+Data:
+  --foldbench-dir PATH    Path to FoldBench directory (required)
+  --ccd PATH              Path to CCD cache pickle (default: $HELICO_PROCESSED_DIR/ccd_cache.pkl)
+
+Output:
+  --output-dir PATH       Output directory for results (required)
+
+Options:
+  --categories LIST       Comma-separated category names (default: all 9 categories)
+  --n-samples N           Number of diffusion samples per target (default: 5)
+  --max-tokens N          Skip targets with more than N tokens (default: 2048)
+  --resume                Reuse cached predictions from a previous run
+```
+
+### Categories
+
+| Category | Targets | Description |
+|----------|---------|-------------|
+| `monomer_protein` | 334 | Single-chain proteins |
+| `monomer_rna` | 15 | Single-chain RNA |
+| `monomer_dna` | 14 | Single-chain DNA |
+| `interface_protein_protein` | 279 | Protein-protein complexes |
+| `interface_antibody_antigen` | 172 | Antibody-antigen complexes |
+| `interface_protein_peptide` | 51 | Protein-peptide complexes |
+| `interface_protein_ligand` | 558 | Protein-ligand complexes |
+| `interface_protein_dna` | 330 | Protein-DNA complexes |
+| `interface_protein_rna` | 70 | Protein-RNA complexes |
 
 ## Tests
 
