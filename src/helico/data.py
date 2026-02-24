@@ -57,11 +57,23 @@ NUCLEOTIDES = "ACGTU"
 NUC_TO_IDX = {n: i for i, n in enumerate(NUCLEOTIDES)}
 UNK_NUC_IDX = len(NUCLEOTIDES)
 
-# Element types for atom-level features
+# Element types for ligand token classification
 ELEMENTS = ["C", "N", "O", "S", "P", "F", "Cl", "Br", "I", "Se", "B", "Si", "Fe", "Zn",
             "Mg", "Ca", "Mn", "Cu", "Co", "Ni", "Mo", "Na", "K"]
 ELEM_TO_IDX = {e: i for i, e in enumerate(ELEMENTS)}
 UNK_ELEM_IDX = len(ELEMENTS)
+
+# Atomic numbers for ref_element one-hot (Protenix convention: index = atomic_number - 1)
+ATOMIC_NUMBER: dict[str, int] = {
+    "H": 1, "He": 2, "Li": 3, "Be": 4, "B": 5, "C": 6, "N": 7, "O": 8, "F": 9, "Ne": 10,
+    "Na": 11, "Mg": 12, "Al": 13, "Si": 14, "P": 15, "S": 16, "Cl": 17, "Ar": 18, "K": 19,
+    "Ca": 20, "Sc": 21, "Ti": 22, "V": 23, "Cr": 24, "Mn": 25, "Fe": 26, "Co": 27, "Ni": 28,
+    "Cu": 29, "Zn": 30, "Ga": 31, "Ge": 32, "As": 33, "Se": 34, "Br": 35, "Kr": 36,
+    "Rb": 37, "Sr": 38, "Y": 39, "Zr": 40, "Nb": 41, "Mo": 42, "Tc": 43, "Ru": 44,
+    "Rh": 45, "Pd": 46, "Ag": 47, "Cd": 48, "In": 49, "Sn": 50, "Sb": 51, "Te": 52,
+    "I": 53, "Xe": 54, "W": 74, "Os": 76, "Ir": 77, "Pt": 78, "Au": 79, "Hg": 80,
+}
+UNK_ATOMIC_IDX = 127  # last slot in 128-class one-hot
 
 # Token type offsets
 TOKEN_PROTEIN = 0        # 0-20 (20 AAs + UNK)
@@ -662,9 +674,10 @@ class TokenizedStructure:
         atom_to_token_idx = torch.tensor(atom_to_token, dtype=torch.long)
         atoms_per_token_t = torch.tensor(atoms_per_token, dtype=torch.long)
 
-        # Element indices for atoms
+        # Element indices for atoms (atomic_number - 1, matching Protenix ref_element)
         atom_element_idx = torch.tensor(
-            [ELEM_TO_IDX.get(e, UNK_ELEM_IDX) for e in all_atom_elements],
+            [ATOMIC_NUMBER[e] - 1 if e in ATOMIC_NUMBER else UNK_ATOMIC_IDX
+             for e in all_atom_elements],
             dtype=torch.long,
         )
 
