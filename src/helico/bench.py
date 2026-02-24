@@ -18,6 +18,7 @@ import torch
 from scipy.spatial.transform import Rotation
 
 from helico.data import (
+    Structure,
     TokenizedStructure,
     parse_ccd,
     parse_mmcif,
@@ -30,22 +31,22 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# FoldBench categories
+# FoldBench categories (matching actual CSV filenames in BEAM-Labs/FoldBench)
 # ============================================================================
 
 INTERFACE_CATEGORIES = [
     "interface_protein_protein",
-    "interface_protein_nucleic_acid",
-    "interface_protein_ligand",
+    "interface_antibody_antigen",
     "interface_protein_peptide",
-    "interface_antibody_protein",
-    "interface_protein_metal_ion",
+    "interface_protein_ligand",
+    "interface_protein_dna",
+    "interface_protein_rna",
 ]
 
 MONOMER_CATEGORIES = [
     "monomer_protein",
     "monomer_rna",
-    "monomer_peptide",
+    "monomer_dna",
 ]
 
 ALL_CATEGORIES = INTERFACE_CATEGORIES + MONOMER_CATEGORIES
@@ -58,15 +59,13 @@ ALL_CATEGORIES = INTERFACE_CATEGORIES + MONOMER_CATEGORIES
 @dataclass
 class BenchTarget:
     """A single FoldBench benchmark target."""
-    target_id: str
+    pdb_id: str       # e.g. "8tuz-assembly1"
     category: str
-    pdb_id: str
-    chains: str  # chain info from CSV
     extra: dict = field(default_factory=dict)
 
 
 def load_targets(targets_dir: Path) -> dict[str, list[BenchTarget]]:
-    """Parse 9 category CSVs from the FoldBench targets/ directory.
+    """Parse category CSVs from the FoldBench targets/ directory.
 
     Returns dict mapping category name -> list of BenchTarget.
     """
@@ -77,14 +76,10 @@ def load_targets(targets_dir: Path) -> dict[str, list[BenchTarget]]:
         with open(csv_path) as f:
             reader = csv.DictReader(f)
             for row in reader:
-                target_id = row.get("id") or row.get("target_id") or row.get("name", "")
-                pdb_id = row.get("pdb_id") or row.get("pdb", "")
-                chains = row.get("chains") or row.get("chain_ids", "")
+                pdb_id = row.get("pdb_id", "")
                 targets.append(BenchTarget(
-                    target_id=target_id,
-                    category=category,
                     pdb_id=pdb_id,
-                    chains=chains,
+                    category=category,
                     extra=dict(row),
                 ))
         results[category] = targets
@@ -92,28 +87,29 @@ def load_targets(targets_dir: Path) -> dict[str, list[BenchTarget]]:
     return results
 
 
-def af3_json_to_chains(json_path: Path) -> list[dict]:
-    """Convert an AF3-style input JSON to Helico chain dicts.
+def load_af3_inputs(json_path: Path) -> dict[str, dict]:
+    """Load alphafold3_inputs.json and index by target name.
 
-    Handles:
-    - "id" as list for homomers: {"protein": {"id": ["A","B"], "sequence": "..."}}
-    - protein: {"type": "protein", "id": ..., "sequence": ...}
-    - rna/dna: {"type": "rna"/"dna", "id": ..., "sequence": ...}
-    - ligand with CCD codes: {"type": "ligand", "id": ..., "ccd": "ATP"}
+    Returns dict mapping target name (pdb_id) -> AF3 input dict.
     """
     with open(json_path) as f:
         data = json.load(f)
+    return {entry["name"]: entry for entry in data}
 
-    sequences = data if isinstance(data, list) else data.get("sequences", data.get("modelSeeds", data))
-    if not isinstance(sequences, list):
-        sequences = [data]
 
+def af3_entry_to_chains(entry: dict) -> list[dict]:
+    """Convert a single AF3 input entry to Helico chain dicts.
+
+    Handles:
+    - "id" as list for homomers: {"protein": {"id": ["A","B"], "sequence": "..."}}
+    - protein/rna/dna/ligand types
+    """
     chains: list[dict] = []
-    for entry in sequences:
+    for seq_entry in entry.get("sequences", []):
         for mol_type in ("protein", "rna", "dna", "ligand"):
-            if mol_type not in entry:
+            if mol_type not in seq_entry:
                 continue
-            info = entry[mol_type]
+            info = seq_entry[mol_type]
 
             # Expand homomer ids
             ids = info.get("id", info.get("ids", []))
@@ -133,7 +129,6 @@ def af3_json_to_chains(json_path: Path) -> list[dict]:
                     })
                 elif mol_type == "ligand":
                     ccd_codes = info.get("ccdCodes", info.get("ccd_codes", []))
-                    smiles = info.get("smiles", "")
                     if isinstance(ccd_codes, str):
                         ccd_codes = [ccd_codes]
                     if ccd_codes:
@@ -143,9 +138,46 @@ def af3_json_to_chains(json_path: Path) -> list[dict]:
                                 "id": chain_id,
                                 "ccd": ccd_code,
                             })
-                    elif smiles:
-                        logger.warning(f"SMILES ligands not supported, skipping chain {chain_id}")
+    return chains
 
+
+def structure_to_chains(structure: Structure) -> list[dict]:
+    """Extract chain dicts from a parsed Structure (ground truth CIF).
+
+    Extracts sequences and ligand CCD codes so we can re-predict from sequence.
+    """
+    THREE_TO_ONE = {
+        "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
+        "GLN": "Q", "GLU": "E", "GLY": "G", "HIS": "H", "ILE": "I",
+        "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F", "PRO": "P",
+        "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V",
+    }
+    RNA_CODES = {"A", "C", "G", "U"}
+    DNA_CODES = {"DA", "DC", "DG", "DT"}
+
+    chains: list[dict] = []
+    for chain in structure.chains:
+        if chain.entity_type == "polymer" and chain.polymer_type.startswith("polypeptide"):
+            seq = "".join(THREE_TO_ONE.get(r.name, "X") for r in chain.residues)
+            if seq:
+                chains.append({"type": "protein", "id": chain.chain_id, "sequence": seq})
+        elif chain.entity_type == "polymer" and "ribonucleotide" in chain.polymer_type:
+            is_dna = "deoxy" in chain.polymer_type
+            if is_dna:
+                seq = "".join(r.name[-1] if r.name in DNA_CODES else "N" for r in chain.residues)
+                if seq:
+                    chains.append({"type": "dna", "id": chain.chain_id, "sequence": seq})
+            else:
+                seq = "".join(r.name if r.name in RNA_CODES else "N" for r in chain.residues)
+                if seq:
+                    chains.append({"type": "rna", "id": chain.chain_id, "sequence": seq})
+        elif chain.entity_type == "non-polymer":
+            for res in chain.residues:
+                chains.append({
+                    "type": "ligand",
+                    "id": chain.chain_id,
+                    "ccd": res.name,
+                })
     return chains
 
 
@@ -221,29 +253,32 @@ class MatchedAtoms:
 def match_atoms(
     tokenized: TokenizedStructure,
     pred_coords: np.ndarray,
-    gt_structure,
+    gt_structure: Structure,
 ) -> MatchedAtoms:
     """Match predicted atoms to ground truth by (chain_id, residue_seq_id, atom_name).
 
-    Args:
-        tokenized: TokenizedStructure from prediction input
-        pred_coords: (N_atoms, 3) predicted coordinates
-        gt_structure: parsed Structure from ground truth CIF
-
-    Returns:
-        MatchedAtoms with parallel arrays of matched coordinates.
+    For sequence-based predictions, token res_idx is 0-based sequential per chain.
+    GT residues have seq_id from the CIF. We align by position within each chain.
     """
-    # Build ground truth lookup: (chain_id, seq_id, atom_name) -> coords
+    # Build per-chain residue lists from ground truth
+    gt_chain_residues: dict[str, list] = {}
+    for chain in gt_structure.chains:
+        gt_chain_residues[chain.chain_id] = chain.residues
+
+    # Build ground truth lookup: (chain_id, position_in_chain, atom_name) -> coords
+    # position_in_chain is 0-based index within the chain's residues
     gt_lookup: dict[tuple[str, int, str], np.ndarray] = {}
     for chain in gt_structure.chains:
-        for res in chain.residues:
+        for res_pos, res in enumerate(chain.residues):
             for atom in res.atoms:
                 if atom.element == "H":
                     continue
-                key = (chain.chain_id, res.seq_id, atom.name)
+                key = (chain.chain_id, res_pos, atom.name)
                 gt_lookup[key] = atom.coords
 
-    # Walk through tokenized structure and match
+    # Track per-chain token position to align with GT residue position
+    chain_token_counts: dict[str, int] = {}
+
     matched_pred = []
     matched_gt = []
     chain_ids = []
@@ -256,24 +291,24 @@ def match_atoms(
     for tok_idx, token in enumerate(tokenized.tokens):
         chain_id = tokenized.chain_ids[tok_idx]
         etype = tokenized.entity_types[tok_idx]
-        res_idx = token.res_idx
 
-        # For sequence-based prediction, res_idx is 0-based within chain.
-        # We need to map to gt seq_id. Build chain residue list from gt.
+        # Track position within this chain
+        if chain_id not in chain_token_counts:
+            chain_token_counts[chain_id] = 0
+        pos_in_chain = chain_token_counts[chain_id]
+        chain_token_counts[chain_id] += 1
+
         for ai, aname in enumerate(token.atom_names):
             global_ai = atom_offset + ai
             if global_ai >= len(pred_coords):
                 break
 
-            # Try matching by chain_id + res_idx (1-based in gt) + atom_name
-            # FoldBench ground truths use label_asym_id as chain_id
-            # res_idx in tokenized is 0-based sequential, gt seq_id is 1-based
-            gt_key = (chain_id, res_idx + 1, aname)
+            gt_key = (chain_id, pos_in_chain, aname)
             if gt_key in gt_lookup:
                 matched_pred.append(pred_coords[global_ai])
                 matched_gt.append(gt_lookup[gt_key])
                 chain_ids.append(chain_id)
-                res_seq_ids.append(res_idx + 1)
+                res_seq_ids.append(pos_in_chain)
                 atom_names.append(aname)
                 elements.append(token.atom_elements[ai] if ai < len(token.atom_elements) else "")
                 entity_types.append(etype)
@@ -320,16 +355,13 @@ def compute_lddt(
     """Compute local Distance Difference Test (lDDT).
 
     Uses hard thresholds at 0.5, 1.0, 2.0, 4.0 Angstroms with 15A inclusion cutoff.
-    Reference: smooth_lddt_loss in model.py:1723 but with hard step functions.
     """
     if len(pred_coords) < 2:
         return 0.0
 
-    # Pairwise distances
     pred_dists = np.linalg.norm(pred_coords[:, None] - pred_coords[None, :], axis=-1)
     gt_dists = np.linalg.norm(gt_coords[:, None] - gt_coords[None, :], axis=-1)
 
-    # Mask: pairs within cutoff in ground truth, excluding self
     mask = (gt_dists < cutoff) & (gt_dists > 0.01)
 
     if not mask.any():
@@ -346,18 +378,6 @@ def compute_lddt(
     return float(score)
 
 
-def compute_lddt_per_chain(
-    matched: MatchedAtoms,
-    chain_id: str,
-    cutoff: float = 15.0,
-) -> float:
-    """Compute LDDT restricted to atoms in a specific chain."""
-    mask = np.array([c == chain_id for c in matched.chain_ids], dtype=bool)
-    if mask.sum() < 2:
-        return 0.0
-    return compute_lddt(matched.pred_coords[mask], matched.gt_coords[mask], cutoff)
-
-
 def compute_tm_score(pred_coords: np.ndarray, gt_coords: np.ndarray) -> float:
     """Compute TM-score using tmtools package."""
     try:
@@ -369,7 +389,11 @@ def compute_tm_score(pred_coords: np.ndarray, gt_coords: np.ndarray) -> float:
     if len(pred_coords) < 3:
         return 0.0
 
-    result = tmtools.tm_align(pred_coords, gt_coords, pred_coords, gt_coords)
+    # tmtools requires float64 arrays
+    pred_f64 = pred_coords.astype(np.float64)
+    gt_f64 = gt_coords.astype(np.float64)
+    seq_dummy = "A" * len(pred_coords)
+    result = tmtools.tm_align(pred_f64, gt_f64, seq_dummy, seq_dummy)
     return float(result.tm_norm_chain2)
 
 
@@ -383,13 +407,11 @@ def _kabsch_superpose(pred: np.ndarray, gt: np.ndarray) -> tuple[np.ndarray, flo
         rmsd = float(np.sqrt((diff ** 2).sum() / max(len(pred), 1)))
         return pred, rmsd
 
-    # Center
     pred_center = pred.mean(axis=0)
     gt_center = gt.mean(axis=0)
     pred_centered = pred - pred_center
     gt_centered = gt - gt_center
 
-    # Use scipy for Kabsch
     rot, rssd = Rotation.align_vectors(gt_centered, pred_centered)
     pred_rotated = rot.apply(pred_centered) + gt_center
 
@@ -422,14 +444,11 @@ def compute_gdt_ts(pred_coords: np.ndarray, gt_coords: np.ndarray) -> float:
 def compute_dockq(
     pred_pdb_str: str,
     gt_cif_path: Path,
+    chain_ids: list[str] | None = None,
 ) -> dict[str, float]:
-    """Compute DockQ score using the DockQ package.
-
-    Writes pred to temp PDB, runs DockQ against ground truth.
-    Returns dict with dockq, irmsd, lrmsd, fnat.
-    """
+    """Compute DockQ score using the DockQ package."""
     try:
-        from DockQ.DockQ import run_on_all_native_interfaces
+        from DockQ.DockQ import load_PDB, run_on_all_native_interfaces
     except ImportError:
         logger.warning("DockQ not installed, skipping interface scoring")
         return {"dockq": float("nan"), "irmsd": float("nan"), "lrmsd": float("nan"), "fnat": float("nan")}
@@ -439,16 +458,29 @@ def compute_dockq(
         pred_path = f.name
 
     try:
-        result = run_on_all_native_interfaces(pred_path, str(gt_cif_path))
-        if not result:
+        model_struct = load_PDB(pred_path)
+        native_struct = load_PDB(str(gt_cif_path))
+
+        # Build chain map: identity mapping for chains present in both
+        model_chain_ids = {c.id for c in model_struct.get_chains()}
+        native_chain_ids = {c.id for c in native_struct.get_chains()}
+        common_chains = model_chain_ids & native_chain_ids
+        if not common_chains or len(common_chains) < 2:
             return {"dockq": 0.0, "irmsd": float("nan"), "lrmsd": float("nan"), "fnat": 0.0}
 
-        # Average over all interfaces
+        chain_map = {c: c for c in sorted(common_chains)}
+
+        result_mapping, total_dockq = run_on_all_native_interfaces(
+            model_struct, native_struct, chain_map=chain_map
+        )
+        if not result_mapping:
+            return {"dockq": 0.0, "irmsd": float("nan"), "lrmsd": float("nan"), "fnat": 0.0}
+
         dockqs = []
         irmsds = []
         lrmsds = []
         fnats = []
-        for interface_id, interface_result in result.items():
+        for interface_id, interface_result in result_mapping.items():
             dockqs.append(interface_result.get("DockQ", 0.0))
             irmsds.append(interface_result.get("iRMS", float("nan")))
             lrmsds.append(interface_result.get("LRMS", float("nan")))
@@ -460,6 +492,9 @@ def compute_dockq(
             "lrmsd": float(np.nanmean(lrmsds)) if lrmsds else float("nan"),
             "fnat": float(np.nanmean(fnats)) if fnats else 0.0,
         }
+    except Exception as e:
+        logger.warning(f"DockQ failed: {e}")
+        return {"dockq": float("nan"), "irmsd": float("nan"), "lrmsd": float("nan"), "fnat": float("nan")}
     finally:
         os.unlink(pred_path)
 
@@ -472,7 +507,6 @@ def compute_lddt_pli(matched: MatchedAtoms, cutoff: float = 15.0) -> float:
     if protein_mask.sum() == 0 or ligand_mask.sum() == 0:
         return float("nan")
 
-    n = len(matched.pred_coords)
     pred_dists = np.linalg.norm(
         matched.pred_coords[:, None] - matched.pred_coords[None, :], axis=-1
     )
@@ -480,7 +514,6 @@ def compute_lddt_pli(matched: MatchedAtoms, cutoff: float = 15.0) -> float:
         matched.gt_coords[:, None] - matched.gt_coords[None, :], axis=-1
     )
 
-    # Cross-boundary mask: one atom protein, other atom ligand
     cross_mask = (protein_mask[:, None] & ligand_mask[None, :]) | (ligand_mask[:, None] & protein_mask[None, :])
     pair_mask = cross_mask & (gt_dists < cutoff) & (gt_dists > 0.01)
 
@@ -501,7 +534,6 @@ def compute_ligand_rmsd(matched: MatchedAtoms) -> float:
     if protein_mask.sum() < 3 or ligand_mask.sum() == 0:
         return float("nan")
 
-    # Superpose on protein
     pred_protein = matched.pred_coords[protein_mask]
     gt_protein = matched.gt_coords[protein_mask]
 
@@ -512,7 +544,6 @@ def compute_ligand_rmsd(matched: MatchedAtoms) -> float:
 
     rot, _ = Rotation.align_vectors(gt_c, pred_c)
 
-    # Apply same transform to ligand
     pred_ligand = matched.pred_coords[ligand_mask]
     gt_ligand = matched.gt_coords[ligand_mask]
 
@@ -558,10 +589,7 @@ def score_ligand_interface(matched: MatchedAtoms) -> dict[str, float]:
 # Results output
 # ============================================================================
 
-def write_category_csv(
-    results: list[dict],
-    output_path: Path,
-):
+def write_category_csv(results: list[dict], output_path: Path):
     """Write per-target results for a category to CSV."""
     if not results:
         return
@@ -575,7 +603,7 @@ def write_category_csv(
 
 def print_summary(category_summaries: list[dict]):
     """Print a summary table to stdout."""
-    header = f"{'Category':<40} | {'N':>4} | {'Predicted':>9} | {'Success%':>8} | {'Mean LDDT':>9} | {'Mean DockQ':>10}"
+    header = f"{'Category':<35} | {'N':>4} | {'Predicted':>9} | {'Success%':>8} | {'Mean LDDT':>9} | {'Mean DockQ':>10}"
     print("\n" + "=" * len(header))
     print(header)
     print("-" * len(header))
@@ -583,7 +611,7 @@ def print_summary(category_summaries: list[dict]):
         dockq_str = f"{s['mean_dockq']:.2f}" if not np.isnan(s["mean_dockq"]) else "-"
         success_str = f"{s['success_pct']:.1f}%" if not np.isnan(s["success_pct"]) else "-"
         print(
-            f"{s['category']:<40} | {s['n_total']:>4} | {s['n_predicted']:>9} | "
+            f"{s['category']:<35} | {s['n_total']:>4} | {s['n_predicted']:>9} | "
             f"{success_str:>8} | {s['mean_lddt']:>9.2f} | {dockq_str:>10}"
         )
     print("=" * len(header) + "\n")
@@ -617,12 +645,25 @@ def run_benchmark(
     device: str = "cuda",
     dtype: torch.dtype = torch.bfloat16,
 ):
-    """Run the full FoldBench benchmark."""
+    """Run the full FoldBench benchmark.
+
+    Directory layout expected:
+        foldbench_dir/
+            targets/           # CSV files per category
+            ground_truths/     # CIF files per target
+            alphafold3_inputs.json  # (optional) AF3-format inputs
+    """
     from tqdm import tqdm
 
     targets_dir = foldbench_dir / "targets"
-    inputs_dir = foldbench_dir / "inputs"
     gt_dir = foldbench_dir / "ground_truths"
+
+    # Load AF3 inputs if available
+    af3_inputs: dict[str, dict] = {}
+    af3_json_path = foldbench_dir / "alphafold3_inputs.json"
+    if af3_json_path.exists():
+        af3_inputs = load_af3_inputs(af3_json_path)
+        logger.info(f"Loaded {len(af3_inputs)} AF3 inputs from {af3_json_path}")
 
     all_targets = load_targets(targets_dir)
 
@@ -649,39 +690,48 @@ def run_benchmark(
         n_success = 0
 
         for target in tqdm(targets, desc=category):
-            target_id = target.target_id
-            result_row = {"target_id": target_id, "pdb_id": target.pdb_id, "status": "failed"}
+            pdb_id = target.pdb_id
+            result_row = {"pdb_id": pdb_id, "status": "failed"}
 
             # Check for cached prediction
-            pred_cache = predictions_dir / f"{target_id}.pkl"
-            if resume and pred_cache.exists():
+            pred_cache_path = predictions_dir / f"{pdb_id}.pkl"
+            cached = None
+            if resume and pred_cache_path.exists():
                 try:
-                    with open(pred_cache, "rb") as f:
+                    with open(pred_cache_path, "rb") as f:
                         cached = pickle.load(f)
                     tokenized = cached["tokenized"]
                     pred_coords_np = cached["pred_coords"]
                     plddt_np = cached["plddt"]
                     pred_pdb_str = cached.get("pdb_str", "")
-                    logger.debug(f"Loaded cached prediction for {target_id}")
                 except Exception:
-                    logger.warning(f"Failed to load cache for {target_id}, re-predicting")
-                    pred_cache = None
-            else:
-                pred_cache = None
+                    logger.warning(f"Failed to load cache for {pdb_id}, re-predicting")
+                    cached = None
 
             try:
-                if pred_cache is None:
-                    # Load input
-                    json_path = inputs_dir / f"{target_id}.json"
-                    if not json_path.exists():
-                        logger.warning(f"Input not found: {json_path}")
-                        result_row["status"] = "no_input"
-                        category_results.append(result_row)
-                        continue
+                if cached is None:
+                    # Build chain dicts: prefer AF3 JSON, fall back to GT CIF
+                    chains = None
+                    if pdb_id in af3_inputs:
+                        chains = af3_entry_to_chains(af3_inputs[pdb_id])
 
-                    chains = af3_json_to_chains(json_path)
                     if not chains:
-                        logger.warning(f"No chains parsed from {json_path}")
+                        # Extract from ground truth CIF
+                        gt_path = gt_dir / f"{pdb_id}.cif"
+                        if not gt_path.exists():
+                            logger.warning(f"No AF3 input and no GT CIF for {pdb_id}")
+                            result_row["status"] = "no_input"
+                            category_results.append(result_row)
+                            continue
+                        gt_for_chains = parse_mmcif(gt_path, max_resolution=float("inf"))
+                        if gt_for_chains is None:
+                            result_row["status"] = "gt_parse_failed"
+                            category_results.append(result_row)
+                            continue
+                        chains = structure_to_chains(gt_for_chains)
+
+                    if not chains:
+                        logger.warning(f"No chains for {pdb_id}")
                         result_row["status"] = "no_chains"
                         category_results.append(result_row)
                         continue
@@ -708,7 +758,7 @@ def run_benchmark(
                     pred_pdb_str = coords_to_pdb(results["coords"][0], results["plddt"][0], tokenized)
 
                     # Cache prediction
-                    with open(predictions_dir / f"{target_id}.pkl", "wb") as f:
+                    with open(pred_cache_path, "wb") as f:
                         pickle.dump({
                             "tokenized": tokenized,
                             "pred_coords": pred_coords_np,
@@ -718,12 +768,12 @@ def run_benchmark(
 
                     torch.cuda.empty_cache()
 
-                # Load ground truth
-                gt_path = gt_dir / f"{target_id}.cif"
+                # Load ground truth for scoring
+                gt_path = gt_dir / f"{pdb_id}.cif"
                 if not gt_path.exists():
-                    gt_path = gt_dir / f"{target_id}.cif.gz"
+                    gt_path = gt_dir / f"{pdb_id}.cif.gz"
                 if not gt_path.exists():
-                    logger.warning(f"Ground truth not found: {gt_dir / target_id}.*")
+                    logger.warning(f"Ground truth not found for {pdb_id}")
                     result_row["status"] = "no_gt"
                     category_results.append(result_row)
                     continue
@@ -738,7 +788,7 @@ def run_benchmark(
                 # Match atoms
                 matched = match_atoms(tokenized, pred_coords_np, gt_structure)
                 if len(matched.pred_coords) == 0:
-                    logger.warning(f"No atoms matched for {target_id}")
+                    logger.warning(f"No atoms matched for {pdb_id}")
                     result_row["status"] = "no_match"
                     category_results.append(result_row)
                     continue
@@ -769,21 +819,21 @@ def run_benchmark(
                 category_results.append(result_row)
 
                 logger.info(
-                    f"  {target_id}: "
+                    f"  {pdb_id}: "
                     + " | ".join(f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}" for k, v in scores.items())
                 )
 
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
-                    logger.warning(f"OOM on {target_id}, skipping")
+                    logger.warning(f"OOM on {pdb_id}, skipping")
                     result_row["status"] = "oom"
                     torch.cuda.empty_cache()
                 else:
-                    logger.error(f"RuntimeError on {target_id}: {e}")
+                    logger.error(f"RuntimeError on {pdb_id}: {e}")
                     result_row["status"] = "error"
                 category_results.append(result_row)
             except Exception as e:
-                logger.error(f"Error on {target_id}: {e}")
+                logger.error(f"Error on {pdb_id}: {e}")
                 result_row["status"] = "error"
                 category_results.append(result_row)
 
