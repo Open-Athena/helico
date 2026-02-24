@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 # ---------------------------------------------------------------------------
@@ -587,6 +588,25 @@ class Token:
     token_index: int = 0      # token position within residue (0 for protein/nucleotide)
 
 
+def _encode_atom_name_chars(atom_names: list[str]) -> torch.Tensor:
+    """Encode atom names as 4-char × 64-class one-hot (Protenix convention).
+
+    Each atom name is left-justified and padded to 4 characters.
+    Each character is mapped to index ord(c) - 32, then one-hot encoded to 64 dims.
+    Returns: (N_atoms, 256) float tensor.
+    """
+    n = len(atom_names)
+    if n == 0:
+        return torch.zeros(0, 256)
+    indices = torch.zeros(n, 4, dtype=torch.long)
+    for i, name in enumerate(atom_names):
+        padded = name.ljust(4)[:4]
+        for j, c in enumerate(padded):
+            indices[i, j] = max(0, min(63, ord(c) - 32))
+    onehot = F.one_hot(indices, 64).float()  # (N, 4, 64)
+    return onehot.reshape(n, 256)
+
+
 @dataclass
 class TokenizedStructure:
     """Tokenized representation of a structure."""
@@ -648,6 +668,13 @@ class TokenizedStructure:
             dtype=torch.long,
         )
 
+        # Atom name chars: 4 chars × 64-class one-hot = 256 features per atom
+        # Encoding: ord(c) - 32 for each character, left-justified padded to 4 chars
+        all_atom_names: list[str] = []
+        for tok in self.tokens:
+            all_atom_names.extend(tok.atom_names)
+        atom_name_chars = _encode_atom_name_chars(all_atom_names)
+
         # Chain-pair mask (same chain = 1, different chain = 0)
         chain_same = (chain_indices.unsqueeze(0) == chain_indices.unsqueeze(1)).long()
 
@@ -669,6 +696,7 @@ class TokenizedStructure:
             "atom_to_token": atom_to_token_idx,      # (N_atoms,)
             "atoms_per_token": atoms_per_token_t,    # (N_tok,)
             "atom_element_idx": atom_element_idx,    # (N_atoms,)
+            "atom_name_chars": atom_name_chars,      # (N_atoms, 256)
             "chain_same": chain_same,                # (N_tok, N_tok)
             "n_tokens": n_tok,
             "n_atoms": total_atoms,
@@ -1498,6 +1526,7 @@ def _subset_features(
         "atom_to_token": new_atom_to_token,
         "atoms_per_token": features["atoms_per_token"][token_indices],
         "atom_element_idx": features["atom_element_idx"][atom_mask],
+        "atom_name_chars": features["atom_name_chars"][atom_mask],
         "chain_same": features["chain_same"][token_indices][:, token_indices],
         "n_tokens": n_new,
         "n_atoms": atom_mask.sum().item(),
@@ -1594,7 +1623,7 @@ def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
     result["chain_same"] = torch.stack(chain_same_list)
 
     # Atom-level tensors: pad to max_atoms
-    for key in ["atom_coords", "ref_coords"]:
+    for key in ["atom_coords", "ref_coords", "atom_name_chars"]:
         tensors = []
         for b in batch:
             t = b[key]
@@ -1780,6 +1809,7 @@ def make_synthetic_batch(
         "atom_to_token": torch.arange(n_tokens, device=device).repeat_interleave(n_atoms_per_token).unsqueeze(0).expand(batch_size, -1),
         "atoms_per_token": torch.full((batch_size, n_tokens), n_atoms_per_token, dtype=torch.long, device=device),
         "atom_element_idx": torch.randint(0, len(ELEMENTS), (batch_size, n_atoms), device=device),
+        "atom_name_chars": torch.zeros(batch_size, n_atoms, 256, device=device),
         "chain_same": torch.ones(batch_size, n_tokens, n_tokens, dtype=torch.long, device=device),
         "token_mask": torch.ones(batch_size, n_tokens, dtype=torch.bool, device=device),
         "atom_mask": torch.ones(batch_size, n_atoms, dtype=torch.bool, device=device),

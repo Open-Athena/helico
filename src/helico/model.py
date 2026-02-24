@@ -2283,7 +2283,7 @@ class Helico(nn.Module):
 
         Returns:
             ref_charge: (B, N_atoms, 1) — zeros
-            ref_features: (B, N_atoms, 385) — mask + element_onehot(128) + zeros(256)
+            ref_features: (B, N_atoms, 385) — mask(1) + element_onehot(128) + atom_name_chars(256)
         """
         B, N_atoms = batch["atom_element_idx"].shape
         device = batch["atom_element_idx"].device
@@ -2301,8 +2301,12 @@ class Helico(nn.Module):
         else:
             mask_feat = torch.ones(B, N_atoms, 1, device=device, dtype=dtype)
 
-        # atom_name_chars placeholder (256 zeros)
-        name_chars = torch.zeros(B, N_atoms, 256, device=device, dtype=dtype)
+        # Atom name chars: 4 chars × 64-class one-hot = 256 features
+        name_chars = batch.get("atom_name_chars")
+        if name_chars is None:
+            name_chars = torch.zeros(B, N_atoms, 256, device=device, dtype=dtype)
+        else:
+            name_chars = name_chars.to(device=device, dtype=dtype)
 
         ref_features = torch.cat([mask_feat, elem_onehot, name_chars], dim=-1)  # (B, N_atoms, 385)
         return ref_charge, ref_features
