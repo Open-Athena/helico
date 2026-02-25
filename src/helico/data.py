@@ -1169,7 +1169,7 @@ def a3m_to_msa_matrix(seqs: list[str]) -> tuple[np.ndarray, np.ndarray]:
 
     n_seqs = len(seqs)
     msa = np.full((n_seqs, L), gap_idx, dtype=np.int8)
-    deletions = np.zeros((n_seqs, L), dtype=np.int8)
+    deletions = np.zeros((n_seqs, L), dtype=np.int16)
 
     for si, seq in enumerate(seqs):
         pos = 0

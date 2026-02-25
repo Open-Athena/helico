@@ -1663,18 +1663,52 @@ class DiffusionModule(nn.Module):
         s_inputs: torch.Tensor,
         relpe_feats: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        """Inference: Euler denoising with EDM scaling."""
+        """Inference: Protenix Algorithm 18 — predictor-corrector Euler denoising."""
         B, N_atoms, _ = ref_pos.shape
         device = ref_pos.device
+        dtype = ref_pos.dtype
 
-        # Log-linear sigma schedule
-        s_max, s_min = 160.0, 0.001
-        sigmas = torch.exp(torch.linspace(math.log(s_max), math.log(s_min), self.n_steps + 1, device=device))
+        sigma_data = self.config.sigma_data  # 16.0
+        s_max, s_min = 160.0, 4e-4
+        rho = 7.0
+        gamma0 = 0.8
+        gamma_min = 1.0
+        noise_scale_lambda = 1.003
+        step_scale_eta = 1.5
 
-        x = torch.randn(B, N_atoms, 3, device=device) * s_max
+        # Protenix power-law sigma schedule: sigma_data * (s_max^(1/rho) + t*(s_min^(1/rho) - s_max^(1/rho)))^rho
+        N = self.n_steps
+        step_indices = torch.arange(N + 1, device=device, dtype=torch.float64)
+        t_steps = (
+            sigma_data
+            * (
+                s_max ** (1 / rho)
+                + step_indices / N * (s_min ** (1 / rho) - s_max ** (1 / rho))
+            ) ** rho
+        )
+        t_steps[-1] = 0.0  # t_N = 0
+        t_steps = t_steps.to(dtype)
 
-        for i in range(self.n_steps):
-            sigma_cur = sigmas[i].expand(B)
+        # Initial noise scaled by t_steps[0] (= sigma_data * s_max ≈ 2560)
+        x = torch.randn(B, N_atoms, 3, device=device, dtype=dtype) * t_steps[0]
+
+        for i in range(N):
+            c_tau_last = t_steps[i]    # current noise level
+            c_tau = t_steps[i + 1]     # target noise level
+
+            # Centre-of-mass removal
+            x = x - x.mean(dim=-2, keepdim=True)
+
+            # Predictor: noise injection (gamma > 0 when c_tau > gamma_min)
+            gamma = gamma0 if float(c_tau) > gamma_min else 0.0
+            t_hat = c_tau_last * (gamma + 1)
+
+            if gamma > 0:
+                delta_noise = (t_hat ** 2 - c_tau_last ** 2).sqrt()
+                x = x + noise_scale_lambda * delta_noise * torch.randn_like(x)
+
+            # Denoise at t_hat
+            sigma_cur = t_hat.expand(B)
             c_in, c_skip, c_out = self._edm_precondition(sigma_cur)
             c_in = c_in.view(B, 1, 1)
             c_skip = c_skip.view(B, 1, 1)
@@ -1689,10 +1723,10 @@ class DiffusionModule(nn.Module):
 
             x_denoised = c_skip * x + c_out * r_update
 
-            # Euler step
-            sigma_next = sigmas[i + 1]
-            d = (x - x_denoised) / sigmas[i]
-            x = x + d * (sigma_next - sigmas[i])
+            # Euler step with step_scale_eta
+            d = (x - x_denoised) / t_hat
+            dt = c_tau - t_hat
+            x = x + step_scale_eta * dt * d
 
         return x
 
@@ -2557,51 +2591,84 @@ class Helico(nn.Module):
 
         all_coords = torch.stack(all_coords, dim=1)  # (B, n_samples, N_atoms, 3)
 
-        # Use first sample for confidence
-        confidence = self.confidence_head(
-            s_trunk=s, z_trunk=z, s_inputs=s_inputs,
-            pred_coords=all_coords[:, 0],
-            atom_to_token=batch["atom_to_token"],
-            atom_mask=atom_mask,
-            mask=mask, pair_mask=pair_mask,
-        )
-
-        # Compute confidence scores from logits
-        plddt = compute_plddt(confidence["plddt_logits"])
-        pae = compute_pae(confidence["pae_logits"])
-        ptm = compute_ptm(confidence["pae_logits"], mask=mask)
+        # Score all samples and pick the best by ranking_score
+        best_ranking = None
+        best_idx = torch.zeros(B, dtype=torch.long, device=device)
+        best_confidence = None
+        best_plddt = None
+        best_pae = None
+        best_ptm = None
+        best_iptm = None
 
         chain_indices = batch.get("chain_indices")
-        if chain_indices is not None:
-            iptm = compute_iptm(confidence["pae_logits"], chain_indices, mask=mask)
-            unique_counts = []
-            for b in range(B):
-                ci = chain_indices[b]
-                if mask is not None:
-                    ci = ci[mask[b]]
-                unique_counts.append(ci.unique().numel())
-            has_interface = torch.tensor([c > 1 for c in unique_counts], device=device, dtype=torch.bool)
-        else:
-            iptm = ptm.clone()
-            has_interface = torch.zeros(B, device=device, dtype=torch.bool)
 
-        ranking = compute_ranking_score(ptm, iptm, has_interface)
+        for si in range(n_samples):
+            confidence = self.confidence_head(
+                s_trunk=s, z_trunk=z, s_inputs=s_inputs,
+                pred_coords=all_coords[:, si],
+                atom_to_token=batch["atom_to_token"],
+                atom_mask=atom_mask,
+                mask=mask, pair_mask=pair_mask,
+            )
+
+            plddt = compute_plddt(confidence["plddt_logits"])
+            pae = compute_pae(confidence["pae_logits"])
+            ptm = compute_ptm(confidence["pae_logits"], mask=mask)
+
+            if chain_indices is not None:
+                iptm = compute_iptm(confidence["pae_logits"], chain_indices, mask=mask)
+                unique_counts = []
+                for b in range(B):
+                    ci = chain_indices[b]
+                    if mask is not None:
+                        ci = ci[mask[b]]
+                    unique_counts.append(ci.unique().numel())
+                has_interface = torch.tensor([c > 1 for c in unique_counts], device=device, dtype=torch.bool)
+            else:
+                iptm = ptm.clone()
+                has_interface = torch.zeros(B, device=device, dtype=torch.bool)
+
+            ranking = compute_ranking_score(ptm, iptm, has_interface)
+
+            if best_ranking is None:
+                best_ranking = ranking.clone()
+                best_confidence = confidence
+                best_plddt = plddt
+                best_pae = pae
+                best_ptm = ptm
+                best_iptm = iptm
+            else:
+                # Update best per batch element
+                better = ranking > best_ranking
+                if better.any():
+                    best_ranking = torch.where(better, ranking, best_ranking)
+                    best_ptm = torch.where(better, ptm, best_ptm)
+                    best_iptm = torch.where(better, iptm, best_iptm)
+                    for b in range(B):
+                        if better[b]:
+                            best_idx[b] = si
+                            best_plddt[b] = plddt[b]
+                            best_pae[b] = pae[b]
+                            best_confidence = {k: v.clone() for k, v in confidence.items()}  # save logits
+
+        # Gather best coords per batch element
+        best_coords = torch.stack([all_coords[b, best_idx[b]] for b in range(B)])
 
         # Flatten pLDDT to per-atom
         plddt_flat = _flatten_plddt(
-            plddt, batch["atom_to_token"], batch["atoms_per_token"], atom_mask,
+            best_plddt, batch["atom_to_token"], batch["atoms_per_token"], atom_mask,
         )
 
         return {
-            "coords": all_coords[:, 0],          # (B, N_atoms, 3)
+            "coords": best_coords,               # (B, N_atoms, 3)
             "all_coords": all_coords,             # (B, n_samples, N_atoms, 3)
             "plddt": plddt_flat,                  # (B, N_atoms) 0-100 scale
-            "pae": pae,                           # (B, N_tok, N_tok) Angstroms
-            "ptm": ptm,                           # (B,)
-            "iptm": iptm,                         # (B,)
-            "ranking_score": ranking,             # (B,)
+            "pae": best_pae,                      # (B, N_tok, N_tok) Angstroms
+            "ptm": best_ptm,                      # (B,)
+            "iptm": best_iptm,                    # (B,)
+            "ranking_score": best_ranking,        # (B,)
             # Raw logits for downstream use
-            "pae_logits": confidence["pae_logits"],
-            "plddt_logits": confidence["plddt_logits"],
-            "pde_logits": confidence["pde_logits"],
+            "pae_logits": best_confidence["pae_logits"],
+            "plddt_logits": best_confidence["plddt_logits"],
+            "pde_logits": best_confidence["pde_logits"],
         }
