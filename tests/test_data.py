@@ -385,10 +385,10 @@ class TestMSA:
         msa, dels = a3m_to_msa_matrix(seqs)
         assert msa.shape == (3, 6)
         assert dels.shape == (3, 6)
-        # First sequence should have no gaps
+        # First sequence should have no gaps (all values < 20 = valid AAs in Protenix encoding)
         assert (msa[0] < 20).all()  # all standard AAs
-        # Third sequence has gap at position 1
-        assert msa[2, 1] == 20  # gap index
+        # Third sequence has gap at position 1 (Protenix gap = 31)
+        assert msa[2, 1] == 31  # gap index (Protenix encoding)
 
     def test_a3m_deletions(self):
         """Lowercase letters should be counted as deletions."""
@@ -406,10 +406,13 @@ class TestMSA:
         dels = np.zeros((n_seqs, L), dtype=np.int8)
 
         features = compute_msa_features(msa, dels, max_seqs=64, n_clusters=8)
-        assert features.profile.shape == (L, 22)
+        assert features.profile.shape == (L, 32)
+        assert features.deletion_mean.shape == (L,)
         assert features.cluster_msa.shape[0] <= 8
         assert features.cluster_profile.shape[1] == L
-        assert features.cluster_profile.shape[2] == 22
+        assert features.cluster_profile.shape[2] == 32
+        assert features.cluster_deletion_mean.shape[0] == features.cluster_msa.shape[0]
+        assert features.cluster_deletion_mean.shape[1] == L
 
         # Profile should sum to approximately 1.0
         profile_sums = features.profile.sum(axis=1)

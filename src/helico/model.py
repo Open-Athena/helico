@@ -2328,15 +2328,19 @@ class Helico(nn.Module):
         device = batch["token_types"].device
         dtype = ref_charge.dtype
 
-        # restype one-hot (32 dims from token_types)
-        restype = F.one_hot(batch["token_types"].clamp(max=31), 32).to(dtype)
+        # restype one-hot (32 dims): remap token_types from Helico order to Protenix order
+        from helico.data import TOKEN_TYPE_TO_RESTYPE
+        remap = torch.tensor(TOKEN_TYPE_TO_RESTYPE, device=device, dtype=torch.long)
+        restype_idx = remap[batch["token_types"].clamp(max=len(remap) - 1)]
+        restype = F.one_hot(restype_idx, 32).to(dtype)
 
-        # MSA profile (32 dims: 22 profile + 10 zeros padding)
-        profile_22 = batch.get("msa_profile", torch.zeros(B, N_tok, 22, device=device, dtype=dtype))
-        profile = F.pad(profile_22, (0, 10))  # (B, N_tok, 32)
+        # MSA profile (32 dims, already Protenix 32-class from data pipeline)
+        profile = batch.get("msa_profile", torch.zeros(B, N_tok, 32, device=device, dtype=dtype))
 
-        # deletion_mean (1 dim)
-        deletion_mean = torch.zeros(B, N_tok, 1, device=device, dtype=dtype)
+        # deletion_mean (1 dim): use real values from data pipeline
+        deletion_mean = batch.get("deletion_mean", torch.zeros(B, N_tok, 1, device=device, dtype=dtype))
+        if deletion_mean.dim() == 2:
+            deletion_mean = deletion_mean.unsqueeze(-1)
 
         return self.input_embedder(
             ref_pos=batch["ref_coords"],
@@ -2362,12 +2366,16 @@ class Helico(nn.Module):
             return msa_raw, None
 
         N_msa = cluster_msa.shape[1]
-        # One-hot encode MSA residues (32 types -> 32 dims, padded to 32)
+        # One-hot encode MSA residues (already in Protenix 32-class encoding)
         msa_onehot = F.one_hot(cluster_msa.clamp(max=31), 32).to(dtype)
 
-        # has_deletion and deletion_value (1 + 1 dims)
-        has_del = torch.zeros(B, N_msa, N_tok, 1, device=device, dtype=dtype)
-        del_val = torch.zeros(B, N_msa, N_tok, 1, device=device, dtype=dtype)
+        # has_deletion: clamp(cluster_deletion_mean, 0, 1)
+        cluster_del = batch.get("cluster_deletion_mean",
+                                torch.zeros(B, N_msa, N_tok, device=device, dtype=dtype))
+        has_del = cluster_del.clamp(0, 1).unsqueeze(-1)  # (B, N_msa, N_tok, 1)
+
+        # deletion_value: arctan(cluster_deletion_mean / 3) * 2 / pi
+        del_val = (torch.arctan(cluster_del / 3.0) * (2.0 / math.pi)).unsqueeze(-1)
 
         msa_raw = torch.cat([msa_onehot, has_del, del_val], dim=-1)  # (B, N_msa, N_tok, 34)
         return msa_raw, None

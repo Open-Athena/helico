@@ -902,9 +902,11 @@ class TestEndToEnd:
         batch["token_mask"] = torch.ones(1, n_tok, dtype=torch.bool, device=DEVICE)
         batch["atom_mask"] = torch.ones(1, n_atoms, dtype=torch.bool, device=DEVICE)
         # Add MSA features
-        batch["msa_profile"] = torch.zeros(1, n_tok, 22, device=DEVICE)
+        batch["msa_profile"] = torch.zeros(1, n_tok, 32, device=DEVICE)
         batch["cluster_msa"] = torch.zeros(1, 1, n_tok, dtype=torch.long, device=DEVICE)
-        batch["cluster_profile"] = torch.zeros(1, 1, n_tok, 22, device=DEVICE)
+        batch["cluster_profile"] = torch.zeros(1, 1, n_tok, 32, device=DEVICE)
+        batch["deletion_mean"] = torch.zeros(1, n_tok, device=DEVICE)
+        batch["cluster_deletion_mean"] = torch.zeros(1, 1, n_tok, device=DEVICE)
         batch["has_msa"] = torch.zeros(1, device=DEVICE)
 
         model = Helico(TEST_CONFIG).to(DEVICE)

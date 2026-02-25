@@ -292,23 +292,32 @@ def predict_target(
 
     if msa_feat is not None:
         logger.debug(f"MSA found: {msa_feat.n_seqs} seqs, length {msa_feat.length}")
-        # MSA profile is (L, 22) for one chain; pad to (n_tok, 22)
+        # MSA profile is (L, 32) for one chain; pad to (n_tok, 32)
         profile = torch.tensor(msa_feat.profile, dtype=torch.float32)
         cluster_msa = torch.tensor(msa_feat.cluster_msa, dtype=torch.long)
         cluster_profile = torch.tensor(msa_feat.cluster_profile, dtype=torch.float32)
+        deletion_mean = torch.tensor(msa_feat.deletion_mean, dtype=torch.float32)
+        cluster_deletion_mean = torch.tensor(msa_feat.cluster_deletion_mean, dtype=torch.float32)
         pad_len = n_tok - profile.shape[0]
         if pad_len > 0:
             profile = torch.nn.functional.pad(profile, (0, 0, 0, pad_len))
             cluster_msa = torch.nn.functional.pad(cluster_msa, (0, pad_len))
             cluster_profile = torch.nn.functional.pad(cluster_profile, (0, 0, 0, pad_len))
+            deletion_mean = torch.nn.functional.pad(deletion_mean, (0, pad_len))
+            cluster_deletion_mean = torch.nn.functional.pad(cluster_deletion_mean, (0, pad_len))
         batch["msa_profile"] = profile[:n_tok].unsqueeze(0)
         batch["cluster_msa"] = cluster_msa[:, :n_tok].unsqueeze(0)
         batch["cluster_profile"] = cluster_profile[:, :n_tok].unsqueeze(0)
+        batch["deletion_mean"] = deletion_mean[:n_tok].unsqueeze(0)
+        batch["cluster_deletion_mean"] = cluster_deletion_mean[:, :n_tok].unsqueeze(0)
         batch["has_msa"] = torch.ones(1)
     else:
-        batch["msa_profile"] = torch.zeros(1, n_tok, 22)
+        from helico.data import PROTENIX_NUM_MSA_CLASSES
+        batch["msa_profile"] = torch.zeros(1, n_tok, PROTENIX_NUM_MSA_CLASSES)
         batch["cluster_msa"] = torch.zeros(1, 1, n_tok, dtype=torch.long)
-        batch["cluster_profile"] = torch.zeros(1, 1, n_tok, 22)
+        batch["cluster_profile"] = torch.zeros(1, 1, n_tok, PROTENIX_NUM_MSA_CLASSES)
+        batch["deletion_mean"] = torch.zeros(1, n_tok)
+        batch["cluster_deletion_mean"] = torch.zeros(1, 1, n_tok)
         batch["has_msa"] = torch.zeros(1)
 
     results = run_inference(model, batch, n_samples=n_samples, device=device, dtype=dtype)

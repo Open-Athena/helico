@@ -82,6 +82,25 @@ TOKEN_LIGAND_ATOM = 27   # ligand atoms start here
 
 NUM_TOKEN_TYPES = 28 + UNK_ELEM_IDX + 1  # protein + nucleotide + per-element ligand tokens
 
+# Protenix 32-class MSA encoding (matches Protenix checkpoint expectations)
+PROTENIX_MSA_AAS = "ARNDCQEGHILKMFPSTWYV"  # 3-letter alphabetical order
+PROTENIX_MSA_AA_MAP = {aa: i for i, aa in enumerate(PROTENIX_MSA_AAS)}
+PROTENIX_MSA_UNK_PROTEIN = 20
+PROTENIX_MSA_RNA = {c: 21 + i for i, c in enumerate("ACGU")}  # 21-24
+PROTENIX_MSA_UNK_RNA = 25
+PROTENIX_MSA_DNA = {c: 26 + i for i, c in enumerate("ACGT")}  # 26-29
+PROTENIX_MSA_UNK_DNA = 30
+PROTENIX_MSA_GAP = 31
+PROTENIX_NUM_MSA_CLASSES = 32
+
+# Map Helico token_types indices to Protenix restype indices
+# token_types 0-19 = ACDEFGHIKLMNPQRSTVWY (1-letter alpha)
+# Protenix restype 0-19 = ARNDCQEGHILKMFPSTWYV (3-letter alpha)
+_HELICO_AA_TO_PROTENIX = [PROTENIX_MSA_AA_MAP[aa] for aa in STANDARD_AAS]
+TOKEN_TYPE_TO_RESTYPE = _HELICO_AA_TO_PROTENIX + [PROTENIX_MSA_UNK_PROTEIN]  # idx 20 = UNK
+# For nucleotides (token_types 21-26) and ligands (27+), map to gap (31) as placeholder
+TOKEN_TYPE_TO_RESTYPE += [PROTENIX_MSA_GAP] * (NUM_TOKEN_TYPES - 21)
+
 # Amino acid 3-letter <-> 1-letter mappings
 THREE_TO_ONE = {
     "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
@@ -1090,11 +1109,13 @@ def parse_input_yaml(yaml_path: str | Path) -> list[dict]:
 @dataclass
 class MSAFeatures:
     """MSA features for a single chain."""
-    msa: np.ndarray             # (N_seqs, L) integer-encoded MSA
+    msa: np.ndarray             # (N_seqs, L) integer-encoded MSA (Protenix 32-class)
     deletion_matrix: np.ndarray  # (N_seqs, L) deletion counts
-    profile: np.ndarray          # (L, 22) residue frequency profile (20 AA + gap + unknown)
+    profile: np.ndarray          # (L, 32) residue frequency profile (Protenix 32-class)
+    deletion_mean: np.ndarray    # (L,) mean deletion value per position
     cluster_msa: np.ndarray      # (N_clusters, L) clustered MSA
-    cluster_profile: np.ndarray  # (N_clusters, L, 22) cluster profiles
+    cluster_profile: np.ndarray  # (N_clusters, L, 32) cluster profiles
+    cluster_deletion_mean: np.ndarray  # (N_clusters, L) mean deletions per cluster
     n_seqs: int
     length: int
 
@@ -1131,7 +1152,7 @@ def a3m_to_msa_matrix(seqs: list[str]) -> tuple[np.ndarray, np.ndarray]:
 
     Lowercase chars are insertions (removed from alignment, counted as deletions).
     Returns:
-        msa: (N_seqs, L) integer encoded (0-20=AA, 21=gap, 22=unknown)
+        msa: (N_seqs, L) integer encoded (Protenix 32-class: 0-19=AA, 20=unk, 31=gap)
         deletions: (N_seqs, L) deletion counts
     """
     if not seqs:
@@ -1142,9 +1163,9 @@ def a3m_to_msa_matrix(seqs: list[str]) -> tuple[np.ndarray, np.ndarray]:
     query_aligned = "".join(c for c in query if not c.islower())
     L = len(query_aligned)
 
-    aa_map = {aa: i for i, aa in enumerate("ACDEFGHIKLMNPQRSTVWY")}
-    gap_idx = 20
-    unk_idx = 21
+    aa_map = PROTENIX_MSA_AA_MAP  # ARNDCQEGHILKMFPSTWYV -> 0-19
+    gap_idx = PROTENIX_MSA_GAP    # 31
+    unk_idx = PROTENIX_MSA_UNK_PROTEIN  # 20
 
     n_seqs = len(seqs)
     msa = np.full((n_seqs, L), gap_idx, dtype=np.int8)
@@ -1201,14 +1222,17 @@ def compute_msa_features(
         deletions = deletions[indices]
         n_seqs = max_seqs
 
-    # Compute profile (amino acid frequencies at each position)
-    n_classes = 22  # 20 AA + gap + unknown
+    # Compute profile (residue frequencies at each position, Protenix 32-class)
+    n_classes = PROTENIX_NUM_MSA_CLASSES  # 32
     profile = np.zeros((L, n_classes), dtype=np.float32)
     for pos in range(L):
         counts = np.bincount(msa[:, pos].astype(np.int32), minlength=n_classes)[:n_classes]
         total = counts.sum()
         if total > 0:
             profile[pos] = counts / total
+
+    # Compute deletion_mean across all sequences
+    deletion_mean = deletions.astype(np.float32).mean(axis=0)  # (L,)
 
     # Simple clustering by sequence identity to query
     query = msa[0]
@@ -1217,9 +1241,11 @@ def compute_msa_features(
     if n_seqs <= n_clust:
         cluster_msa = msa
         cluster_profile = np.zeros((n_seqs, L, n_classes), dtype=np.float32)
+        cluster_deletion_mean = np.zeros((n_seqs, L), dtype=np.float32)
         for ci in range(n_seqs):
             for pos in range(L):
                 cluster_profile[ci, pos, msa[ci, pos]] = 1.0
+            cluster_deletion_mean[ci] = deletions[ci].astype(np.float32)
     else:
         # Greedy clustering by hamming distance
         assigned = np.full(n_seqs, -1, dtype=np.int32)
@@ -1255,20 +1281,26 @@ def compute_msa_features(
 
         cluster_msa = msa[centers]
         cluster_profile = np.zeros((len(centers), L, n_classes), dtype=np.float32)
+        cluster_deletion_mean = np.zeros((len(centers), L), dtype=np.float32)
         for ci in range(len(centers)):
-            members = msa[assigned == ci]
+            members_mask = assigned == ci
+            members = msa[members_mask]
+            member_dels = deletions[members_mask]
             for pos in range(L):
                 counts = np.bincount(members[:, pos].astype(np.int32), minlength=n_classes)[:n_classes]
                 total = counts.sum()
                 if total > 0:
                     cluster_profile[ci, pos] = counts / total
+            cluster_deletion_mean[ci] = member_dels.astype(np.float32).mean(axis=0)
 
     return MSAFeatures(
         msa=msa,
         deletion_matrix=deletions,
         profile=profile,
+        deletion_mean=deletion_mean,
         cluster_msa=cluster_msa,
         cluster_profile=cluster_profile,
+        cluster_deletion_mean=cluster_deletion_mean,
         n_seqs=n_seqs,
         length=L,
     )
@@ -1590,13 +1622,17 @@ class HelicoDataset(Dataset):
             features["msa_profile"] = torch.tensor(msa_feat.profile, dtype=torch.float32)
             features["cluster_msa"] = torch.tensor(msa_feat.cluster_msa, dtype=torch.long)
             features["cluster_profile"] = torch.tensor(msa_feat.cluster_profile, dtype=torch.float32)
+            features["deletion_mean"] = torch.tensor(msa_feat.deletion_mean, dtype=torch.float32)
+            features["cluster_deletion_mean"] = torch.tensor(msa_feat.cluster_deletion_mean, dtype=torch.float32)
             features["has_msa"] = torch.tensor(1)
         else:
             # Placeholder MSA features
             n_tok = features["n_tokens"]
-            features["msa_profile"] = torch.zeros(n_tok, 22)
+            features["msa_profile"] = torch.zeros(n_tok, PROTENIX_NUM_MSA_CLASSES)
             features["cluster_msa"] = torch.zeros(1, n_tok, dtype=torch.long)
-            features["cluster_profile"] = torch.zeros(1, n_tok, 22)
+            features["cluster_profile"] = torch.zeros(1, n_tok, PROTENIX_NUM_MSA_CLASSES)
+            features["deletion_mean"] = torch.zeros(n_tok)
+            features["cluster_deletion_mean"] = torch.zeros(1, n_tok)
             features["has_msa"] = torch.tensor(0)
 
         return features
@@ -1679,6 +1715,8 @@ def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
     msa_profiles = []
     cluster_msas = []
     cluster_profiles = []
+    deletion_means = []
+    cluster_deletion_means = []
     for b in batch:
         mp = b["msa_profile"]
         pad_l = max_tokens - mp.shape[0]
@@ -1700,9 +1738,26 @@ def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
             cp = torch.nn.functional.pad(cp, (0, 0, 0, max(0, pad_l), 0, max(0, pad_c)))
         cluster_profiles.append(cp[:max_clusters, :max_tokens])
 
+        # deletion_mean: (L,) -> pad to max_tokens
+        dm = b["deletion_mean"]
+        pad_l = max_tokens - dm.shape[0]
+        if pad_l > 0:
+            dm = torch.nn.functional.pad(dm, (0, pad_l))
+        deletion_means.append(dm[:max_tokens])
+
+        # cluster_deletion_mean: (N_clusters, L) -> pad both dims
+        cdm = b["cluster_deletion_mean"]
+        pad_c = max_clusters - cdm.shape[0]
+        pad_l = max_tokens - cdm.shape[1]
+        if pad_c > 0 or pad_l > 0:
+            cdm = torch.nn.functional.pad(cdm, (0, max(0, pad_l), 0, max(0, pad_c)))
+        cluster_deletion_means.append(cdm[:max_clusters, :max_tokens])
+
     result["msa_profile"] = torch.stack(msa_profiles)
     result["cluster_msa"] = torch.stack(cluster_msas)
     result["cluster_profile"] = torch.stack(cluster_profiles)
+    result["deletion_mean"] = torch.stack(deletion_means)
+    result["cluster_deletion_mean"] = torch.stack(cluster_deletion_means)
     result["has_msa"] = torch.tensor([b["has_msa"].item() for b in batch])
 
     return result
@@ -1831,14 +1886,18 @@ def make_synthetic_batch(
     }
 
     if has_msa:
-        batch["msa_profile"] = torch.randn(batch_size, n_tokens, 22, device=device).softmax(dim=-1)
-        batch["cluster_msa"] = torch.randint(0, 22, (batch_size, 4, n_tokens), device=device)
-        batch["cluster_profile"] = torch.randn(batch_size, 4, n_tokens, 22, device=device).softmax(dim=-1)
+        batch["msa_profile"] = torch.randn(batch_size, n_tokens, PROTENIX_NUM_MSA_CLASSES, device=device).softmax(dim=-1)
+        batch["cluster_msa"] = torch.randint(0, PROTENIX_NUM_MSA_CLASSES, (batch_size, 4, n_tokens), device=device)
+        batch["cluster_profile"] = torch.randn(batch_size, 4, n_tokens, PROTENIX_NUM_MSA_CLASSES, device=device).softmax(dim=-1)
+        batch["deletion_mean"] = torch.rand(batch_size, n_tokens, device=device)
+        batch["cluster_deletion_mean"] = torch.rand(batch_size, 4, n_tokens, device=device)
         batch["has_msa"] = torch.ones(batch_size, device=device)
     else:
-        batch["msa_profile"] = torch.zeros(batch_size, n_tokens, 22, device=device)
+        batch["msa_profile"] = torch.zeros(batch_size, n_tokens, PROTENIX_NUM_MSA_CLASSES, device=device)
         batch["cluster_msa"] = torch.zeros(batch_size, 1, n_tokens, dtype=torch.long, device=device)
-        batch["cluster_profile"] = torch.zeros(batch_size, 1, n_tokens, 22, device=device)
+        batch["cluster_profile"] = torch.zeros(batch_size, 1, n_tokens, PROTENIX_NUM_MSA_CLASSES, device=device)
+        batch["deletion_mean"] = torch.zeros(batch_size, n_tokens, device=device)
+        batch["cluster_deletion_mean"] = torch.zeros(batch_size, 1, n_tokens, device=device)
         batch["has_msa"] = torch.zeros(batch_size, device=device)
 
     return batch
@@ -2129,12 +2188,16 @@ class LazyHelicoDataset(Dataset):
             features["msa_profile"] = torch.tensor(msa_feat.profile, dtype=torch.float32)
             features["cluster_msa"] = torch.tensor(msa_feat.cluster_msa, dtype=torch.long)
             features["cluster_profile"] = torch.tensor(msa_feat.cluster_profile, dtype=torch.float32)
+            features["deletion_mean"] = torch.tensor(msa_feat.deletion_mean, dtype=torch.float32)
+            features["cluster_deletion_mean"] = torch.tensor(msa_feat.cluster_deletion_mean, dtype=torch.float32)
             features["has_msa"] = torch.tensor(1)
         else:
             n_tok = features["n_tokens"]
-            features["msa_profile"] = torch.zeros(n_tok, 22)
+            features["msa_profile"] = torch.zeros(n_tok, PROTENIX_NUM_MSA_CLASSES)
             features["cluster_msa"] = torch.zeros(1, n_tok, dtype=torch.long)
-            features["cluster_profile"] = torch.zeros(1, n_tok, 22)
+            features["cluster_profile"] = torch.zeros(1, n_tok, PROTENIX_NUM_MSA_CLASSES)
+            features["deletion_mean"] = torch.zeros(n_tok)
+            features["cluster_deletion_mean"] = torch.zeros(1, n_tok)
             features["has_msa"] = torch.tensor(0)
 
         return features
