@@ -19,7 +19,9 @@ from scipy.spatial.transform import Rotation
 
 from helico.data import (
     Structure,
+    TarIndex,
     TokenizedStructure,
+    load_msa_for_chain,
     parse_ccd,
     parse_mmcif,
     tokenize_sequences,
@@ -189,10 +191,15 @@ def predict_target(
     model: Helico,
     chains: list[dict],
     ccd: dict,
+    target_name: str = "",
     n_samples: int = 5,
     max_tokens: int = 2048,
     device: str = "cuda",
     dtype: torch.dtype = torch.bfloat16,
+    msa_tar_indices: list[TarIndex] | None = None,
+    msa_dir: Path | None = None,
+    msa_server_url: str | None = None,
+    msa_cache_dir: Path | None = None,
 ) -> tuple[TokenizedStructure, dict[str, torch.Tensor]] | None:
     """Run Helico inference on a target defined by chain dicts.
 
@@ -223,8 +230,82 @@ def predict_target(
     batch["token_mask"] = torch.ones(1, n_tok, dtype=torch.bool)
     batch["atom_mask"] = torch.ones(1, n_atoms, dtype=torch.bool)
 
-    # Add empty MSA features
-    if "msa_profile" not in batch:
+    # Load MSA for the first polymer chain (same as training pipeline)
+    msa_feat = None
+    if msa_tar_indices or msa_dir:
+        seen_chains = set()
+        for chain_id, etype in zip(tokenized.chain_ids, tokenized.entity_types):
+            if chain_id in seen_chains or etype != "protein":
+                continue
+            seen_chains.add(chain_id)
+            seq = tokenized.chain_sequences.get(chain_id, "")
+            if not seq:
+                continue
+            for tar_idx in (msa_tar_indices or []):
+                msa_feat = load_msa_for_chain(
+                    tokenized.pdb_id, chain_id,
+                    sequence=seq,
+                    tar_index=tar_idx,
+                )
+                if msa_feat is not None:
+                    break
+            if msa_feat is None and msa_dir:
+                msa_feat = load_msa_for_chain(
+                    tokenized.pdb_id, chain_id,
+                    sequence=seq,
+                    msa_dir=msa_dir,
+                )
+            if msa_feat is not None:
+                break
+
+    # Fallback: query MSA server if no pre-computed MSA found
+    if msa_feat is None and msa_server_url:
+        from helico.msa_server import run_mmseqs2
+        from helico.data import parse_a3m, a3m_to_msa_matrix, compute_msa_features
+
+        seen_chains = set()
+        for chain_id, etype in zip(tokenized.chain_ids, tokenized.entity_types):
+            if chain_id in seen_chains or etype != "protein":
+                continue
+            seen_chains.add(chain_id)
+            seq = tokenized.chain_sequences.get(chain_id, "")
+            if not seq:
+                continue
+            cache_dir = msa_cache_dir or Path("msa_cache")
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_name = target_name or tokenized.pdb_id
+            try:
+                a3m_lines = run_mmseqs2(
+                    seq,
+                    result_dir=str(cache_dir / f"{cache_name}_{chain_id}"),
+                    host_url=msa_server_url,
+                )
+                if a3m_lines and a3m_lines[0].strip():
+                    seqs, _ = parse_a3m(a3m_lines[0])
+                    if seqs:
+                        msa, dels = a3m_to_msa_matrix(seqs)
+                        msa_feat = compute_msa_features(msa, dels)
+                        logger.debug(f"MSA from server: {msa_feat.n_seqs} seqs")
+            except Exception as e:
+                logger.warning(f"MSA server error for {tokenized.pdb_id} chain {chain_id}: {e}")
+            break
+
+    if msa_feat is not None:
+        logger.debug(f"MSA found: {msa_feat.n_seqs} seqs, length {msa_feat.length}")
+        # MSA profile is (L, 22) for one chain; pad to (n_tok, 22)
+        profile = torch.tensor(msa_feat.profile, dtype=torch.float32)
+        cluster_msa = torch.tensor(msa_feat.cluster_msa, dtype=torch.long)
+        cluster_profile = torch.tensor(msa_feat.cluster_profile, dtype=torch.float32)
+        pad_len = n_tok - profile.shape[0]
+        if pad_len > 0:
+            profile = torch.nn.functional.pad(profile, (0, 0, 0, pad_len))
+            cluster_msa = torch.nn.functional.pad(cluster_msa, (0, pad_len))
+            cluster_profile = torch.nn.functional.pad(cluster_profile, (0, 0, 0, pad_len))
+        batch["msa_profile"] = profile[:n_tok].unsqueeze(0)
+        batch["cluster_msa"] = cluster_msa[:, :n_tok].unsqueeze(0)
+        batch["cluster_profile"] = cluster_profile[:, :n_tok].unsqueeze(0)
+        batch["has_msa"] = torch.ones(1)
+    else:
         batch["msa_profile"] = torch.zeros(1, n_tok, 22)
         batch["cluster_msa"] = torch.zeros(1, 1, n_tok, dtype=torch.long)
         batch["cluster_profile"] = torch.zeros(1, 1, n_tok, 22)
@@ -644,6 +725,9 @@ def run_benchmark(
     resume: bool = False,
     device: str = "cuda",
     dtype: torch.dtype = torch.bfloat16,
+    msa_tar_indices: list[TarIndex] | None = None,
+    msa_dir: Path | None = None,
+    msa_server_url: str | None = None,
 ):
     """Run the full FoldBench benchmark.
 
@@ -739,10 +823,15 @@ def run_benchmark(
                     # Predict
                     pred_result = predict_target(
                         model, chains, ccd,
+                        target_name=pdb_id,
                         n_samples=n_samples,
                         max_tokens=max_tokens,
                         device=device,
                         dtype=dtype,
+                        msa_tar_indices=msa_tar_indices,
+                        msa_dir=msa_dir,
+                        msa_server_url=msa_server_url,
+                        msa_cache_dir=output_dir / "msa_cache",
                     )
 
                     if pred_result is None:
@@ -888,6 +977,14 @@ def main():
     parser.add_argument("--ccd", type=str, default=None, help="Path to CCD cache pickle")
     parser.add_argument("--max-tokens", type=int, default=2048, help="Max tokens per target (skip larger)")
     parser.add_argument("--resume", action="store_true", help="Resume from cached predictions")
+    parser.add_argument("--msa-tar", type=str, nargs="+", default=None,
+                        help="Path(s) to MSA tar archives (with corresponding .pkl index files)")
+    parser.add_argument("--msa-dir", type=str, default=None,
+                        help="Path to extracted MSA directory (a3m.gz files)")
+    parser.add_argument("--use-msa-server", action="store_true",
+                        help="Generate MSA using the public ColabFold MMseqs2 server (fallback when tar/dir miss)")
+    parser.add_argument("--msa-server-url", type=str, default="https://api.colabfold.com",
+                        help="MMseqs2 server URL (default: https://api.colabfold.com)")
     args = parser.parse_args()
 
     if args.checkpoint is None and args.protenix is None:
@@ -920,6 +1017,31 @@ def main():
     if args.categories:
         categories = [c.strip() for c in args.categories.split(",")]
 
+    # Load MSA tar indices
+    msa_tar_indices = []
+    if args.msa_tar:
+        for tar_path_str in args.msa_tar:
+            tar_path = Path(tar_path_str).resolve()
+            # Look for the pre-built index pickle
+            # Convention: index is in processed dir as <stem>_index.pkl
+            stem = tar_path.stem  # e.g. "rcsb_raw_msa" from "rcsb_raw_msa.tar"
+            index_path = tar_path.with_name(stem + "_index.pkl")
+            if not index_path.exists():
+                processed_dir = Path(os.environ.get("HELICO_PROCESSED_DIR", ""))
+                if processed_dir.exists():
+                    index_path = processed_dir / (stem + "_index.pkl")
+            if index_path.exists():
+                with open(index_path, "rb") as f:
+                    tar_index = pickle.load(f)
+                # Override tar_path in case index was built on a different machine
+                tar_index.tar_path = tar_path
+                logger.info(f"Loaded MSA tar index: {index_path} ({len(tar_index.entries)} entries)")
+                msa_tar_indices.append(tar_index)
+            else:
+                logger.warning(f"No tar index found for {tar_path}, skipping")
+
+    msa_dir = Path(args.msa_dir) if args.msa_dir else None
+
     # Run benchmark
     run_benchmark(
         model=model,
@@ -930,6 +1052,9 @@ def main():
         n_samples=args.n_samples,
         max_tokens=args.max_tokens,
         resume=args.resume,
+        msa_tar_indices=msa_tar_indices if msa_tar_indices else None,
+        msa_dir=msa_dir,
+        msa_server_url=args.msa_server_url if args.use_msa_server else None,
     )
 
 

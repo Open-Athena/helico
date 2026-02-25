@@ -579,6 +579,12 @@ def infer_main():
     parser.add_argument("--ccd", type=str, default=None, help="Path to CCD cache pickle (optional, falls back to env vars)")
     parser.add_argument("--output", type=str, default="output.pdb", help="Output PDB file")
     parser.add_argument("--n-samples", type=int, default=5, help="Number of samples")
+    parser.add_argument("--use-msa-server", action="store_true",
+                        help="Generate MSA using the public ColabFold MMseqs2 server")
+    parser.add_argument("--msa-server-url", type=str, default="https://api.colabfold.com",
+                        help="MMseqs2 server URL (default: https://api.colabfold.com)")
+    parser.add_argument("--msa-cache-dir", type=str, default=None,
+                        help="Directory to cache MSA results (default: <output>.msa_cache)")
     args = parser.parse_args()
 
     if args.checkpoint is None and args.protenix is None:
@@ -638,8 +644,47 @@ def infer_main():
     n_atoms = features["n_atoms"]
     batch["token_mask"] = torch.ones(1, n_tok, dtype=torch.bool)
     batch["atom_mask"] = torch.ones(1, n_atoms, dtype=torch.bool)
-    # Add empty MSA features if not present
-    if "msa_profile" not in batch:
+    # Load or generate MSA features
+    msa_feat = None
+    if args.use_msa_server:
+        from helico.msa_server import run_mmseqs2
+        from helico.data import parse_a3m, a3m_to_msa_matrix, compute_msa_features
+
+        # Find first protein chain sequence
+        seen = set()
+        for chain_id, etype in zip(tokenized.chain_ids, tokenized.entity_types):
+            if chain_id in seen or etype != "protein":
+                continue
+            seen.add(chain_id)
+            seq = tokenized.chain_sequences.get(chain_id, "")
+            if not seq:
+                continue
+
+            cache_dir = args.msa_cache_dir or f"{args.output}.msa_cache"
+            logger.info(f"Querying MSA server for chain {chain_id} ({len(seq)} residues)")
+            a3m_lines = run_mmseqs2(seq, result_dir=f"{cache_dir}/{chain_id}")
+            if a3m_lines and a3m_lines[0].strip():
+                seqs, _ = parse_a3m(a3m_lines[0])
+                if seqs:
+                    msa, dels = a3m_to_msa_matrix(seqs)
+                    msa_feat = compute_msa_features(msa, dels)
+                    logger.info(f"MSA generated: {msa_feat.n_seqs} sequences")
+            break
+
+    if msa_feat is not None:
+        profile = torch.tensor(msa_feat.profile, dtype=torch.float32)
+        cluster_msa = torch.tensor(msa_feat.cluster_msa, dtype=torch.long)
+        cluster_profile = torch.tensor(msa_feat.cluster_profile, dtype=torch.float32)
+        pad_len = n_tok - profile.shape[0]
+        if pad_len > 0:
+            profile = torch.nn.functional.pad(profile, (0, 0, 0, pad_len))
+            cluster_msa = torch.nn.functional.pad(cluster_msa, (0, pad_len))
+            cluster_profile = torch.nn.functional.pad(cluster_profile, (0, 0, 0, pad_len))
+        batch["msa_profile"] = profile[:n_tok].unsqueeze(0)
+        batch["cluster_msa"] = cluster_msa[:, :n_tok].unsqueeze(0)
+        batch["cluster_profile"] = cluster_profile[:, :n_tok].unsqueeze(0)
+        batch["has_msa"] = torch.ones(1)
+    elif "msa_profile" not in batch:
         batch["msa_profile"] = torch.zeros(1, n_tok, 22)
         batch["cluster_msa"] = torch.zeros(1, 1, n_tok, dtype=torch.long)
         batch["cluster_profile"] = torch.zeros(1, 1, n_tok, 22)

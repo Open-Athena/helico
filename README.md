@@ -444,6 +444,25 @@ helico-infer --checkpoint checkpoints/final.pt \
 
 When using `--input`, CCD is loaded automatically so that reference coordinates (ref_coords) are populated from ideal coordinates.
 
+#### With MSA (recommended)
+
+For significantly better predictions, use the `--use-msa-server` flag to query the public [ColabFold MMseqs2 server](https://api.colabfold.com) for evolutionary information:
+
+```bash
+helico-infer --protenix checkpoints/protenix_base_default_v1.0.0.pt \
+    --sequences "A:MKFLILFNIFTG" --output pred.pdb \
+    --use-msa-server
+
+# With a custom MSA server URL
+helico-infer --protenix checkpoints/protenix_base_default_v1.0.0.pt \
+    --sequences "A:MKFLILFNIFTG" --output pred.pdb \
+    --use-msa-server --msa-server-url https://your-server.com
+
+# MSA results are cached automatically; re-runs skip the server query
+```
+
+This requires the `requests` package (`pip install requests`). MSA results are cached in `<output>.msa_cache/` by default.
+
 #### Inference CLI Reference
 
 ```
@@ -462,6 +481,9 @@ Options:
   --output PATH           Output PDB file (default: output.pdb)
   --n-samples N           Number of diffusion samples, best by pLDDT is kept (default: 5)
   --ccd PATH              Path to CCD cache pickle (default: uses $HELICO_PROCESSED_DIR/ccd_cache.pkl)
+  --use-msa-server        Generate MSA using the public ColabFold MMseqs2 server
+  --msa-server-url URL    MMseqs2 server URL (default: https://api.colabfold.com)
+  --msa-cache-dir PATH    Directory to cache MSA results (default: <output>.msa_cache)
 ```
 
 Generates N structure samples and selects the one with the highest mean pLDDT. Outputs per-atom pLDDT scores in the B-factor column of the PDB file.
