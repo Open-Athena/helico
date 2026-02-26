@@ -617,6 +617,8 @@ class Token:
     entity_id: int = 0        # entity identifier (chains with same sequence share entity_id)
     sym_id: int = 0           # symmetry copy index (for bioassemblies)
     token_index: int = 0      # token position within residue (0 for protein/nucleotide)
+    ref_space_uid: int = -1   # residue group ID for atom pair masking (same for all atoms in a residue)
+    atom_charges: list[int] | None = None  # per-atom formal charges from CCD
 
 
 def _encode_atom_name_chars(atom_names: list[str]) -> torch.Tensor:
@@ -673,6 +675,8 @@ class TokenizedStructure:
         all_atom_coords = []
         all_atom_elements = []
         all_ref_coords = []
+        all_ref_space_uid = []
+        all_ref_charge = []
         atom_to_token = []  # maps each atom to its token index
         atoms_per_token = []
 
@@ -686,12 +690,23 @@ class TokenizedStructure:
                 all_ref_coords.append(tok.ref_coords)
             else:
                 all_ref_coords.append(np.zeros((n_atoms, 3), dtype=np.float32))
+            # ref_space_uid: group atoms by residue (same for all atoms in same residue)
+            # If not set (-1), fall back to token index
+            uid = tok.ref_space_uid if tok.ref_space_uid >= 0 else ti
+            all_ref_space_uid.extend([uid] * n_atoms)
+            # ref_charge: formal charge per atom from CCD
+            if tok.atom_charges is not None and len(tok.atom_charges) == n_atoms:
+                all_ref_charge.extend(tok.atom_charges)
+            else:
+                all_ref_charge.extend([0] * n_atoms)
 
         total_atoms = sum(atoms_per_token)
         atom_coords = torch.tensor(np.concatenate(all_atom_coords, axis=0), dtype=torch.float32) if total_atoms > 0 else torch.zeros(0, 3)
         ref_coords = torch.tensor(np.concatenate(all_ref_coords, axis=0), dtype=torch.float32) if total_atoms > 0 else torch.zeros(0, 3)
         atom_to_token_idx = torch.tensor(atom_to_token, dtype=torch.long)
         atoms_per_token_t = torch.tensor(atoms_per_token, dtype=torch.long)
+        ref_space_uid = torch.tensor(all_ref_space_uid, dtype=torch.long)
+        ref_charge = torch.tensor(all_ref_charge, dtype=torch.float32)
 
         # Element indices for atoms (atomic_number - 1, matching Protenix ref_element)
         atom_element_idx = torch.tensor(
@@ -729,6 +744,8 @@ class TokenizedStructure:
             "atoms_per_token": atoms_per_token_t,    # (N_tok,)
             "atom_element_idx": atom_element_idx,    # (N_atoms,)
             "atom_name_chars": atom_name_chars,      # (N_atoms, 256)
+            "ref_space_uid": ref_space_uid,          # (N_atoms,)
+            "ref_charge": ref_charge,                # (N_atoms,)
             "chain_same": chain_same,                # (N_tok, N_tok)
             "n_tokens": n_tok,
             "n_atoms": total_atoms,
@@ -749,6 +766,7 @@ def tokenize_structure(
     chain_ids: list[str] = []
     entity_types: list[str] = []
     res_counter = 0
+    residue_uid_counter = 0  # groups atoms by residue for ref_space_uid
 
     # Build entity_id mapping: chains with the same sequence share an entity_id
     seq_to_entity: dict[str, int] = {}
@@ -789,6 +807,7 @@ def tokenize_structure(
                 atom_coords = np.stack([a.coords for a in heavy_atoms])
 
                 ref_c = None
+                atom_charges = None
                 if ccd and res.name in ccd:
                     comp = ccd[res.name]
                     ref_c = comp.ideal_coords
@@ -798,6 +817,11 @@ def tokenize_structure(
                         ref_c = ref_c[mask] if len(mask) == len(ref_c) else None
                         if ref_c is not None and len(ref_c) != len(heavy_atoms):
                             ref_c = None  # shape mismatch, skip
+                    if comp.atom_charges:
+                        mask = comp.heavy_atom_mask
+                        atom_charges = [c for c, m in zip(comp.atom_charges, mask) if m]
+                        if len(atom_charges) != len(heavy_atoms):
+                            atom_charges = None
 
                 tokens.append(Token(
                     token_type=token_type,
@@ -811,10 +835,13 @@ def tokenize_structure(
                     entity_id=chain_to_entity[chain.chain_id],
                     sym_id=0,
                     token_index=0,
+                    ref_space_uid=residue_uid_counter,
+                    atom_charges=atom_charges,
                 ))
                 chain_ids.append(chain.chain_id)
                 entity_types.append("protein")
                 res_counter += 1
+                residue_uid_counter += 1
 
             elif is_nucleotide:
                 # One token per nucleotide
@@ -828,6 +855,7 @@ def tokenize_structure(
                 atom_coords = np.stack([a.coords for a in heavy_atoms])
 
                 ref_c = None
+                atom_charges = None
                 if ccd and res.name in ccd:
                     comp = ccd[res.name]
                     ref_c = comp.ideal_coords
@@ -836,6 +864,11 @@ def tokenize_structure(
                         ref_c = ref_c[mask] if len(mask) == len(ref_c) else None
                         if ref_c is not None and len(ref_c) != len(heavy_atoms):
                             ref_c = None
+                    if comp.atom_charges:
+                        mask = comp.heavy_atom_mask
+                        atom_charges = [c for c, m in zip(comp.atom_charges, mask) if m]
+                        if len(atom_charges) != len(heavy_atoms):
+                            atom_charges = None
 
                 tokens.append(Token(
                     token_type=token_type,
@@ -849,17 +882,50 @@ def tokenize_structure(
                     entity_id=chain_to_entity[chain.chain_id],
                     sym_id=0,
                     token_index=0,
+                    ref_space_uid=residue_uid_counter,
+                    atom_charges=atom_charges,
                 ))
                 chain_ids.append(chain.chain_id)
                 entity_types.append("nucleotide")
                 res_counter += 1
+                residue_uid_counter += 1
 
             else:
                 # Ligand / modified residue: one token per heavy atom
-                lig_res_idx = res_counter
+                # Look up CCD for ref_coords and charges
+                lig_ref_coords = None
+                lig_charges = None
+                if ccd and res.name in ccd:
+                    comp = ccd[res.name]
+                    if comp.ideal_coords is not None:
+                        mask = comp.heavy_atom_mask
+                        if len(mask) == len(comp.ideal_coords):
+                            ccd_heavy_names = comp.heavy_atom_names
+                            ccd_heavy_coords = comp.ideal_coords[mask]
+                            # Build name->coord map for matching
+                            ccd_name_to_coord = {n: c for n, c in zip(ccd_heavy_names, ccd_heavy_coords)}
+                            lig_ref_coords = ccd_name_to_coord
+                    if comp.atom_charges:
+                        mask = comp.heavy_atom_mask
+                        ccd_heavy_charges = [c for c, m in zip(comp.atom_charges, mask) if m]
+                        ccd_heavy_names_c = comp.heavy_atom_names
+                        lig_charges = {n: c for n, c in zip(ccd_heavy_names_c, ccd_heavy_charges)}
+
+                # All atoms of this ligand residue share the same ref_space_uid
+                lig_uid = residue_uid_counter
+                residue_uid_counter += 1
+
                 for atom_idx, atom in enumerate(heavy_atoms):
                     elem_idx = ELEM_TO_IDX.get(atom.element, UNK_ELEM_IDX)
                     token_type = TOKEN_LIGAND_ATOM + elem_idx
+
+                    # Get ref_coords from CCD by atom name
+                    ref_c = None
+                    if lig_ref_coords is not None and atom.name in lig_ref_coords:
+                        ref_c = lig_ref_coords[atom.name].reshape(1, 3)
+
+                    # Get charge from CCD by atom name
+                    charge = [lig_charges.get(atom.name, 0)] if lig_charges else None
 
                     tokens.append(Token(
                         token_type=token_type,
@@ -868,11 +934,13 @@ def tokenize_structure(
                         atom_names=[atom.name],
                         atom_elements=[atom.element],
                         atom_coords=atom.coords.reshape(1, 3),
-                        ref_coords=None,
+                        ref_coords=ref_c,
                         res_name=res.name,
                         entity_id=chain_to_entity[chain.chain_id],
                         sym_id=0,
                         token_index=atom_idx,
+                        ref_space_uid=lig_uid,
+                        atom_charges=charge,
                     ))
                     chain_ids.append(chain.chain_id)
                     entity_types.append("ligand")
@@ -908,6 +976,7 @@ def tokenize_sequences(
     entity_types: list[str] = []
     chain_sequences: dict[str, str] = {}
     res_counter = 0
+    residue_uid_counter = 0  # groups atoms by residue for ref_space_uid
 
     # Build entity_id mapping: chains with identical (type, sequence/ccd) share entity_id
     entity_key_to_id: dict[tuple[str, str], int] = {}
@@ -940,6 +1009,7 @@ def tokenize_sequences(
                     mask = comp.heavy_atom_mask
                     atom_names = comp.heavy_atom_names
                     atom_elements = [e for e, m in zip(comp.atom_elements, mask) if m]
+                    atom_charges = [c for c, m in zip(comp.atom_charges, mask) if m] if comp.atom_charges else None
                     if comp.ideal_coords is not None and len(mask) == len(comp.ideal_coords):
                         ref_c = comp.ideal_coords[mask]
                     else:
@@ -948,6 +1018,7 @@ def tokenize_sequences(
                     # Fallback: minimal backbone
                     atom_names = ["N", "CA", "C", "O"]
                     atom_elements = ["N", "C", "C", "O"]
+                    atom_charges = None
                     ref_c = np.zeros((4, 3), dtype=np.float32)
 
                 tokens.append(Token(
@@ -962,10 +1033,13 @@ def tokenize_sequences(
                     entity_id=entity_id,
                     sym_id=0,
                     token_index=0,
+                    ref_space_uid=residue_uid_counter,
+                    atom_charges=atom_charges,
                 ))
                 chain_ids.append(chain_id)
                 entity_types.append("protein")
                 res_counter += 1
+                residue_uid_counter += 1
 
         elif ctype in ("rna", "dna"):
             sequence = chain["sequence"]
@@ -985,6 +1059,7 @@ def tokenize_sequences(
                     mask = comp.heavy_atom_mask
                     atom_names = comp.heavy_atom_names
                     atom_elements = [e for e, m in zip(comp.atom_elements, mask) if m]
+                    atom_charges = [c for c, m in zip(comp.atom_charges, mask) if m] if comp.atom_charges else None
                     if comp.ideal_coords is not None and len(mask) == len(comp.ideal_coords):
                         ref_c = comp.ideal_coords[mask]
                     else:
@@ -992,6 +1067,7 @@ def tokenize_sequences(
                 else:
                     atom_names = [char]
                     atom_elements = ["C"]
+                    atom_charges = None
                     ref_c = np.zeros((1, 3), dtype=np.float32)
 
                 tokens.append(Token(
@@ -1006,10 +1082,13 @@ def tokenize_sequences(
                     entity_id=entity_id,
                     sym_id=0,
                     token_index=0,
+                    ref_space_uid=residue_uid_counter,
+                    atom_charges=atom_charges,
                 ))
                 chain_ids.append(chain_id)
                 entity_types.append("nucleotide")
                 res_counter += 1
+                residue_uid_counter += 1
 
         elif ctype == "ligand":
             ccd_code = chain["ccd"]
@@ -1020,10 +1099,15 @@ def tokenize_sequences(
             mask = comp.heavy_atom_mask
             heavy_names = comp.heavy_atom_names
             heavy_elements = [e for e, m in zip(comp.atom_elements, mask) if m]
+            heavy_charges = [c for c, m in zip(comp.atom_charges, mask) if m] if comp.atom_charges else None
             if comp.ideal_coords is not None and len(mask) == len(comp.ideal_coords):
                 heavy_coords = comp.ideal_coords[mask]
             else:
                 heavy_coords = np.zeros((len(heavy_names), 3), dtype=np.float32)
+
+            # All atoms of this ligand residue share the same ref_space_uid
+            lig_uid = residue_uid_counter
+            residue_uid_counter += 1
 
             for atom_idx, (aname, aelem) in enumerate(zip(heavy_names, heavy_elements)):
                 elem_idx = ELEM_TO_IDX.get(aelem, UNK_ELEM_IDX)
@@ -1042,6 +1126,8 @@ def tokenize_sequences(
                     entity_id=entity_id,
                     sym_id=0,
                     token_index=atom_idx,
+                    ref_space_uid=lig_uid,
+                    atom_charges=[heavy_charges[atom_idx]] if heavy_charges else None,
                 ))
                 chain_ids.append(chain_id)
                 entity_types.append("ligand")
@@ -1577,6 +1663,12 @@ def _subset_features(
         "n_atoms": atom_mask.sum().item(),
     }
 
+    # Atom-level optional features
+    if "ref_space_uid" in features:
+        result["ref_space_uid"] = features["ref_space_uid"][atom_mask]
+    if "ref_charge" in features:
+        result["ref_charge"] = features["ref_charge"][atom_mask]
+
     return result
 
 
@@ -1682,15 +1774,29 @@ def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
             tensors.append(t)
         result[key] = torch.stack(tensors)
 
-    for key in ["atom_to_token", "atom_element_idx"]:
+    for key in ["atom_to_token", "atom_element_idx", "ref_space_uid"]:
+        if key not in batch[0]:
+            continue
         tensors = []
+        pad_val = -1 if key == "ref_space_uid" else 0
         for b in batch:
             t = b[key]
             pad_size = max_atoms - len(t)
             if pad_size > 0:
-                t = torch.nn.functional.pad(t, (0, pad_size))
+                t = torch.nn.functional.pad(t, (0, pad_size), value=pad_val)
             tensors.append(t)
         result[key] = torch.stack(tensors)
+
+    # ref_charge: (N_atoms,) float
+    if "ref_charge" in batch[0]:
+        tensors = []
+        for b in batch:
+            t = b["ref_charge"]
+            pad_size = max_atoms - len(t)
+            if pad_size > 0:
+                t = torch.nn.functional.pad(t, (0, pad_size))
+            tensors.append(t)
+        result["ref_charge"] = torch.stack(tensors)
 
     # Scalar values
     result["n_tokens"] = torch.tensor([b["n_tokens"] for b in batch])
@@ -1878,6 +1984,8 @@ def make_synthetic_batch(
         "atoms_per_token": torch.full((batch_size, n_tokens), n_atoms_per_token, dtype=torch.long, device=device),
         "atom_element_idx": torch.randint(0, len(ELEMENTS), (batch_size, n_atoms), device=device),
         "atom_name_chars": torch.zeros(batch_size, n_atoms, 256, device=device),
+        "ref_space_uid": torch.arange(n_tokens, device=device).repeat_interleave(n_atoms_per_token).unsqueeze(0).expand(batch_size, -1),
+        "ref_charge": torch.zeros(batch_size, n_atoms, device=device),
         "chain_same": torch.ones(batch_size, n_tokens, n_tokens, dtype=torch.long, device=device),
         "token_mask": torch.ones(batch_size, n_tokens, dtype=torch.bool, device=device),
         "atom_mask": torch.ones(batch_size, n_atoms, dtype=torch.bool, device=device),

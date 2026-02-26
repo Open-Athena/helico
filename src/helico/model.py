@@ -1055,6 +1055,7 @@ class AtomAttentionEncoder(nn.Module):
         noisy_pos: torch.Tensor | None = None,
         s_trunk: torch.Tensor | None = None,
         z_trunk: torch.Tensor | None = None,
+        ref_space_uid: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
@@ -1091,12 +1092,14 @@ class AtomAttentionEncoder(nn.Module):
         dist_sq = diff.pow(2).sum(-1, keepdim=True)
         inv_dist = 1.0 / (1.0 + dist_sq)
 
-        # Within-token validity mask (atom_to_token serves as ref_space_uid)
-        # Use sentinel -1 for padding atoms so they don't match real tokens
-        a2t_padded = F.pad(atom_to_token, (0, q_pad), value=-1)
-        a2t_q, a2t_k, _, _, _ = _partition_to_windows(
-            a2t_padded.unsqueeze(-1).float(), n_q, n_k)
-        v_lm = (a2t_q.squeeze(-1).long().unsqueeze(3) == a2t_k.squeeze(-1).long().unsqueeze(2))
+        # Within-residue validity mask using ref_space_uid (groups atoms by residue)
+        # For proteins/nucleotides: same as atom_to_token (one token per residue)
+        # For ligands: all atoms of the same residue share ref_space_uid
+        uid = ref_space_uid if ref_space_uid is not None else atom_to_token
+        uid_padded = F.pad(uid, (0, q_pad), value=-1)
+        uid_q, uid_k, _, _, _ = _partition_to_windows(
+            uid_padded.unsqueeze(-1).float(), n_q, n_k)
+        v_lm = (uid_q.squeeze(-1).long().unsqueeze(3) == uid_k.squeeze(-1).long().unsqueeze(2))
         v_lm = v_lm.unsqueeze(-1).to(diff.dtype)  # (B, n_blocks, n_q, n_k, 1)
 
         # Build pair features (geometric: masked by v_lm; validity: embedded directly)
@@ -1231,6 +1234,7 @@ class InputFeatureEmbedder(nn.Module):
         restype: torch.Tensor,
         profile: torch.Tensor,
         deletion_mean: torch.Tensor,
+        ref_space_uid: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Returns:
@@ -1239,7 +1243,8 @@ class InputFeatureEmbedder(nn.Module):
         """
         a_token, _, _, _, _ = self.atom_attention_encoder(
             ref_pos, ref_charge, ref_features,
-            atom_to_token, atom_mask, n_tokens)
+            atom_to_token, atom_mask, n_tokens,
+            ref_space_uid=ref_space_uid)
         return torch.cat([a_token, restype, profile, deletion_mean], dim=-1)
 
 
@@ -1535,6 +1540,49 @@ class DiffusionConditioning(nn.Module):
         return s, z
 
 
+def _centre_random_augmentation(
+    x: torch.Tensor,
+    mask: torch.Tensor | None = None,
+    s_trans: float = 1.0,
+) -> torch.Tensor:
+    """AF3 Algorithm 19: centre + random rotation + random translation.
+
+    Args:
+        x: (B, N_atoms, 3) coordinates
+        mask: (B, N_atoms) atom mask (optional)
+        s_trans: scale of random translation
+    Returns:
+        augmented coordinates (B, N_atoms, 3)
+    """
+    from scipy.spatial.transform import Rotation
+
+    B, N_atoms, _ = x.shape
+    device = x.device
+    dtype = x.dtype
+
+    # Centre (masked mean)
+    if mask is not None and mask.any():
+        m = mask.unsqueeze(-1).to(dtype)
+        center = (x * m).sum(dim=-2, keepdim=True) / m.sum(dim=-2, keepdim=True).clamp(min=1e-12)
+    else:
+        center = x.mean(dim=-2, keepdim=True)
+    x = x - center
+
+    # Random rotation (uniform SO(3))
+    rot_np = Rotation.random(B).as_matrix()  # (B, 3, 3)
+    rot = torch.tensor(rot_np, device=device, dtype=dtype)
+    x = torch.einsum("bij,baj->bai", rot, x)  # (B, N_atoms, 3)
+
+    # Random translation
+    trans = s_trans * torch.randn(B, 1, 3, device=device, dtype=dtype)
+    x = x + trans
+
+    if mask is not None:
+        x = x * mask.unsqueeze(-1).to(dtype)
+
+    return x
+
+
 class DiffusionModule(nn.Module):
     """Full diffusion module with EDM preconditioning (Protenix architecture)."""
 
@@ -1577,7 +1625,8 @@ class DiffusionModule(nn.Module):
                    ref_pos: torch.Tensor, ref_charge: torch.Tensor, ref_features: torch.Tensor,
                    atom_to_token: torch.Tensor, atom_mask: torch.Tensor,
                    s_trunk: torch.Tensor, z_trunk: torch.Tensor, s_inputs: torch.Tensor,
-                   relpe_feats: dict[str, torch.Tensor]) -> torch.Tensor:
+                   relpe_feats: dict[str, torch.Tensor],
+                   ref_space_uid: torch.Tensor | None = None) -> torch.Tensor:
         """Inner forward: network prediction."""
         n_tokens = s_trunk.shape[1]
 
@@ -1588,7 +1637,8 @@ class DiffusionModule(nn.Module):
         a_token, q_skip, c_skip, p_skip, pad_mask = self.atom_encoder(
             ref_pos, ref_charge, ref_features,
             atom_to_token, atom_mask, n_tokens,
-            noisy_pos=x_scaled, s_trunk=s_trunk, z_trunk=z_cond)
+            noisy_pos=x_scaled, s_trunk=s_trunk, z_trunk=z_cond,
+            ref_space_uid=ref_space_uid)
 
         # Inject conditioned single into token representation
         a_token = a_token + self.s_to_token_proj(self.s_to_token_norm(s_cond))
@@ -1613,6 +1663,7 @@ class DiffusionModule(nn.Module):
         z_trunk: torch.Tensor,
         s_inputs: torch.Tensor,
         relpe_feats: dict[str, torch.Tensor],
+        ref_space_uid: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Training forward: single denoising step with EDM preconditioning.
 
@@ -1645,7 +1696,8 @@ class DiffusionModule(nn.Module):
             ref_pos, ref_charge, ref_features,
             atom_to_token, atom_mask,
             s_trunk, z_trunk, s_inputs,
-            relpe_feats)
+            relpe_feats,
+            ref_space_uid=ref_space_uid)
 
         x_denoised = c_skip * x_noisy + c_out * r_update
         return x_denoised, gt_coords, sigma
@@ -1662,6 +1714,7 @@ class DiffusionModule(nn.Module):
         z_trunk: torch.Tensor,
         s_inputs: torch.Tensor,
         relpe_feats: dict[str, torch.Tensor],
+        ref_space_uid: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Inference: Protenix Algorithm 18 — predictor-corrector Euler denoising."""
         B, N_atoms, _ = ref_pos.shape
@@ -1696,8 +1749,9 @@ class DiffusionModule(nn.Module):
             c_tau_last = t_steps[i]    # current noise level
             c_tau = t_steps[i + 1]     # target noise level
 
-            # Centre-of-mass removal
-            x = x - x.mean(dim=-2, keepdim=True)
+            # Centre random augmentation (AF3 Algorithm 19):
+            # COM removal + random rotation + random translation
+            x = _centre_random_augmentation(x, atom_mask)
 
             # Predictor: noise injection (gamma > 0 when c_tau > gamma_min)
             gamma = gamma0 if float(c_tau) > gamma_min else 0.0
@@ -1719,7 +1773,8 @@ class DiffusionModule(nn.Module):
                 ref_pos, ref_charge, ref_features,
                 atom_to_token, atom_mask,
                 s_trunk, z_trunk, s_inputs,
-                relpe_feats)
+                relpe_feats,
+                ref_space_uid=ref_space_uid)
 
             x_denoised = c_skip * x + c_out * r_update
 
@@ -2316,14 +2371,18 @@ class Helico(nn.Module):
         """Build reference features for atom attention encoder.
 
         Returns:
-            ref_charge: (B, N_atoms, 1) — zeros
+            ref_charge: (B, N_atoms, 1) — formal charges from CCD (arcsinh-transformed)
             ref_features: (B, N_atoms, 385) — mask(1) + element_onehot(128) + atom_name_chars(256)
         """
         B, N_atoms = batch["atom_element_idx"].shape
         device = batch["atom_element_idx"].device
         dtype = batch.get("ref_coords", batch["atom_coords"]).dtype
 
-        ref_charge = torch.zeros(B, N_atoms, 1, device=device, dtype=dtype)
+        # Use real ref_charge from CCD if available, else zeros
+        if "ref_charge" in batch:
+            ref_charge = torch.arcsinh(batch["ref_charge"].to(dtype)).unsqueeze(-1)
+        else:
+            ref_charge = torch.zeros(B, N_atoms, 1, device=device, dtype=dtype)
 
         # Element one-hot (128 dims, padded from n_elements)
         elem_onehot = F.one_hot(batch["atom_element_idx"].clamp(max=127), 128).to(dtype)
@@ -2386,6 +2445,7 @@ class Helico(nn.Module):
             restype=restype,
             profile=profile,
             deletion_mean=deletion_mean,
+            ref_space_uid=batch.get("ref_space_uid"),
         )
 
     def _build_msa_raw(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -2586,6 +2646,7 @@ class Helico(nn.Module):
                 z_trunk=z,
                 s_inputs=s_inputs,
                 relpe_feats=relpe_feats,
+                ref_space_uid=batch.get("ref_space_uid"),
             )
             all_coords.append(coords)
 
