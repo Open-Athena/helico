@@ -679,7 +679,14 @@ class TokenizedStructure:
         all_ref_charge = []
         atom_to_token = []  # maps each atom to its token index
         atoms_per_token = []
+        rep_atom_idx = []  # representative atom index per token (CB/CA/C4/C2/single)
+        has_frame = []  # whether token has a backbone frame (for pTM/ipTM filtering)
 
+        # Nucleotide representative atom names
+        _PURINE_RES = {"A", "G", "DA", "DG"}
+        _PYRIMIDINE_RES = {"C", "U", "DC", "DT"}
+
+        atom_offset = 0
         for ti, tok in enumerate(self.tokens):
             n_atoms = len(tok.atom_names)
             atoms_per_token.append(n_atoms)
@@ -699,6 +706,31 @@ class TokenizedStructure:
                 all_ref_charge.extend(tok.atom_charges)
             else:
                 all_ref_charge.extend([0] * n_atoms)
+
+            # Representative atom: CB for proteins (CA for GLY), C4/C2 for nucleotides, atom 0 for ligands
+            rep_offset = 0  # default: first atom
+            if n_atoms == 1:
+                rep_offset = 0  # ligand single-atom tokens
+            elif tok.res_name in _PURINE_RES:
+                rep_offset = tok.atom_names.index("C4") if "C4" in tok.atom_names else 0
+            elif tok.res_name in _PYRIMIDINE_RES:
+                rep_offset = tok.atom_names.index("C2") if "C2" in tok.atom_names else 0
+            elif tok.res_name == "GLY":
+                rep_offset = tok.atom_names.index("CA") if "CA" in tok.atom_names else 0
+            elif "CB" in tok.atom_names:
+                rep_offset = tok.atom_names.index("CB")
+            elif "CA" in tok.atom_names:
+                rep_offset = tok.atom_names.index("CA")
+            rep_atom_idx.append(atom_offset + rep_offset)
+
+            # has_frame: proteins/nucleotides always have frames; ligands need ≥3 atoms
+            etype = self.entity_types[ti] if ti < len(self.entity_types) else "ligand"
+            if etype in ("protein", "nucleotide"):
+                has_frame.append(True)
+            else:
+                has_frame.append(n_atoms >= 3)
+
+            atom_offset += n_atoms
 
         total_atoms = sum(atoms_per_token)
         atom_coords = torch.tensor(np.concatenate(all_atom_coords, axis=0), dtype=torch.float32) if total_atoms > 0 else torch.zeros(0, 3)
@@ -746,6 +778,8 @@ class TokenizedStructure:
             "atom_name_chars": atom_name_chars,      # (N_atoms, 256)
             "ref_space_uid": ref_space_uid,          # (N_atoms,)
             "ref_charge": ref_charge,                # (N_atoms,)
+            "rep_atom_idx": torch.tensor(rep_atom_idx, dtype=torch.long),  # (N_tok,)
+            "has_frame": torch.tensor(has_frame, dtype=torch.bool),  # (N_tok,)
             "chain_same": chain_same,                # (N_tok, N_tok)
             "n_tokens": n_tok,
             "n_atoms": total_atoms,
@@ -1669,6 +1703,20 @@ def _subset_features(
     if "ref_charge" in features:
         result["ref_charge"] = features["ref_charge"][atom_mask]
 
+    # rep_atom_idx: remap old atom indices to new atom indices
+    if "rep_atom_idx" in features:
+        old_to_new_atom = torch.full((len(atom_mask),), -1, dtype=torch.long)
+        new_idx = 0
+        for i in range(len(atom_mask)):
+            if atom_mask[i]:
+                old_to_new_atom[i] = new_idx
+                new_idx += 1
+        old_rep = features["rep_atom_idx"][token_indices]
+        result["rep_atom_idx"] = old_to_new_atom[old_rep]
+
+    if "has_frame" in features:
+        result["has_frame"] = features["has_frame"][token_indices]
+
     return result
 
 
@@ -1742,7 +1790,7 @@ def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
     result: dict[str, torch.Tensor] = {}
 
     # Token-level tensors: pad to max_tokens
-    for key in ["token_types", "chain_indices", "res_indices", "rel_pos", "token_index", "entity_id", "sym_id", "atoms_per_token"]:
+    for key in ["token_types", "chain_indices", "res_indices", "rel_pos", "token_index", "entity_id", "sym_id", "atoms_per_token", "rep_atom_idx", "has_frame"]:
         tensors = []
         for b in batch:
             t = b[key]
@@ -1986,6 +2034,8 @@ def make_synthetic_batch(
         "atom_name_chars": torch.zeros(batch_size, n_atoms, 256, device=device),
         "ref_space_uid": torch.arange(n_tokens, device=device).repeat_interleave(n_atoms_per_token).unsqueeze(0).expand(batch_size, -1),
         "ref_charge": torch.zeros(batch_size, n_atoms, device=device),
+        "rep_atom_idx": torch.arange(0, n_atoms, n_atoms_per_token, device=device).unsqueeze(0).expand(batch_size, -1),
+        "has_frame": torch.ones(batch_size, n_tokens, dtype=torch.bool, device=device),
         "chain_same": torch.ones(batch_size, n_tokens, n_tokens, dtype=torch.long, device=device),
         "token_mask": torch.ones(batch_size, n_tokens, dtype=torch.bool, device=device),
         "atom_mask": torch.ones(batch_size, n_atoms, dtype=torch.bool, device=device),

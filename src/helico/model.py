@@ -1540,6 +1540,22 @@ class DiffusionConditioning(nn.Module):
         return s, z
 
 
+def _uniform_random_rotation(B: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    """Generate B uniform random SO(3) rotation matrices using torch random state.
+
+    Uses random quaternion normalization (deterministic with torch.manual_seed).
+    """
+    q = torch.randn(B, 4, device=device, dtype=torch.float64)
+    q = q / q.norm(dim=-1, keepdim=True)
+    w, x, y, z = q.unbind(-1)
+    rot = torch.stack([
+        1 - 2*(y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y),
+        2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x),
+        2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y),
+    ], dim=-1).reshape(B, 3, 3)
+    return rot.to(dtype)
+
+
 def _centre_random_augmentation(
     x: torch.Tensor,
     mask: torch.Tensor | None = None,
@@ -1554,8 +1570,6 @@ def _centre_random_augmentation(
     Returns:
         augmented coordinates (B, N_atoms, 3)
     """
-    from scipy.spatial.transform import Rotation
-
     B, N_atoms, _ = x.shape
     device = x.device
     dtype = x.dtype
@@ -1568,10 +1582,9 @@ def _centre_random_augmentation(
         center = x.mean(dim=-2, keepdim=True)
     x = x - center
 
-    # Random rotation (uniform SO(3))
-    rot_np = Rotation.random(B).as_matrix()  # (B, 3, 3)
-    rot = torch.tensor(rot_np, device=device, dtype=dtype)
-    x = torch.einsum("bij,baj->bai", rot, x)  # (B, N_atoms, 3)
+    # Random rotation (uniform SO(3) via quaternion, deterministic with torch seed)
+    rot = _uniform_random_rotation(B, device, dtype)
+    x = torch.einsum("bij,baj->bai", rot, x)
 
     # Random translation
     trans = s_trans * torch.randn(B, 1, 3, device=device, dtype=dtype)
@@ -1964,6 +1977,7 @@ class ConfidenceHead(nn.Module):
         atom_mask: torch.Tensor,
         mask: torch.Tensor | None = None,
         pair_mask: torch.Tensor | None = None,
+        rep_atom_idx: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """
         Args:
@@ -1975,21 +1989,30 @@ class ConfidenceHead(nn.Module):
             atom_mask: (B, N_atoms) atom mask
             mask: (B, N) token mask
             pair_mask: (B, N, N) pair mask
+            rep_atom_idx: (B, N_tok) index of representative atom per token
         Returns:
             dict with pae, pde, plddt, resolved logits
         """
-        s = self.input_s_norm(s_trunk.detach())
+        s = self.input_s_norm(torch.clamp(s_trunk.detach(), min=-512, max=512))
         s_inp = s_inputs.detach()
 
         # z_init from s_inputs outer product
         z = z_trunk.detach() + self.linear_s1(s_inp).unsqueeze(2) + self.linear_s2(s_inp).unsqueeze(1)
 
-        # Distance pair embeddings from pred_coords
-        # Compute token center coords from predicted atom coords
+        # Distance pair embeddings from representative atom coords (CB/CA/C4/C2)
+        # Compute distances in float32 for numerical stability (matching Protenix)
         B, N_tok = s.shape[:2]
-        token_centers = self._get_token_centers(pred_coords, atom_to_token, atom_mask, N_tok)
+        if rep_atom_idx is not None:
+            # Gather representative atom coordinates
+            idx3 = rep_atom_idx.unsqueeze(-1).expand(-1, -1, 3)
+            token_centers = torch.gather(pred_coords, 1, idx3)
+        else:
+            token_centers = self._get_token_centers(pred_coords, atom_to_token, atom_mask, N_tok)
 
-        dists = torch.cdist(token_centers, token_centers)  # (B, N, N)
+        with torch.amp.autocast("cuda", enabled=False):
+            dists = torch.cdist(
+                token_centers.float(), token_centers.float()
+            )  # (B, N, N) in float32
         # One-hot distance binning
         d_unsq = dists.unsqueeze(-1)  # (B, N, N, 1)
         one_hot = ((d_unsq > self.lower_bins) & (d_unsq < self.upper_bins)).to(z.dtype)
@@ -1998,6 +2021,10 @@ class ConfidenceHead(nn.Module):
 
         # Pairformer
         s, z = self.pairformer_stack(s, z, mask=mask, pair_mask=pair_mask)
+
+        # Upcast after pairformer for output heads (matching Protenix)
+        z = z.float()
+        s = s.float()
 
         # Output heads
         pae_logits = self.linear_pae(self.pae_norm(z))
@@ -2084,12 +2111,17 @@ def _compute_tm_term(pae_logits: torch.Tensor, d0: torch.Tensor) -> torch.Tensor
     return (probs * tm_per_bin).sum(dim=-1)  # (B, N, N)
 
 
-def compute_ptm(pae_logits: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+def compute_ptm(
+    pae_logits: torch.Tensor,
+    mask: torch.Tensor | None = None,
+    has_frame: torch.Tensor | None = None,
+) -> torch.Tensor:
     """Compute predicted TM-score from PAE logits.
 
     Args:
         pae_logits: (B, N, N, n_pae_bins)
         mask: (B, N) token mask, or None for all tokens
+        has_frame: (B, N) bool mask — max is taken only over has_frame tokens
 
     Returns:
         (B,) pTM scores in [0, 1]
@@ -2117,8 +2149,11 @@ def compute_ptm(pae_logits: torch.Tensor, mask: torch.Tensor | None = None) -> t
     n_scored = mask.sum(dim=-1, keepdim=True).clamp(min=1)  # (B, 1)
     tm_per_aligned = tm_pair.sum(dim=-1) / n_scored  # (B, N)
 
-    # pTM = max over alignment dimension, masked
-    tm_per_aligned = tm_per_aligned.masked_fill(mask == 0, 0.0)
+    # pTM = max over alignment dimension, filtered by has_frame if provided
+    frame_mask = mask.clone()
+    if has_frame is not None:
+        frame_mask = frame_mask * has_frame.to(dtype=frame_mask.dtype)
+    tm_per_aligned = tm_per_aligned.masked_fill(frame_mask == 0, 0.0)
     ptm = tm_per_aligned.max(dim=-1).values  # (B,)
     return ptm
 
@@ -2127,6 +2162,7 @@ def compute_iptm(
     pae_logits: torch.Tensor,
     chain_indices: torch.Tensor,
     mask: torch.Tensor | None = None,
+    has_frame: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Compute interface predicted TM-score (across different chains).
 
@@ -2134,6 +2170,7 @@ def compute_iptm(
         pae_logits: (B, N, N, n_pae_bins)
         chain_indices: (B, N) chain index per token
         mask: (B, N) token mask, or None
+        has_frame: (B, N) bool mask — max is taken only over has_frame tokens
 
     Returns:
         (B,) ipTM scores in [0, 1]
@@ -2162,9 +2199,12 @@ def compute_iptm(
     n_inter = pair_mask.sum(dim=-1).clamp(min=1)  # (B, N) — number of inter-chain partners per token
     tm_per_aligned = tm_pair.sum(dim=-1) / n_inter  # (B, N)
 
-    # Mask tokens with no inter-chain partners
+    # Mask tokens with no inter-chain partners, and filter by has_frame
     has_inter = (pair_mask.sum(dim=-1) > 0).float()
-    tm_per_aligned = tm_per_aligned * has_inter
+    frame_mask = has_inter.clone()
+    if has_frame is not None:
+        frame_mask = frame_mask * has_frame.to(dtype=frame_mask.dtype)
+    tm_per_aligned = tm_per_aligned * frame_mask
     # If no inter-chain pairs at all, return 0
     any_inter = has_inter.sum(dim=-1) > 0  # (B,)
     iptm = tm_per_aligned.max(dim=-1).values  # (B,)
@@ -2172,23 +2212,73 @@ def compute_iptm(
     return iptm
 
 
+def compute_clash(
+    pred_coords: torch.Tensor,
+    chain_indices: torch.Tensor,
+    atom_to_token: torch.Tensor,
+    atom_mask: torch.Tensor,
+    threshold: float = 1.1,
+) -> torch.Tensor:
+    """Detect inter-chain atom clashes (AF3 clash criterion).
+
+    Args:
+        pred_coords: (B, N_atoms, 3) predicted coordinates
+        chain_indices: (B, N_tok) chain index per token
+        atom_to_token: (B, N_atoms) atom-to-token mapping
+        atom_mask: (B, N_atoms) atom mask
+        threshold: clash distance threshold in Angstroms (AF3 uses 1.1)
+
+    Returns:
+        (B,) float tensor: 1.0 if clash detected, 0.0 otherwise
+    """
+    B = pred_coords.shape[0]
+    device = pred_coords.device
+    has_clash = torch.zeros(B, device=device)
+
+    for b in range(B):
+        mask = atom_mask[b].bool()
+        coords = pred_coords[b][mask]  # (N_real, 3)
+        tok_ids = atom_to_token[b][mask]  # (N_real,)
+        chain_ids = chain_indices[b][tok_ids]  # (N_real,)
+
+        # Check inter-chain pairs
+        n = coords.shape[0]
+        if n > 5000:
+            # Subsample for large structures to avoid OOM
+            idx = torch.randperm(n, device=device)[:5000]
+            coords = coords[idx]
+            chain_ids = chain_ids[idx]
+
+        dists = torch.cdist(coords.float(), coords.float())  # (N, N)
+        inter_chain = chain_ids.unsqueeze(0) != chain_ids.unsqueeze(1)
+        clash_mask = (dists < threshold) & inter_chain
+        has_clash[b] = clash_mask.any().float()
+
+    return has_clash
+
+
 def compute_ranking_score(
     ptm: torch.Tensor,
     iptm: torch.Tensor,
     has_interface: torch.Tensor,
+    has_clash: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Compute ranking score: 0.8*iptm + 0.2*ptm for multi-chain, ptm for single-chain.
+    """Compute ranking score: 0.8*iptm + 0.2*ptm - 100*has_clash (Protenix formula).
 
     Args:
         ptm: (B,) pTM scores
         iptm: (B,) ipTM scores
         has_interface: (B,) bool tensor, True when >1 unique chain
+        has_clash: (B,) float tensor, 1.0 if clash detected
 
     Returns:
         (B,) ranking scores
     """
     multi = has_interface.float()
-    return multi * (0.8 * iptm + 0.2 * ptm) + (1.0 - multi) * ptm
+    score = multi * (0.8 * iptm + 0.2 * ptm) + (1.0 - multi) * ptm
+    if has_clash is not None:
+        score = score - 100.0 * has_clash
+    return score
 
 
 def _flatten_plddt(
@@ -2557,6 +2647,7 @@ class Helico(nn.Module):
                 atom_to_token=batch["atom_to_token"],
                 atom_mask=atom_mask,
                 mask=mask, pair_mask=pair_mask,
+                rep_atom_idx=batch.get("rep_atom_idx"),
             )
             results.update(confidence)
 
@@ -2595,8 +2686,15 @@ class Helico(nn.Module):
         self,
         batch: dict[str, torch.Tensor],
         n_samples: int = 5,
+        n_cycles: int | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Run inference: generate structure predictions."""
+        """Run inference: generate structure predictions.
+
+        Args:
+            batch: Input feature dict.
+            n_samples: Number of diffusion samples per input.
+            n_cycles: Override number of recycling cycles (default: self.config.n_cycles).
+        """
         self.eval()
         mask = batch.get("token_mask")
         pair_mask = None
@@ -2626,7 +2724,8 @@ class Helico(nn.Module):
         msa_raw, msa_mask = self._build_msa_raw(batch)
         s = torch.zeros_like(s_init)
         z = torch.zeros_like(z_init)
-        for cycle in range(self.config.n_cycles):
+        actual_cycles = n_cycles if n_cycles is not None else self.config.n_cycles
+        for cycle in range(actual_cycles):
             z = z_init + self.linear_z_cycle(self.layernorm_z_cycle(z))
             z = z + self.template_embedder(batch, z)
             z = self.msa_module(msa_raw, z, s_inputs, msa_mask, pair_mask)
@@ -2663,6 +2762,8 @@ class Helico(nn.Module):
 
         chain_indices = batch.get("chain_indices")
 
+        rep_atom_idx = batch.get("rep_atom_idx")
+        has_frame = batch.get("has_frame")
         for si in range(n_samples):
             confidence = self.confidence_head(
                 s_trunk=s, z_trunk=z, s_inputs=s_inputs,
@@ -2670,14 +2771,15 @@ class Helico(nn.Module):
                 atom_to_token=batch["atom_to_token"],
                 atom_mask=atom_mask,
                 mask=mask, pair_mask=pair_mask,
+                rep_atom_idx=rep_atom_idx,
             )
 
             plddt = compute_plddt(confidence["plddt_logits"])
             pae = compute_pae(confidence["pae_logits"])
-            ptm = compute_ptm(confidence["pae_logits"], mask=mask)
+            ptm = compute_ptm(confidence["pae_logits"], mask=mask, has_frame=has_frame)
 
             if chain_indices is not None:
-                iptm = compute_iptm(confidence["pae_logits"], chain_indices, mask=mask)
+                iptm = compute_iptm(confidence["pae_logits"], chain_indices, mask=mask, has_frame=has_frame)
                 unique_counts = []
                 for b in range(B):
                     ci = chain_indices[b]
@@ -2689,7 +2791,16 @@ class Helico(nn.Module):
                 iptm = ptm.clone()
                 has_interface = torch.zeros(B, device=device, dtype=torch.bool)
 
-            ranking = compute_ranking_score(ptm, iptm, has_interface)
+            # Compute clash penalty
+            if chain_indices is not None:
+                has_clash = compute_clash(
+                    all_coords[:, si], chain_indices,
+                    batch["atom_to_token"], atom_mask,
+                )
+            else:
+                has_clash = torch.zeros(B, device=device)
+
+            ranking = compute_ranking_score(ptm, iptm, has_interface, has_clash=has_clash)
 
             if best_ranking is None:
                 best_ranking = ranking.clone()

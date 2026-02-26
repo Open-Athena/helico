@@ -375,8 +375,13 @@ def run_inference(
     n_samples: int = 5,
     device: str = "cuda",
     dtype: torch.dtype = torch.bfloat16,
+    n_cycles: int | None = None,
 ) -> dict[str, torch.Tensor]:
     """Run inference on a batch.
+
+    Args:
+        n_cycles: Override number of recycling cycles (default: model config).
+            Protenix v0.5.0 uses 10 cycles at inference.
 
     Returns predicted coordinates, confidence scores, etc.
     """
@@ -385,7 +390,7 @@ def run_inference(
     batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
     with torch.no_grad(), torch.amp.autocast("cuda", dtype=dtype):
-        results = model.predict(batch, n_samples=n_samples)
+        results = model.predict(batch, n_samples=n_samples, n_cycles=n_cycles)
 
     return results
 
