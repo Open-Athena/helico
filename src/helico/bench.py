@@ -200,6 +200,7 @@ def predict_target(
     msa_dir: Path | None = None,
     msa_server_url: str | None = None,
     msa_cache_dir: Path | None = None,
+    n_cycles: int | None = None,
 ) -> tuple[TokenizedStructure, dict[str, torch.Tensor]] | None:
     """Run Helico inference on a target defined by chain dicts.
 
@@ -320,7 +321,7 @@ def predict_target(
         batch["cluster_deletion_mean"] = torch.zeros(1, 1, n_tok)
         batch["has_msa"] = torch.zeros(1)
 
-    results = run_inference(model, batch, n_samples=n_samples, device=device, dtype=dtype)
+    results = run_inference(model, batch, n_samples=n_samples, device=device, dtype=dtype, n_cycles=n_cycles)
     return tokenized, results
 
 
@@ -737,6 +738,7 @@ def run_benchmark(
     msa_tar_indices: list[TarIndex] | None = None,
     msa_dir: Path | None = None,
     msa_server_url: str | None = None,
+    n_cycles: int | None = None,
 ):
     """Run the full FoldBench benchmark.
 
@@ -841,6 +843,7 @@ def run_benchmark(
                         msa_dir=msa_dir,
                         msa_server_url=msa_server_url,
                         msa_cache_dir=output_dir / "msa_cache",
+                        n_cycles=n_cycles,
                     )
 
                     if pred_result is None:
@@ -994,6 +997,8 @@ def main():
                         help="Generate MSA using the public ColabFold MMseqs2 server (fallback when tar/dir miss)")
     parser.add_argument("--msa-server-url", type=str, default="https://api.colabfold.com",
                         help="MMseqs2 server URL (default: https://api.colabfold.com)")
+    parser.add_argument("--n-cycles", type=int, default=10,
+                        help="Number of recycling cycles (default: 10, matching Protenix)")
     args = parser.parse_args()
 
     if args.checkpoint is None and args.protenix is None:
@@ -1064,6 +1069,7 @@ def main():
         msa_tar_indices=msa_tar_indices if msa_tar_indices else None,
         msa_dir=msa_dir,
         msa_server_url=args.msa_server_url if args.use_msa_server else None,
+        n_cycles=args.n_cycles,
     )
 
 

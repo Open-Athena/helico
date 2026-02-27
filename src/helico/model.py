@@ -855,7 +855,7 @@ class DiffusionAttentionPairBias(nn.Module):
             out = out.reshape(B, H, n_blocks * n_queries, dh)[:, :, :N]
             out = out.permute(0, 2, 1, 3).reshape(B, N, H * dh)
 
-        # External conditioning gate
+        # External conditioning gate (adaLN-Zero, matching Protenix v0.5.0)
         return torch.sigmoid(self.s_gate(s)) * self.out_proj(out)
 
 

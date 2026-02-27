@@ -694,7 +694,11 @@ class TokenizedStructure:
             all_atom_coords.append(tok.atom_coords)
             all_atom_elements.extend(tok.atom_elements)
             if tok.ref_coords is not None:
-                all_ref_coords.append(tok.ref_coords)
+                # Centralize per residue: subtract mean position (matches Protenix)
+                rc = tok.ref_coords
+                if rc.shape[0] > 0:
+                    rc = rc - rc.mean(axis=0, keepdims=True)
+                all_ref_coords.append(rc)
             else:
                 all_ref_coords.append(np.zeros((n_atoms, 3), dtype=np.float32))
             # ref_space_uid: group atoms by residue (same for all atoms in same residue)
@@ -1033,9 +1037,11 @@ def tokenize_sequences(
         if ctype == "protein":
             sequence = chain["sequence"]
             chain_sequences[chain_id] = sequence
-            for char in sequence:
+            seq_len = len(sequence)
+            for char_idx, char in enumerate(sequence):
                 three_code = ONE_TO_THREE.get(char, "UNK")
                 token_type = AA_TO_IDX.get(char, UNK_AA_IDX)
+                is_c_terminal = (char_idx == seq_len - 1)
 
                 # Look up CCD for atom info and ideal coords
                 if three_code in ccd:
@@ -1048,6 +1054,15 @@ def tokenize_sequences(
                         ref_c = comp.ideal_coords[mask]
                     else:
                         ref_c = np.zeros((len(atom_names), 3), dtype=np.float32)
+
+                    # Remove OXT for non-C-terminal residues (matches Protenix)
+                    if not is_c_terminal and "OXT" in atom_names:
+                        oxt_idx = atom_names.index("OXT")
+                        atom_names = atom_names[:oxt_idx] + atom_names[oxt_idx + 1:]
+                        atom_elements = atom_elements[:oxt_idx] + atom_elements[oxt_idx + 1:]
+                        if atom_charges is not None:
+                            atom_charges = atom_charges[:oxt_idx] + atom_charges[oxt_idx + 1:]
+                        ref_c = np.delete(ref_c, oxt_idx, axis=0)
                 else:
                     # Fallback: minimal backbone
                     atom_names = ["N", "CA", "C", "O"]
