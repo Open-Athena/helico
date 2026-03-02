@@ -36,6 +36,22 @@ uv venv --python 3.10
 uv pip install -e ".[dev]"
 ```
 
+## Download Protenix Weights
+
+Download the pretrained Protenix checkpoint into `checkpoints/`:
+
+```bash
+mkdir -p checkpoints
+wget -P checkpoints/ https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_default_v1.0.0.pt
+```
+
+This is the recommended 368M-parameter base model (v1.0.0). Other available checkpoints:
+
+| Model | Params | URL |
+|-------|--------|-----|
+| `protenix_base_default_v1.0.0` | 368M | [download](https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_default_v1.0.0.pt) |
+| `protenix_base_20250630_v1.0.0` | 368M | [download](https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_20250630_v1.0.0.pt) |
+
 ## Tests
 
 ```bash
