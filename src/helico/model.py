@@ -1,12 +1,3 @@
-"""Helico: AlphaFold3 model implementation in a single file.
-
-All neural network modules: input embeddings, Pairformer, diffusion module,
-confidence head, affinity module, and loss functions.
-
-Uses cuEquivariance kernels for triangle attention, triangle multiplicative update,
-and attention with pair bias. Targets H100/B200 GPUs with bfloat16 precision.
-"""
-
 from __future__ import annotations
 
 import math
@@ -137,11 +128,8 @@ class Transition(nn.Module):
         return self.linear_out(F.silu(self.linear_a(h)) * self.linear_b(h))
 
 
-# (Old InputEmbedder removed — replaced by InputFeatureEmbedder + trunk init in Helico)
-
-
 # ============================================================================
-# Triangle Operations (Phase 2b) — cuEquivariance kernels
+# Triangle Operations — using cuEquivariance kernels
 # ============================================================================
 
 class TriangleMultiplicativeUpdate(nn.Module):
@@ -353,7 +341,7 @@ class SingleAttentionWithPairBias(nn.Module):
 
 
 # ============================================================================
-# Pairformer Block (Phase 2c)
+# Pairformer Block
 # ============================================================================
 
 class PairformerBlock(nn.Module):
@@ -455,7 +443,7 @@ class Pairformer(nn.Module):
 
 
 # ============================================================================
-# MSA Module (Algorithm 8 in AF3)
+# MSA Module
 # ============================================================================
 
 class OuterProductMean(nn.Module):
@@ -675,7 +663,7 @@ class MSAModule(nn.Module):
 
 
 # ============================================================================
-# Diffusion Module — Protenix-matching architecture
+# Diffusion Module
 # ============================================================================
 
 def linear_no_bias(d_in: int, d_out: int, zeros_init: bool = False) -> nn.Linear:
@@ -700,7 +688,7 @@ class BiasInitLinear(nn.Module):
 
 
 class AdaptiveLayerNorm(nn.Module):
-    """FiLM-style modulated normalization (Protenix Algorithm 26)."""
+    """FiLM-style modulated normalization."""
 
     def __init__(self, d_a: int, d_s: int):
         super().__init__()
@@ -806,7 +794,7 @@ class DiffusionAttentionPairBias(nn.Module):
         g = self.g_proj(q_in).reshape(B, N, H, dh).permute(0, 2, 1, 3)
 
         if n_queries is None:
-            # Global attention path (unchanged)
+            # Global attention path
             bias = self.z_proj(self.z_norm(z)).permute(0, 3, 1, 2)  # (B, H, N, N)
 
             attn = (q @ k.transpose(-2, -1)) * self.scale + bias
@@ -855,7 +843,7 @@ class DiffusionAttentionPairBias(nn.Module):
             out = out.reshape(B, H, n_blocks * n_queries, dh)[:, :, :N]
             out = out.permute(0, 2, 1, 3).reshape(B, N, H * dh)
 
-        # External conditioning gate (adaLN-Zero, matching Protenix v0.5.0)
+        # External conditioning gate (adaLN-Zero)
         return torch.sigmoid(self.s_gate(s)) * self.out_proj(out)
 
 
@@ -1208,7 +1196,7 @@ class AtomAttentionDecoder(nn.Module):
 
 
 # ============================================================================
-# Input Feature Embedder (Protenix input_embedder)
+# Input Feature Embedder
 # ============================================================================
 
 class InputFeatureEmbedder(nn.Module):
@@ -1249,7 +1237,7 @@ class InputFeatureEmbedder(nn.Module):
 
 
 # ============================================================================
-# Template Embedder (Protenix template_embedder)
+# Template Embedder
 # ============================================================================
 
 # The Protenix template embedder uses PairformerBlocks at d_template=64 but with
@@ -1395,7 +1383,7 @@ class TemplateEmbedder(nn.Module):
 
 
 # ============================================================================
-# Distogram Head (separate from ConfidenceHead)
+# Distogram Head
 # ============================================================================
 
 class DistogramHead(nn.Module):
@@ -1729,7 +1717,7 @@ class DiffusionModule(nn.Module):
         relpe_feats: dict[str, torch.Tensor],
         ref_space_uid: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Inference: Protenix Algorithm 18 — predictor-corrector Euler denoising."""
+        """Inference: predictor-corrector Euler denoising."""
         B, N_atoms, _ = ref_pos.shape
         device = ref_pos.device
         dtype = ref_pos.dtype
@@ -1800,7 +1788,7 @@ class DiffusionModule(nn.Module):
 
 
 # ============================================================================
-# Loss Functions (Phase 4a)
+# Loss Functions
 # ============================================================================
 
 def diffusion_loss(
@@ -1915,7 +1903,7 @@ def violation_loss(
 
 
 # ============================================================================
-# Confidence Head (Protenix architecture)
+# Confidence Head
 # ============================================================================
 
 class ConfidenceHead(nn.Module):
@@ -2325,7 +2313,7 @@ def _flatten_plddt(
 
 
 # ============================================================================
-# Affinity Module (Phase 4c) — Boltz2 feature
+# Affinity Module — Boltz2 feature
 # ============================================================================
 
 class AffinityModule(nn.Module):
@@ -2412,11 +2400,11 @@ class AffinityModule(nn.Module):
 
 
 # ============================================================================
-# Full Model (Phase 2-4 combined)
+# Full Model
 # ============================================================================
 
 class Helico(nn.Module):
-    """Complete Helico model with Protenix-matching architecture."""
+    """Complete Helico model."""
 
     def __init__(self, config: HelicoConfig | None = None):
         super().__init__()
