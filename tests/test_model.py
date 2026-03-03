@@ -1273,41 +1273,39 @@ class TestFoldRealProtein:
         return metrics
 
     def test_ca_rmsd(self, metrics):
-        """CA RMSD should be < 6.0 A (correct fold, with stochastic sampling variance)."""
-        assert metrics["ca_rmsd"] < 6.0, (
-            f"CA RMSD {metrics['ca_rmsd']:.2f} A > 6.0 A threshold"
+        assert metrics["ca_rmsd"] < 2.0, (
+            f"CA RMSD {metrics['ca_rmsd']:.2f} A > 2.0 A threshold"
         )
 
     def test_tm_score(self, metrics):
         """TM-score should indicate correct fold (> 0.5)."""
-        assert metrics["tm_score"] > 0.5, (
-            f"TM-score {metrics['tm_score']:.3f} < 0.5 — fold not recognized"
+        assert metrics["tm_score"] > 0.8, (
+            f"TM-score {metrics['tm_score']:.3f} < 0.8 — fold not recognized"
         )
 
     def test_gdt_ts(self, metrics):
         """GDT-TS should be > 0.2."""
-        assert metrics["gdt_ts"] > 0.2, (
-            f"GDT-TS {metrics['gdt_ts']:.3f} < 0.2 threshold"
+        assert metrics["gdt_ts"] > 0.6, (
+            f"GDT-TS {metrics['gdt_ts']:.3f} < 0.6 threshold"
         )
 
     def test_lddt(self, metrics):
         """lDDT should be > 0.5."""
-        assert metrics["lddt"] > 0.5, (
-            f"lDDT {metrics['lddt']:.3f} < 0.5 threshold"
+        assert metrics["lddt"] > 0.8, (
+            f"lDDT {metrics['lddt']:.3f} < 0.8 threshold"
         )
 
     def test_plddt(self, metrics):
-        """Mean pLDDT should be > 40."""
-        assert metrics["mean_plddt"] > 40.0, (
-            f"Mean pLDDT {metrics['mean_plddt']:.1f} < 40.0 threshold"
+        """Mean pLDDT should be > 80."""
+        assert metrics["mean_plddt"] > 80.0, (
+            f"Mean pLDDT {metrics['mean_plddt']:.1f} < 80.0 threshold"
         )
 
     def test_ligand_rmsd(self, metrics):
-        """Heme ligand RMSD should be finite (ligand was predicted)."""
         import math
-        # Just check it's computed (not NaN) — heme placement is hard
-        if not math.isnan(metrics["ligand_rmsd"]):
-            print(f"  Ligand (HEM) RMSD: {metrics['ligand_rmsd']:.2f} A")
+        assert metrics["ligand_rmsd"] < 2.0, (
+            f"Ligand (HEM) RMSD {metrics['ligand_rmsd']:.2f} A > 2.0 A threshold"
+        )
 
     def test_n_matched_atoms(self, metrics):
         """Should match most atoms in the structure."""
