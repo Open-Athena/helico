@@ -380,8 +380,9 @@ def run_inference(
     """Run inference on a batch.
 
     Args:
-        n_cycles: Override number of recycling cycles (default: model config).
-            Protenix v0.5.0 uses 10 cycles at inference.
+        n_cycles: Override number of recycling cycles.
+            Default: 10 (Protenix inference standard). Use model.config.n_cycles=1
+            for fast debugging; Protenix achieves reported accuracy with 10 cycles.
 
     Returns predicted coordinates, confidence scores, etc.
     """
@@ -389,8 +390,11 @@ def run_inference(
     model = model.to(device)
     batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
+    # Protenix v0.5.0 uses 10 cycles at inference; config default is 1 (for training)
+    effective_cycles = n_cycles if n_cycles is not None else 10
+
     with torch.no_grad(), torch.amp.autocast("cuda", dtype=dtype):
-        results = model.predict(batch, n_samples=n_samples, n_cycles=n_cycles)
+        results = model.predict(batch, n_samples=n_samples, n_cycles=effective_cycles)
 
     return results
 

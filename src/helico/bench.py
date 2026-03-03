@@ -18,6 +18,7 @@ import torch
 from scipy.spatial.transform import Rotation
 
 from helico.data import (
+    MSAFeatures,
     Structure,
     TarIndex,
     TokenizedStructure,
@@ -197,6 +198,7 @@ def predict_target(
     max_tokens: int = 2048,
     device: str = "cuda",
     dtype: torch.dtype = torch.bfloat16,
+    msa_features: MSAFeatures | None = None,
     msa_tar_indices: list[TarIndex] | None = None,
     msa_dir: Path | None = None,
     msa_server_url: str | None = None,
@@ -204,6 +206,10 @@ def predict_target(
     n_cycles: int | None = None,
 ) -> tuple[TokenizedStructure, dict[str, torch.Tensor]] | None:
     """Run Helico inference on a target defined by chain dicts.
+
+    Args:
+        msa_features: Pre-computed MSA features. When provided, skips loading
+            from msa_dir / msa_server / tar. Use for tests or when MSA is already available.
 
     Mirrors infer_main() logic from train.py.
     Returns (tokenized, results_dict) or None if target exceeds max_tokens.
@@ -232,9 +238,9 @@ def predict_target(
     batch["token_mask"] = torch.ones(1, n_tok, dtype=torch.bool)
     batch["atom_mask"] = torch.ones(1, n_atoms, dtype=torch.bool)
 
-    # Load MSA for the first polymer chain (same as training pipeline)
-    msa_feat = None
-    if msa_tar_indices or msa_dir:
+    # MSA: use pre-computed when provided, otherwise load from disk/server
+    msa_feat = msa_features
+    if msa_feat is None and (msa_tar_indices or msa_dir):
         seen_chains = set()
         for chain_id, etype in zip(tokenized.chain_ids, tokenized.entity_types):
             if chain_id in seen_chains or etype != "protein":
