@@ -2,10 +2,10 @@
 
 ## Training Data
 
-Data is hosted on HuggingFace at [`timodonnell/helico-data`](https://huggingface.co/datasets/timodonnell/helico-data) and auto-downloads to `~/.cache/helico/data/` on first use.
+Processed data is hosted on HuggingFace at [`timodonnell/helico-data`](https://huggingface.co/datasets/timodonnell/helico-data) and auto-downloads to `~/.cache/helico/data/` on first use.
 
 ```bash
-# Download everything (raw + processed)
+# Download all processed data
 helico-download
 
 # Download just the CCD cache (needed for inference)
@@ -17,17 +17,7 @@ helico-download --data-dir /data/helico
 
 Override the default data location with the `HELICO_DATA_DIR` env var.
 
-Raw data in `<data-dir>/raw/`:
-
-| File | Size | Description |
-|------|------|-------------|
-| `components.cif` | 473 MB | PDB Chemical Component Dictionary (atom/bond definitions for all ligands) |
-| `pdb_seqres.txt.gz` | 60 MB | Sequences for ~254K PDB entries |
-| `rcsb_raw_msa.tar` | 131 GB | Pre-computed MSA files (.a3m.gz) from RCSB |
-| `openfold_raw_msa.tar` | 88 GB | Pre-computed MSA files from OpenFold |
-| `mmCIF/` | 81 GB | PDB structure archive (248,942 `.cif.gz` files across 1,089 subdirectories) |
-
-Processed data in `<data-dir>/processed/`:
+Processed data in `<data-dir>/processed/` (hosted on HuggingFace):
 
 | File | Size | Description |
 |------|------|-------------|
@@ -37,7 +27,15 @@ Processed data in `<data-dir>/processed/`:
 | `rcsb_raw_msa_index.pkl` | 15 MB | Tar index for rcsb_raw_msa.tar (151,403 entries) |
 | `openfold_raw_msa_index.pkl` | 11 MB | Tar index for openfold_raw_msa.tar (268,778 entries) |
 
-See `LOG.md` for preprocessing details.
+Raw data (not hosted on HuggingFace — download from PDB/OpenFold directly, see `LOG.md`):
+
+| File | Size | Description |
+|------|------|-------------|
+| `components.cif` | 473 MB | PDB Chemical Component Dictionary (atom/bond definitions for all ligands) |
+| `pdb_seqres.txt.gz` | 60 MB | Sequences for ~254K PDB entries |
+| `rcsb_raw_msa.tar` | 131 GB | Pre-computed MSA files (.a3m.gz) from RCSB |
+| `openfold_raw_msa.tar` | 88 GB | Pre-computed MSA files from OpenFold |
+| `mmCIF/` | 81 GB | PDB structure archive (248,942 `.cif.gz` files across 1,089 subdirectories) |
 
 
 ## Quick Start (Synthetic Data)
@@ -81,6 +79,12 @@ The preprocessing pipeline:
 - Builds a manifest with metadata for all 233,215 passing structures
 - Indexes MSA tar archives for O(1) random access during training
 - Supports resumption — re-run safely without reprocessing existing structures
+
+To upload processed data to HuggingFace after preprocessing:
+
+```bash
+bash scripts/upload_to_hf.sh $PROCESSED
+```
 
 ## Single-GPU Training
 

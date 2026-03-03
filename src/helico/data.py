@@ -2525,22 +2525,16 @@ def preprocess_main():
 # Download from HuggingFace
 # ============================================================================
 
-# Files in the HF repo that are split tars (prefix -> expected number of parts)
-_SPLIT_TARS = {
-    "raw/mmcif.tar": 4,
-    "raw/rcsb_raw_msa.tar": 7,
-    "raw/openfold_raw_msa.tar": 5,
-    "processed/structures.tar": None,  # auto-detect
-}
-
 # Small files that can be downloaded individually
-_RAW_FILES = ["raw/components.cif", "raw/pdb_seqres.txt.gz"]
 _PROCESSED_FILES = [
     "processed/ccd_cache.pkl",
     "processed/manifest.json.gz",
     "processed/rcsb_raw_msa_index.pkl",
     "processed/openfold_raw_msa_index.pkl",
 ]
+
+# Split tar prefix for large directories
+_PROCESSED_SPLIT_TARS = ["processed/structures.tar"]
 
 
 def _reassemble_split_tar(data_dir: Path, prefix: str, extract: bool = True) -> None:
@@ -2606,7 +2600,7 @@ def download_main() -> None:
     )
     parser.add_argument(
         "--subset",
-        choices=["all", "raw", "processed", "ccd-only"],
+        choices=["all", "ccd-only"],
         default="all",
         help="What to download (default: all)",
     )
@@ -2642,41 +2636,23 @@ def download_main() -> None:
         logger.info("Done. CCD cache downloaded.")
         return
 
-    # Determine which files to download
-    files_to_download: list[str] = []
-    split_prefixes: list[str] = []
-
-    if args.subset in ("all", "processed"):
-        files_to_download.extend(_PROCESSED_FILES)
-        split_prefixes.append("processed/structures.tar")
-
-    if args.subset in ("all", "raw"):
-        files_to_download.extend(_RAW_FILES)
-        split_prefixes.extend([
-            "raw/mmcif.tar",
-            "raw/rcsb_raw_msa.tar",
-            "raw/openfold_raw_msa.tar",
-        ])
-
     # Download individual files
-    for f in files_to_download:
+    for f in _PROCESSED_FILES:
         _download(f)
 
     # Download split tar parts
-    if split_prefixes:
-        all_repo_files = list_repo_files(repo_id=HF_REPO, repo_type="dataset")
-        for prefix in split_prefixes:
-            parts = sorted(f for f in all_repo_files if f.startswith(prefix + "."))
-            if not parts:
-                logger.warning(f"No split parts found for {prefix} in HF repo")
-                continue
-            for part in parts:
-                _download(part)
-            if not args.no_extract:
-                _reassemble_split_tar(data_dir, prefix)
+    all_repo_files = list_repo_files(repo_id=HF_REPO, repo_type="dataset")
+    for prefix in _PROCESSED_SPLIT_TARS:
+        parts = sorted(f for f in all_repo_files if f.startswith(prefix + "."))
+        if not parts:
+            logger.warning(f"No split parts found for {prefix} in HF repo")
+            continue
+        for part in parts:
+            _download(part)
+        if not args.no_extract:
+            _reassemble_split_tar(data_dir, prefix)
 
     # Decompress manifest
-    if args.subset in ("all", "processed"):
-        _decompress_manifest(data_dir)
+    _decompress_manifest(data_dir)
 
     logger.info(f"Download complete. Data is at {data_dir}")
