@@ -160,25 +160,27 @@ def parse_ccd(cif_path: Path | None = None, cache_path: Path | None = None) -> d
         with open(cache_path, "rb") as f:
             return pickle.load(f)
 
-    # Auto-download from HuggingFace
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        from huggingface_hub import hf_hub_download
-        logger.info("CCD cache not found locally, downloading from HuggingFace...")
-        hf_hub_download(
-            repo_id=HF_REPO,
-            filename="processed/ccd_cache.pkl",
-            repo_type="dataset",
-            local_dir=_default_data_dir(),
-        )
-        if cache_path.exists():
-            with open(cache_path, "rb") as f:
-                return pickle.load(f)
-    except Exception as e:
-        logger.warning(f"Could not download CCD cache from HuggingFace: {e}")
+    # If components.cif is available, parse it directly
+    if cif_path.exists():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        # Try auto-download from HuggingFace
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            from huggingface_hub import hf_hub_download
+            logger.info("CCD cache not found locally, downloading from HuggingFace...")
+            hf_hub_download(
+                repo_id=HF_REPO,
+                filename="processed/ccd_cache.pkl",
+                repo_type="dataset",
+                local_dir=_default_data_dir(),
+            )
+            if cache_path.exists():
+                with open(cache_path, "rb") as f:
+                    return pickle.load(f)
+        except Exception as e:
+            logger.warning(f"Could not download CCD cache from HuggingFace: {e}")
 
-    # Final fallback: parse components.cif
-    if not cif_path.exists():
         raise FileNotFoundError(
             f"CCD cache not found at {cache_path} and components.cif not found at {cif_path}. "
             f"Run 'helico-download --subset ccd-only' to download, or provide paths explicitly."
@@ -2406,19 +2408,33 @@ class LazyHelicoDataset(Dataset):
 # ============================================================================
 
 def preprocess_main():
-    """CLI entry point for helico-preprocess."""
+    """CLI entry point for helico-preprocess.
+
+    Usage:
+        helico-preprocess ccd <raw-dir> <processed-dir>
+        helico-preprocess structures <raw-dir> <processed-dir>
+        helico-preprocess msa-index --tar-path PATH --output PATH
+        helico-preprocess all <raw-dir> <processed-dir>
+    """
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-    parser = argparse.ArgumentParser(description="Helico Preprocessing Pipeline")
+    parser = argparse.ArgumentParser(
+        description="Helico Preprocessing Pipeline",
+        usage="helico-preprocess {ccd,structures,msa-index,all} ...",
+    )
     subparsers = parser.add_subparsers(dest="command", help="Preprocessing subcommand")
+
+    # ccd subcommand
+    sp_ccd = subparsers.add_parser("ccd", help="Parse components.cif and write ccd_cache.pkl")
+    sp_ccd.add_argument("raw_dir", type=Path, help="Directory containing components.cif")
+    sp_ccd.add_argument("processed_dir", type=Path, help="Output directory for ccd_cache.pkl")
 
     # structures subcommand
     sp_struct = subparsers.add_parser("structures", help="Process mmCIF files into pickled structures")
-    sp_struct.add_argument("--mmcif-dir", type=Path, default=None, help="Path to mmCIF dir (default: <data-dir>/raw/mmCIF)")
-    sp_struct.add_argument("--output-dir", type=Path, default=None, help="Output dir (default: <data-dir>/processed)")
-    sp_struct.add_argument("--ccd-cache", type=Path, default=None, help="CCD cache path (default: <data-dir>/processed/ccd_cache.pkl)")
+    sp_struct.add_argument("raw_dir", type=Path, help="Raw data directory (must contain mmCIF/)")
+    sp_struct.add_argument("processed_dir", type=Path, help="Output directory for pickles and manifest")
     sp_struct.add_argument("--max-resolution", type=float, default=9.0)
     sp_struct.add_argument("--n-workers", type=int, default=None)
     sp_struct.add_argument("--no-skip-existing", action="store_true")
@@ -2429,10 +2445,9 @@ def preprocess_main():
     sp_msa.add_argument("--output", type=Path, required=True)
 
     # all subcommand
-    sp_all = subparsers.add_parser("all", help="Run full preprocessing pipeline")
-    sp_all.add_argument("--mmcif-dir", type=Path, default=None, help="Path to mmCIF dir (default: <data-dir>/raw/mmCIF)")
-    sp_all.add_argument("--output-dir", type=Path, default=None, help="Output dir (default: <data-dir>/processed)")
-    sp_all.add_argument("--ccd-cache", type=Path, default=None, help="CCD cache path (default: <data-dir>/processed/ccd_cache.pkl)")
+    sp_all = subparsers.add_parser("all", help="Run full preprocessing pipeline (ccd + structures + msa indices)")
+    sp_all.add_argument("raw_dir", type=Path, help="Raw data directory")
+    sp_all.add_argument("processed_dir", type=Path, help="Output directory for all processed data")
     sp_all.add_argument("--max-resolution", type=float, default=9.0)
     sp_all.add_argument("--n-workers", type=int, default=None)
 
@@ -2442,21 +2457,19 @@ def preprocess_main():
         parser.print_help()
         return
 
-    # Resolve defaults from env vars, falling back to default data dir
-    def _resolve(val: Path | None, env_var: str, suffix: str = "") -> Path:
-        if val is not None:
-            return val
-        base = os.environ.get(env_var)
-        if base is None:
-            base = str(_raw_dir()) if "RAW" in env_var else str(_processed_dir())
-        return Path(base) / suffix if suffix else Path(base)
+    if args.command == "ccd":
+        cif_path = args.raw_dir / "components.cif"
+        cache_path = args.processed_dir / "ccd_cache.pkl"
+        logger.info(f"Parsing CCD from {cif_path}...")
+        ccd = parse_ccd(cif_path=cif_path, cache_path=cache_path)
+        logger.info(f"CCD cache written to {cache_path} ({len(ccd)} components)")
 
-    if args.command == "structures":
-        mmcif_dir = _resolve(args.mmcif_dir, "HELICO_RAW_DIR", "mmCIF")
-        output_dir = _resolve(args.output_dir, "HELICO_PROCESSED_DIR")
-        ccd_cache = _resolve(args.ccd_cache, "HELICO_PROCESSED_DIR", "ccd_cache.pkl")
+    elif args.command == "structures":
+        raw_dir = args.raw_dir
+        output_dir = args.processed_dir
+        ccd_cache = output_dir / "ccd_cache.pkl"
         metadata = preprocess_structures(
-            mmcif_dir=mmcif_dir,
+            mmcif_dir=raw_dir / "mmCIF",
             output_dir=output_dir,
             ccd_cache_path=ccd_cache,
             max_resolution=args.max_resolution,
@@ -2472,15 +2485,20 @@ def preprocess_main():
         logger.info(f"Index saved to {args.output} ({len(index.entries)} entries)")
 
     elif args.command == "all":
-        raw_dir = _resolve(None, "HELICO_RAW_DIR")
-        mmcif_dir = _resolve(args.mmcif_dir, "HELICO_RAW_DIR", "mmCIF")
-        output_dir = _resolve(args.output_dir, "HELICO_PROCESSED_DIR")
-        ccd_cache = _resolve(args.ccd_cache, "HELICO_PROCESSED_DIR", "ccd_cache.pkl")
+        raw_dir = args.raw_dir
+        output_dir = args.processed_dir
 
-        # Step 1: Process structures
-        logger.info("=== Step 1: Processing structures ===")
+        # Step 1: Parse CCD
+        cif_path = raw_dir / "components.cif"
+        ccd_cache = output_dir / "ccd_cache.pkl"
+        logger.info("=== Step 1: Parsing CCD ===")
+        ccd = parse_ccd(cif_path=cif_path, cache_path=ccd_cache)
+        logger.info(f"CCD: {len(ccd)} components")
+
+        # Step 2: Process structures
+        logger.info("=== Step 2: Processing structures ===")
         metadata = preprocess_structures(
-            mmcif_dir=mmcif_dir,
+            mmcif_dir=raw_dir / "mmCIF",
             output_dir=output_dir,
             ccd_cache_path=ccd_cache,
             max_resolution=args.max_resolution,
@@ -2488,13 +2506,13 @@ def preprocess_main():
         )
         build_manifest(metadata, output_dir / "manifest.json")
 
-        # Step 2: Build MSA tar indices
+        # Step 3: Build MSA tar indices
         for name, tar_path in [
             ("rcsb_raw_msa", raw_dir / "rcsb_raw_msa.tar"),
             ("openfold_raw_msa", raw_dir / "openfold_raw_msa.tar"),
         ]:
             if tar_path.exists():
-                logger.info(f"=== Step 2: Building tar index for {name} ===")
+                logger.info(f"=== Step 3: Building tar index for {name} ===")
                 index = build_tar_index(tar_path)
                 out = output_dir / f"{name}_index.pkl"
                 save_tar_index(index, out)

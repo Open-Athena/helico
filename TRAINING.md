@@ -57,18 +57,21 @@ helico-train --synthetic --max-steps 500 --log-every 50
 The easiest path is `helico-download` which fetches everything from HuggingFace. For preprocessing from scratch:
 
 ```bash
-# If using a custom data location:
-export HELICO_DATA_DIR=/data/helico
+RAW=/data/helico/raw          # contains components.cif, mmCIF/, MSA tars
+PROCESSED=/data/helico/processed   # output directory
 
-# Process all mmCIF files into pickled TokenizedStructures + manifest
-helico-preprocess structures
+# Parse CCD only (generates ccd_cache.pkl from components.cif)
+helico-preprocess ccd $RAW $PROCESSED
+
+# Process mmCIF structures into pickles + manifest (also generates ccd_cache.pkl if missing)
+helico-preprocess structures $RAW $PROCESSED
 
 # Build tar indices for O(1) MSA lookup
-helico-preprocess msa-index --tar-path ~/.cache/helico/data/raw/rcsb_raw_msa.tar --output ~/.cache/helico/data/processed/rcsb_raw_msa_index.pkl
-helico-preprocess msa-index --tar-path ~/.cache/helico/data/raw/openfold_raw_msa.tar --output ~/.cache/helico/data/processed/openfold_raw_msa_index.pkl
+helico-preprocess msa-index --tar-path $RAW/rcsb_raw_msa.tar --output $PROCESSED/rcsb_raw_msa_index.pkl
+helico-preprocess msa-index --tar-path $RAW/openfold_raw_msa.tar --output $PROCESSED/openfold_raw_msa_index.pkl
 
-# Or run everything in sequence:
-helico-preprocess all
+# Or run everything in sequence (ccd + structures + msa indices):
+helico-preprocess all $RAW $PROCESSED
 ```
 
 The preprocessing pipeline:

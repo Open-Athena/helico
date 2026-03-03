@@ -46,7 +46,8 @@ tests/
 - Data is hosted on HuggingFace at `timodonnell/helico-data` and auto-downloads to `~/.cache/helico/data/` on first use.
 - Download all data: `helico-download` (or `helico-download --subset ccd-only` for just the CCD cache)
 - Override default location with `HELICO_DATA_DIR` env var.
-- Preprocessing: `helico-preprocess all` (structures + MSA tar indices)
+- Preprocessing from raw data: `helico-preprocess all <raw-dir> <processed-dir>`
+- Generate CCD cache only: `helico-preprocess ccd <raw-dir> <processed-dir>`
 - See `LOG.md` for actual paths and commands used on our machines.
 - Processing follows the [Boltz2 flow](https://github.com/jwohlwend/boltz).
 

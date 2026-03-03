@@ -5,9 +5,10 @@
 # Requires: huggingface-cli (pip install huggingface_hub)
 #
 # Usage:
-#   export HELICO_RAW_DIR=/data/helico/raw
-#   export HELICO_PROCESSED_DIR=/data/helico/processed
-#   bash scripts/upload_to_hf.sh
+#   bash scripts/upload_to_hf.sh /data/helico/raw /data/helico/processed
+#
+# The raw and processed dirs are typically produced by:
+#   helico-preprocess all /data/helico/raw /data/helico/processed
 #
 # The script:
 #   1. Creates a staging directory with the HF repo layout
@@ -23,8 +24,14 @@ HF_REPO="timodonnell/helico-data"
 SPLIT_SIZE="20G"
 STAGING_DIR="${STAGING_DIR:-/tmp/helico-hf-staging}"
 
-RAW_DIR="${HELICO_RAW_DIR:?Set HELICO_RAW_DIR to the raw data directory}"
-PROCESSED_DIR="${HELICO_PROCESSED_DIR:?Set HELICO_PROCESSED_DIR to the processed data directory}"
+if [ $# -lt 2 ]; then
+    echo "Usage: $0 <raw-dir> <processed-dir>"
+    echo "Example: $0 /data/helico/raw /data/helico/processed"
+    exit 1
+fi
+
+RAW_DIR="$1"
+PROCESSED_DIR="$2"
 
 echo "=== Helico HuggingFace Upload ==="
 echo "Raw dir:       $RAW_DIR"
