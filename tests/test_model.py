@@ -1081,6 +1081,11 @@ class TestLoadProtenix:
 # Real Protein Folding Test (1MBN — Sperm Whale Myoglobin)
 # ============================================================================
 
+# Offline test data (CIF + A3M) — no internet required
+TESTS_DATA = Path(__file__).resolve().parent / "data"
+CIF_PATH = TESTS_DATA / "1mbn.cif.gz"
+A3M_PATH = TESTS_DATA / "1mbn.a3m"
+
 CCD_CACHE = Path(__file__).resolve().parent.parent / "data" / "ccd_cache.pkl"
 # Fall back to default data dir
 if not CCD_CACHE.exists():
@@ -1122,37 +1127,25 @@ class TestFoldRealProtein:
         return parse_ccd(cache_path=CCD_CACHE if CCD_CACHE.exists() else None)
 
     @pytest.fixture(scope="class")
-    def gt_structure(self, tmp_path_factory):
-        """Download and parse 1MBN ground truth structure from RCSB."""
-        import urllib.request
-        import gzip
+    def gt_structure(self):
+        """Load 1MBN ground truth structure from tests/data (no download)."""
         from helico.data import parse_mmcif
 
-        cache_dir = tmp_path_factory.mktemp("pdb_cache")
-        cif_gz_path = cache_dir / "1mbn.cif.gz"
-
-        # Download from RCSB
-        url = "https://files.rcsb.org/download/1MBN.cif.gz"
-        urllib.request.urlretrieve(url, cif_gz_path)
-
-        structure = parse_mmcif(cif_gz_path)
+        assert CIF_PATH.exists(), f"Missing {CIF_PATH} — run tests with tests/data populated"
+        structure = parse_mmcif(CIF_PATH)
         assert structure is not None, "Failed to parse 1MBN mmCIF"
         return structure
 
     @pytest.fixture(scope="class")
-    def msa_feat(self, tmp_path_factory):
-        """Query MSA server for myoglobin sequence."""
-        from helico.msa_server import run_mmseqs2
+    def msa_feat(self):
+        """Load MSA for myoglobin from tests/data (no server query)."""
         from helico.data import parse_a3m, a3m_to_msa_matrix, compute_msa_features
 
-        cache_dir = tmp_path_factory.mktemp("msa_cache")
-        a3m_lines = run_mmseqs2(
-            self.MBN_SEQUENCE,
-            result_dir=str(cache_dir / "1mbn_A"),
-        )
-        assert a3m_lines and a3m_lines[0].strip(), "MSA server returned empty result"
+        assert A3M_PATH.exists(), f"Missing {A3M_PATH} — run tests with tests/data populated"
+        a3m_content = A3M_PATH.read_text()
+        assert a3m_content.strip(), "A3M file is empty"
 
-        seqs, _ = parse_a3m(a3m_lines[0])
+        seqs, _ = parse_a3m(a3m_content)
         assert len(seqs) > 1, f"MSA has only {len(seqs)} sequences"
 
         msa, dels = a3m_to_msa_matrix(seqs)
