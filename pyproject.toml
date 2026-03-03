@@ -13,6 +13,7 @@ dependencies = [
     "numpy",
     "scipy",
     "pyyaml>=6.0",
+    "huggingface_hub>=0.20",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +31,7 @@ helico-train = "helico.train:main"
 helico-infer = "helico.train:infer_main"
 helico-preprocess = "helico.data:preprocess_main"
 helico-bench = "helico.bench:main"
+helico-download = "helico.data:download_main"
 
 [build-system]
 requires = ["hatchling"]

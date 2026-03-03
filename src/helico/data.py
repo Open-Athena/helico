@@ -25,26 +25,26 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths — data auto-downloads from HuggingFace to ~/.cache/helico/data/
 # ---------------------------------------------------------------------------
-def _env_path(var: str) -> Path | None:
-    v = os.environ.get(var)
-    return Path(v) if v else None
-
-RAW_DIR = _env_path("HELICO_RAW_DIR")
-PROCESSED_DIR = _env_path("HELICO_PROCESSED_DIR")
+HF_REPO = "timodonnell/helico-data"
 
 
-def _require_raw_dir() -> Path:
-    if RAW_DIR is None:
-        raise EnvironmentError("HELICO_RAW_DIR is not set")
-    return RAW_DIR
+def _default_data_dir() -> Path:
+    return Path(os.environ.get("HELICO_DATA_DIR", "~/.cache/helico/data")).expanduser()
 
 
-def _require_processed_dir() -> Path:
-    if PROCESSED_DIR is None:
-        raise EnvironmentError("HELICO_PROCESSED_DIR is not set")
-    return PROCESSED_DIR
+def _raw_dir() -> Path:
+    return _default_data_dir() / "raw"
+
+
+def _processed_dir() -> Path:
+    return _default_data_dir() / "processed"
+
+
+# Module-level constants for backward compat with test imports
+RAW_DIR = _raw_dir()
+PROCESSED_DIR = _processed_dir()
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -149,15 +149,40 @@ def parse_ccd(cif_path: Path | None = None, cache_path: Path | None = None) -> d
 
     Returns dict mapping 3-letter code -> CCDComponent.
     Caches result as pickle for fast reload.
+    Auto-downloads from HuggingFace if not found locally.
     """
-    if cif_path is None:
-        cif_path = _require_raw_dir() / "components.cif"
     if cache_path is None:
-        cache_path = _require_processed_dir() / "ccd_cache.pkl"
+        cache_path = _processed_dir() / "ccd_cache.pkl"
+    if cif_path is None:
+        cif_path = _raw_dir() / "components.cif"
 
     if cache_path.exists():
         with open(cache_path, "rb") as f:
             return pickle.load(f)
+
+    # Auto-download from HuggingFace
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        from huggingface_hub import hf_hub_download
+        logger.info("CCD cache not found locally, downloading from HuggingFace...")
+        hf_hub_download(
+            repo_id=HF_REPO,
+            filename="processed/ccd_cache.pkl",
+            repo_type="dataset",
+            local_dir=_default_data_dir(),
+        )
+        if cache_path.exists():
+            with open(cache_path, "rb") as f:
+                return pickle.load(f)
+    except Exception as e:
+        logger.warning(f"Could not download CCD cache from HuggingFace: {e}")
+
+    # Final fallback: parse components.cif
+    if not cif_path.exists():
+        raise FileNotFoundError(
+            f"CCD cache not found at {cache_path} and components.cif not found at {cif_path}. "
+            f"Run 'helico-download --subset ccd-only' to download, or provide paths explicitly."
+        )
 
     components: dict[str, CCDComponent] = {}
     current_id = None
@@ -1520,7 +1545,7 @@ def load_pdb_seqres(path: Path | None = None) -> dict[str, dict[str, str]]:
     Format: >PDBID_CHAIN mol:TYPE length:N  DESCRIPTION
     """
     if path is None:
-        path = _require_raw_dir() / "pdb_seqres.txt.gz"
+        path = _raw_dir() / "pdb_seqres.txt.gz"
     seqres: dict[str, dict[str, str]] = {}
 
     open_fn = gzip.open if str(path).endswith(".gz") else open
@@ -2224,7 +2249,7 @@ def preprocess_structures(
 def build_manifest(metadata: dict[str, StructureMetadata], output_path: Path | None = None) -> None:
     """Save structure metadata as a JSON manifest."""
     if output_path is None:
-        output_path = _require_processed_dir() / "manifest.json"
+        output_path = _processed_dir() / "manifest.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     data = {}
@@ -2252,7 +2277,7 @@ def build_manifest(metadata: dict[str, StructureMetadata], output_path: Path | N
 def load_manifest(path: Path | None = None) -> dict[str, StructureMetadata]:
     """Load a manifest JSON into StructureMetadata dict."""
     if path is None:
-        path = _require_processed_dir() / "manifest.json"
+        path = _processed_dir() / "manifest.json"
 
     with open(path, "r") as f:
         data = json.load(f)
@@ -2391,9 +2416,9 @@ def preprocess_main():
 
     # structures subcommand
     sp_struct = subparsers.add_parser("structures", help="Process mmCIF files into pickled structures")
-    sp_struct.add_argument("--mmcif-dir", type=Path, default=None, help="Path to mmCIF dir (default: $HELICO_RAW_DIR/mmCIF)")
-    sp_struct.add_argument("--output-dir", type=Path, default=None, help="Output dir (default: $HELICO_PROCESSED_DIR)")
-    sp_struct.add_argument("--ccd-cache", type=Path, default=None, help="CCD cache path (default: $HELICO_PROCESSED_DIR/ccd_cache.pkl)")
+    sp_struct.add_argument("--mmcif-dir", type=Path, default=None, help="Path to mmCIF dir (default: <data-dir>/raw/mmCIF)")
+    sp_struct.add_argument("--output-dir", type=Path, default=None, help="Output dir (default: <data-dir>/processed)")
+    sp_struct.add_argument("--ccd-cache", type=Path, default=None, help="CCD cache path (default: <data-dir>/processed/ccd_cache.pkl)")
     sp_struct.add_argument("--max-resolution", type=float, default=9.0)
     sp_struct.add_argument("--n-workers", type=int, default=None)
     sp_struct.add_argument("--no-skip-existing", action="store_true")
@@ -2405,9 +2430,9 @@ def preprocess_main():
 
     # all subcommand
     sp_all = subparsers.add_parser("all", help="Run full preprocessing pipeline")
-    sp_all.add_argument("--mmcif-dir", type=Path, default=None, help="Path to mmCIF dir (default: $HELICO_RAW_DIR/mmCIF)")
-    sp_all.add_argument("--output-dir", type=Path, default=None, help="Output dir (default: $HELICO_PROCESSED_DIR)")
-    sp_all.add_argument("--ccd-cache", type=Path, default=None, help="CCD cache path (default: $HELICO_PROCESSED_DIR/ccd_cache.pkl)")
+    sp_all.add_argument("--mmcif-dir", type=Path, default=None, help="Path to mmCIF dir (default: <data-dir>/raw/mmCIF)")
+    sp_all.add_argument("--output-dir", type=Path, default=None, help="Output dir (default: <data-dir>/processed)")
+    sp_all.add_argument("--ccd-cache", type=Path, default=None, help="CCD cache path (default: <data-dir>/processed/ccd_cache.pkl)")
     sp_all.add_argument("--max-resolution", type=float, default=9.0)
     sp_all.add_argument("--n-workers", type=int, default=None)
 
@@ -2417,13 +2442,13 @@ def preprocess_main():
         parser.print_help()
         return
 
-    # Resolve defaults from env vars
+    # Resolve defaults from env vars, falling back to default data dir
     def _resolve(val: Path | None, env_var: str, suffix: str = "") -> Path:
         if val is not None:
             return val
         base = os.environ.get(env_var)
         if base is None:
-            raise EnvironmentError(f"Set {env_var} env var or pass the path explicitly")
+            base = str(_raw_dir()) if "RAW" in env_var else str(_processed_dir())
         return Path(base) / suffix if suffix else Path(base)
 
     if args.command == "structures":
@@ -2476,3 +2501,164 @@ def preprocess_main():
                 logger.info(f"Index saved to {out} ({len(index.entries)} entries)")
 
         logger.info("=== Preprocessing complete ===")
+
+
+# ============================================================================
+# Download from HuggingFace
+# ============================================================================
+
+# Files in the HF repo that are split tars (prefix -> expected number of parts)
+_SPLIT_TARS = {
+    "raw/mmcif.tar": 4,
+    "raw/rcsb_raw_msa.tar": 7,
+    "raw/openfold_raw_msa.tar": 5,
+    "processed/structures.tar": None,  # auto-detect
+}
+
+# Small files that can be downloaded individually
+_RAW_FILES = ["raw/components.cif", "raw/pdb_seqres.txt.gz"]
+_PROCESSED_FILES = [
+    "processed/ccd_cache.pkl",
+    "processed/manifest.json.gz",
+    "processed/rcsb_raw_msa_index.pkl",
+    "processed/openfold_raw_msa_index.pkl",
+]
+
+
+def _reassemble_split_tar(data_dir: Path, prefix: str, extract: bool = True) -> None:
+    """Reassemble split tar parts (prefix.00, prefix.01, ...) and optionally extract."""
+    import glob as glob_mod
+
+    parts = sorted(glob_mod.glob(str(data_dir / f"{prefix}.*")))
+    parts = [p for p in parts if re.match(r".*\.\d{2}$", p)]
+    if not parts:
+        logger.warning(f"No split parts found for {prefix}")
+        return
+
+    tar_path = data_dir / prefix
+    logger.info(f"Reassembling {len(parts)} parts into {tar_path}...")
+    with open(tar_path, "wb") as out_f:
+        for part in parts:
+            with open(part, "rb") as in_f:
+                while True:
+                    chunk = in_f.read(64 * 1024 * 1024)  # 64MB chunks
+                    if not chunk:
+                        break
+                    out_f.write(chunk)
+
+    if extract:
+        # Determine extraction directory from tar path
+        extract_dir = tar_path.parent
+        logger.info(f"Extracting {tar_path} to {extract_dir}...")
+        with tarfile.open(tar_path) as tf:
+            tf.extractall(extract_dir)
+        logger.info(f"Extraction complete, removing tar and parts...")
+        tar_path.unlink()
+
+    # Clean up split parts
+    for part in parts:
+        Path(part).unlink()
+
+
+def _decompress_manifest(data_dir: Path) -> None:
+    """Decompress manifest.json.gz to manifest.json if needed."""
+    gz_path = data_dir / "processed" / "manifest.json.gz"
+    json_path = data_dir / "processed" / "manifest.json"
+    if gz_path.exists() and not json_path.exists():
+        logger.info("Decompressing manifest.json.gz...")
+        with gzip.open(gz_path, "rb") as f_in:
+            with open(json_path, "wb") as f_out:
+                while True:
+                    chunk = f_in.read(64 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    f_out.write(chunk)
+        gz_path.unlink()
+        logger.info(f"Manifest decompressed to {json_path}")
+
+
+def download_main() -> None:
+    """CLI entry point: download Helico data from HuggingFace."""
+    import argparse
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+    parser = argparse.ArgumentParser(
+        description="Download Helico training data from HuggingFace"
+    )
+    parser.add_argument(
+        "--subset",
+        choices=["all", "raw", "processed", "ccd-only"],
+        default="all",
+        help="What to download (default: all)",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help=f"Target directory (default: {_default_data_dir()})",
+    )
+    parser.add_argument(
+        "--no-extract",
+        action="store_true",
+        help="Don't extract split tars after downloading",
+    )
+    args = parser.parse_args()
+
+    data_dir = args.data_dir or _default_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    from huggingface_hub import hf_hub_download, list_repo_files
+
+    def _download(filename: str) -> None:
+        logger.info(f"Downloading {filename}...")
+        hf_hub_download(
+            repo_id=HF_REPO,
+            filename=filename,
+            repo_type="dataset",
+            local_dir=data_dir,
+        )
+
+    if args.subset == "ccd-only":
+        _download("processed/ccd_cache.pkl")
+        logger.info("Done. CCD cache downloaded.")
+        return
+
+    # Determine which files to download
+    files_to_download: list[str] = []
+    split_prefixes: list[str] = []
+
+    if args.subset in ("all", "processed"):
+        files_to_download.extend(_PROCESSED_FILES)
+        split_prefixes.append("processed/structures.tar")
+
+    if args.subset in ("all", "raw"):
+        files_to_download.extend(_RAW_FILES)
+        split_prefixes.extend([
+            "raw/mmcif.tar",
+            "raw/rcsb_raw_msa.tar",
+            "raw/openfold_raw_msa.tar",
+        ])
+
+    # Download individual files
+    for f in files_to_download:
+        _download(f)
+
+    # Download split tar parts
+    if split_prefixes:
+        all_repo_files = list_repo_files(repo_id=HF_REPO, repo_type="dataset")
+        for prefix in split_prefixes:
+            parts = sorted(f for f in all_repo_files if f.startswith(prefix + "."))
+            if not parts:
+                logger.warning(f"No split parts found for {prefix} in HF repo")
+                continue
+            for part in parts:
+                _download(part)
+            if not args.no_extract:
+                _reassemble_split_tar(data_dir, prefix)
+
+    # Decompress manifest
+    if args.subset in ("all", "processed"):
+        _decompress_manifest(data_dir)
+
+    logger.info(f"Download complete. Data is at {data_dir}")

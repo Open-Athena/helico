@@ -21,6 +21,7 @@ from helico.data import (
     Structure,
     TarIndex,
     TokenizedStructure,
+    _processed_dir,
     load_msa_for_chain,
     parse_ccd,
     parse_mmcif,
@@ -1041,7 +1042,7 @@ def main():
             stem = tar_path.stem  # e.g. "rcsb_raw_msa" from "rcsb_raw_msa.tar"
             index_path = tar_path.with_name(stem + "_index.pkl")
             if not index_path.exists():
-                processed_dir = Path(os.environ.get("HELICO_PROCESSED_DIR", ""))
+                processed_dir = _processed_dir()
                 if processed_dir.exists():
                     index_path = processed_dir / (stem + "_index.pkl")
             if index_path.exists():

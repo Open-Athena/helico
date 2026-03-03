@@ -23,6 +23,7 @@ from helico.data import (
     TarIndex,
     TokenizedStructure,
     MSAFeatures,
+    _processed_dir,
     collate_fn,
     load_manifest,
     load_tar_index,
@@ -34,7 +35,6 @@ from helico.data import (
     parse_input_yaml,
     tokenize_sequences,
     tokenize_structure,
-    PROCESSED_DIR,
 )
 from helico.model import Helico, HelicoConfig, diffusion_loss
 
@@ -530,11 +530,8 @@ def main():
         # Load real data
         if args.processed_dir:
             processed_dir = Path(args.processed_dir)
-        elif PROCESSED_DIR is not None:
-            processed_dir = PROCESSED_DIR
         else:
-            logger.error("Must set --processed-dir or HELICO_PROCESSED_DIR env var")
-            return
+            processed_dir = _processed_dir()
         manifest_path = Path(args.manifest) if args.manifest else processed_dir / "manifest.json"
 
         if not manifest_path.exists():

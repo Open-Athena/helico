@@ -965,7 +965,6 @@ class TestEndToEnd:
 PROTENIX_CHECKPOINT = Path(__file__).resolve().parent.parent / "checkpoints" / "protenix_base_default_v1.0.0.pt"
 
 
-@pytest.mark.skipif(not PROTENIX_CHECKPOINT.exists(), reason="Protenix checkpoint not downloaded")
 class TestLoadProtenix:
     """Integration tests: load real Protenix checkpoint into Helico and run forward pass."""
 
@@ -1083,15 +1082,12 @@ class TestLoadProtenix:
 # ============================================================================
 
 CCD_CACHE = Path(__file__).resolve().parent.parent / "data" / "ccd_cache.pkl"
-# Fall back to HELICO_PROCESSED_DIR if data/ doesn't have it
-import os as _os
+# Fall back to default data dir
 if not CCD_CACHE.exists():
-    _proc = _os.environ.get("HELICO_PROCESSED_DIR")
-    if _proc:
-        CCD_CACHE = Path(_proc) / "ccd_cache.pkl"
+    from helico.data import _processed_dir
+    CCD_CACHE = _processed_dir() / "ccd_cache.pkl"
 
 
-@pytest.mark.skipif(not PROTENIX_CHECKPOINT.exists(), reason="Protenix checkpoint not downloaded")
 class TestFoldRealProtein:
     """Fold 1MBN (sperm whale myoglobin + heme) with Protenix weights and MSA server.
 

@@ -43,9 +43,9 @@ from helico.data import (
     _init_worker,
 )
 
-# Derived paths — may be None if env vars not set
-COMPONENTS_CIF = RAW_DIR / "components.cif" if RAW_DIR else None
-PDB_SEQRES = RAW_DIR / "pdb_seqres.txt.gz" if RAW_DIR else None
+# Derived paths — point to default cache dir (may not exist)
+COMPONENTS_CIF = RAW_DIR / "components.cif"
+PDB_SEQRES = RAW_DIR / "pdb_seqres.txt.gz"
 
 
 # ============================================================================
@@ -58,8 +58,6 @@ class TestCCDParser:
     @pytest.fixture(scope="class")
     def ccd(self):
         """Parse CCD once for all tests in this class."""
-        if COMPONENTS_CIF is None or not COMPONENTS_CIF.exists():
-            pytest.skip("HELICO_RAW_DIR not set or components.cif not found")
         cache_path = PROCESSED_DIR / "ccd_cache_test.pkl"
         return parse_ccd(COMPONENTS_CIF, cache_path=cache_path)
 
@@ -325,15 +323,7 @@ class TestTokenizeSequences:
 
     def test_tokenize_with_real_ccd(self):
         """With real CCD: ALA→5 heavy atoms, GLY→4 heavy atoms, real ideal coords."""
-        if PROCESSED_DIR is None:
-            pytest.skip("HELICO_PROCESSED_DIR not set")
-        ccd_cache = PROCESSED_DIR / "ccd_cache.pkl"
-        if not ccd_cache.exists():
-            ccd_cache = PROCESSED_DIR / "ccd_cache_test.pkl"
-        if not ccd_cache.exists():
-            pytest.skip("CCD cache not found")
-
-        ccd = parse_ccd(cache_path=ccd_cache)
+        ccd = parse_ccd()
         chains = [{"type": "protein", "id": "A", "sequence": "AG"}]
         tokenized = tokenize_sequences(chains, ccd)
 
@@ -426,8 +416,6 @@ class TestMSA:
 class TestSeqres:
     def test_load_seqres(self):
         """Load pdb_seqres.txt.gz and verify structure."""
-        if PDB_SEQRES is None or not PDB_SEQRES.exists():
-            pytest.skip("HELICO_RAW_DIR not set or pdb_seqres.txt.gz not found")
         seqres = load_pdb_seqres(PDB_SEQRES)
         assert len(seqres) > 1000  # should have many PDB entries
         # Check a known entry
@@ -572,12 +560,14 @@ class TestPreprocessing:
     """Tests for the preprocessing pipeline."""
 
     @property
-    def MMCIF_DIR(self) -> Path | None:
-        return RAW_DIR / "mmCIF" if RAW_DIR else None
+    def MMCIF_DIR(self) -> Path:
+        return RAW_DIR / "mmCIF"
 
-    def _skip_without_raw(self):
-        if self.MMCIF_DIR is None or not self.MMCIF_DIR.exists():
-            pytest.skip("HELICO_RAW_DIR not set or mmCIF directory not found")
+    def _assert_raw_exists(self):
+        assert self.MMCIF_DIR.exists(), (
+            f"mmCIF directory not found at {self.MMCIF_DIR}. "
+            "Run 'helico-download' or set HELICO_DATA_DIR."
+        )
 
     def _find_a_cif_gz(self) -> Path:
         """Find a single .cif.gz file for testing."""
@@ -586,11 +576,11 @@ class TestPreprocessing:
                 for f in sorted(subdir.iterdir()):
                     if f.name.endswith(".cif.gz"):
                         return f
-        pytest.skip("No .cif.gz files found in mmCIF dir")
+        raise FileNotFoundError(f"No .cif.gz files found in {self.MMCIF_DIR}")
 
     def test_parse_mmcif_gzipped(self):
         """parse_mmcif should handle .cif.gz files."""
-        self._skip_without_raw()
+        self._assert_raw_exists()
         cif_path = self._find_a_cif_gz()
         structure = parse_mmcif(cif_path)
         # Structure may be None if filtered, but should not raise
@@ -600,24 +590,15 @@ class TestPreprocessing:
 
     def test_discover_mmcif_files(self):
         """discover_mmcif_files should find files in the mmCIF directory."""
-        self._skip_without_raw()
+        self._assert_raw_exists()
         files = discover_mmcif_files(self.MMCIF_DIR)
         assert len(files) > 0
         assert all(f.name.endswith(".cif.gz") for f in files)
 
     def test_process_single_structure(self, tmp_path):
         """End-to-end: parse + tokenize + pickle one real structure."""
-        self._skip_without_raw()
-        if PROCESSED_DIR is None:
-            pytest.skip("HELICO_PROCESSED_DIR not set")
-
-        # Accept either the main cache or the test cache
-        ccd_cache = PROCESSED_DIR / "ccd_cache.pkl"
-        if not ccd_cache.exists():
-            ccd_cache = PROCESSED_DIR / "ccd_cache_test.pkl"
-        if not ccd_cache.exists():
-            pytest.skip("CCD cache not found")
-        ccd = parse_ccd(cache_path=ccd_cache)
+        self._assert_raw_exists()
+        ccd = parse_ccd()
         _init_worker(ccd)
 
         # Find a structure that passes filters
@@ -631,8 +612,7 @@ class TestPreprocessing:
                 if result is not None:
                     break
 
-        if result is None:
-            pytest.skip("No structures passed filters in first 20 files")
+        assert result is not None, "No structures passed filters in first 20 files"
 
         assert isinstance(result, StructureMetadata)
         assert result.n_tokens > 0
@@ -773,12 +753,12 @@ class TestPreprocessing:
             assert content == f"content of file {i}".encode()
 
     def test_tar_index_real(self):
-        """Build index from real rcsb_raw_msa.tar if available (slow test)."""
-        if RAW_DIR is None:
-            pytest.skip("HELICO_RAW_DIR not set")
+        """Build index from real rcsb_raw_msa.tar (slow test)."""
         tar_path = RAW_DIR / "rcsb_raw_msa.tar"
-        if not tar_path.exists():
-            pytest.skip("rcsb_raw_msa.tar not found")
+        assert tar_path.exists(), (
+            f"rcsb_raw_msa.tar not found at {tar_path}. "
+            "Run 'helico-download' or set HELICO_DATA_DIR."
+        )
         # Only verify the tar is openable and has entries; full indexing is too slow for CI
         import tarfile as tf
         with tf.open(tar_path, "r") as tar:

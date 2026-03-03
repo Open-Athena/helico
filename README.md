@@ -152,7 +152,7 @@ Model (one required):
 Options:
   --output PATH           Output PDB file (default: output.pdb)
   --n-samples N           Number of diffusion samples, best by pLDDT is kept (default: 5)
-  --ccd PATH              Path to CCD cache pickle (default: uses $HELICO_PROCESSED_DIR/ccd_cache.pkl)
+  --ccd PATH              Path to CCD cache pickle (auto-downloads from HuggingFace if not found)
   --use-msa-server        Generate MSA using the public ColabFold MMseqs2 server
   --msa-server-url URL    MMseqs2 server URL (default: https://api.colabfold.com)
   --msa-cache-dir PATH    Directory to cache MSA results (default: <output>.msa_cache)
@@ -234,27 +234,22 @@ FoldBench/
 
 ### Download CCD (if not already available)
 
-The Chemical Component Dictionary is needed for tokenization. If you already have it from training setup, point `--ccd` at your existing cache. Otherwise:
+The Chemical Component Dictionary is needed for tokenization. It auto-downloads from HuggingFace on first use. To download it explicitly:
 
 ```bash
-wget https://files.wwpdb.org/pub/pdb/data/monomers/components.cif.gz
-gunzip components.cif.gz
-
-# Place it where helico expects it
-export HELICO_RAW_DIR=/path/to/dir/containing/components.cif
-export HELICO_PROCESSED_DIR=/path/to/processed
+helico-download --subset ccd-only
 ```
 
-The CCD cache (`ccd_cache.pkl`) will be built automatically on first run and reused subsequently.
+Or if you have a custom data location:
+
+```bash
+helico-download --subset ccd-only --data-dir /path/to/data
+```
 
 ### Running the Benchmark
 
 ```bash
-# Set environment variables (required for CCD loading)
-export HELICO_RAW_DIR=/path/to/raw       # Directory containing components.cif
-export HELICO_PROCESSED_DIR=/path/to/processed  # Directory for ccd_cache.pkl
-
-# Run on all categories with Protenix weights
+# Run on all categories with Protenix weights (CCD auto-downloads if needed)
 helico-bench \
     --protenix checkpoints/protenix_base_default_v1.0.0.pt \
     --foldbench-dir /path/to/FoldBench \

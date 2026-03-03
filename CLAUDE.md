@@ -43,9 +43,9 @@ tests/
 
 ## Training Data
 
-- Set `HELICO_RAW_DIR` to the directory containing raw data (components.cif, mmCIF/, MSA tars, etc.)
-- Set `HELICO_PROCESSED_DIR` to the directory for processed outputs (pickles, manifest, tar indices)
-- Both env vars are **required** for any data operations. No paths are hardcoded.
+- Data is hosted on HuggingFace at `timodonnell/helico-data` and auto-downloads to `~/.cache/helico/data/` on first use.
+- Download all data: `helico-download` (or `helico-download --subset ccd-only` for just the CCD cache)
+- Override default location with `HELICO_DATA_DIR` env var.
 - Preprocessing: `helico-preprocess all` (structures + MSA tar indices)
 - See `LOG.md` for actual paths and commands used on our machines.
 - Processing follows the [Boltz2 flow](https://github.com/jwohlwend/boltz).

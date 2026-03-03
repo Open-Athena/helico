@@ -2,14 +2,22 @@
 
 ## Training Data
 
-Data paths are configured via environment variables (required):
+Data is hosted on HuggingFace at [`timodonnell/helico-data`](https://huggingface.co/datasets/timodonnell/helico-data) and auto-downloads to `~/.cache/helico/data/` on first use.
 
 ```bash
-export HELICO_RAW_DIR=/path/to/raw
-export HELICO_PROCESSED_DIR=/path/to/processed
+# Download everything (raw + processed)
+helico-download
+
+# Download just the CCD cache (needed for inference)
+helico-download --subset ccd-only
+
+# Download to a custom location
+helico-download --data-dir /data/helico
 ```
 
-Raw data in `$HELICO_RAW_DIR`:
+Override the default data location with the `HELICO_DATA_DIR` env var.
+
+Raw data in `<data-dir>/raw/`:
 
 | File | Size | Description |
 |------|------|-------------|
@@ -19,7 +27,7 @@ Raw data in `$HELICO_RAW_DIR`:
 | `openfold_raw_msa.tar` | 88 GB | Pre-computed MSA files from OpenFold |
 | `mmCIF/` | 81 GB | PDB structure archive (248,942 `.cif.gz` files across 1,089 subdirectories) |
 
-Processed data in `$HELICO_PROCESSED_DIR`:
+Processed data in `<data-dir>/processed/`:
 
 | File | Size | Description |
 |------|------|-------------|
@@ -29,7 +37,7 @@ Processed data in `$HELICO_PROCESSED_DIR`:
 | `rcsb_raw_msa_index.pkl` | 15 MB | Tar index for rcsb_raw_msa.tar (151,403 entries) |
 | `openfold_raw_msa_index.pkl` | 11 MB | Tar index for openfold_raw_msa.tar (268,778 entries) |
 
-See `LOG.md` for download commands and preprocessing details.
+See `LOG.md` for preprocessing details.
 
 
 ## Quick Start (Synthetic Data)
@@ -46,20 +54,18 @@ helico-train --synthetic --max-steps 500 --log-every 50
 
 ## Data Preparation
 
-Before training on real data, download and preprocess the PDB structures. See `LOG.md` for download commands.
-
-After downloading, run the preprocessing pipeline:
+The easiest path is `helico-download` which fetches everything from HuggingFace. For preprocessing from scratch:
 
 ```bash
-export HELICO_RAW_DIR=/path/to/raw
-export HELICO_PROCESSED_DIR=/path/to/processed
+# If using a custom data location:
+export HELICO_DATA_DIR=/data/helico
 
 # Process all mmCIF files into pickled TokenizedStructures + manifest
 helico-preprocess structures
 
 # Build tar indices for O(1) MSA lookup
-helico-preprocess msa-index --tar-path $HELICO_RAW_DIR/rcsb_raw_msa.tar --output $HELICO_PROCESSED_DIR/rcsb_raw_msa_index.pkl
-helico-preprocess msa-index --tar-path $HELICO_RAW_DIR/openfold_raw_msa.tar --output $HELICO_PROCESSED_DIR/openfold_raw_msa_index.pkl
+helico-preprocess msa-index --tar-path ~/.cache/helico/data/raw/rcsb_raw_msa.tar --output ~/.cache/helico/data/processed/rcsb_raw_msa_index.pkl
+helico-preprocess msa-index --tar-path ~/.cache/helico/data/raw/openfold_raw_msa.tar --output ~/.cache/helico/data/processed/openfold_raw_msa_index.pkl
 
 # Or run everything in sequence:
 helico-preprocess all
@@ -168,9 +174,8 @@ export NCCL_NET_GDR_LEVEL=5
 export NCCL_IB_GID_INDEX=3
 export NCCL_CROSS_NIC=1
 
-# Data paths (use shared filesystem)
-export HELICO_RAW_DIR=/shared/data/helico-data/raw
-export HELICO_PROCESSED_DIR=/shared/data/helico-data/processed
+# Data path (use shared filesystem)
+export HELICO_DATA_DIR=/shared/data/helico-data
 
 srun torchrun \
     --nnodes=$SLURM_NNODES \
@@ -252,7 +257,7 @@ Data:
   --batch-size N            Per-GPU batch size (default: 1)
   --num-workers N           DataLoader workers per GPU (default: 4)
   --synthetic               Use synthetic data for testing
-  --manifest PATH           Path to manifest.json (default: $HELICO_PROCESSED_DIR/manifest.json)
+  --manifest PATH           Path to manifest.json (default: <data-dir>/processed/manifest.json)
   --processed-dir PATH      Path to processed data directory
   --val-date-cutoff DATE    Date cutoff for train/val split (default: 2022-01-01)
   --msa-dir PATH            Path to extracted MSA directory
