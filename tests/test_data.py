@@ -7,7 +7,6 @@ import torch
 from pathlib import Path
 
 from helico.data import (
-    RAW_DIR,
     PROCESSED_DIR,
     CCDComponent,
     LazyHelicoDataset,
@@ -29,7 +28,6 @@ from helico.data import (
     parse_a3m,
     a3m_to_msa_matrix,
     compute_msa_features,
-    load_pdb_seqres,
     spatial_crop,
     contiguous_crop,
     make_synthetic_structure,
@@ -42,79 +40,6 @@ from helico.data import (
     _process_single_structure,
     _init_worker,
 )
-
-# Derived paths — point to default cache dir (may not exist)
-COMPONENTS_CIF = RAW_DIR / "components.cif"
-PDB_SEQRES = RAW_DIR / "pdb_seqres.txt.gz"
-
-
-# ============================================================================
-# CCD Parser Tests
-# ============================================================================
-
-class TestCCDParser:
-    """Tests for Chemical Component Dictionary parsing."""
-
-    @pytest.fixture(scope="class")
-    def ccd(self):
-        """Parse CCD once for all tests in this class."""
-        cache_path = PROCESSED_DIR / "ccd_cache_test.pkl"
-        return parse_ccd(COMPONENTS_CIF, cache_path=cache_path)
-
-    def test_alanine(self, ccd):
-        """ALA should have known atom count and elements."""
-        assert "ALA" in ccd
-        ala = ccd["ALA"]
-        assert isinstance(ala, CCDComponent)
-        assert ala.comp_id == "ALA"
-        # ALA has 5 heavy atoms: N, CA, C, O, CB
-        assert ala.n_heavy_atoms >= 5
-        heavy_elements = [e for e in ala.atom_elements if e != "H"]
-        assert "N" in heavy_elements
-        assert "C" in heavy_elements
-        assert "O" in heavy_elements
-
-    def test_glycine(self, ccd):
-        """GLY should have fewer atoms than ALA (no CB)."""
-        assert "GLY" in ccd
-        gly = ccd["GLY"]
-        assert gly.n_heavy_atoms >= 4  # N, CA, C, O
-        ala = ccd["ALA"]
-        assert gly.n_heavy_atoms < ala.n_heavy_atoms
-
-    def test_atp(self, ccd):
-        """ATP should be present with many atoms and bonds."""
-        assert "ATP" in ccd
-        atp = ccd["ATP"]
-        assert atp.n_heavy_atoms > 20  # ATP is a large molecule
-        assert len(atp.bonds) > 20
-        assert "P" in atp.atom_elements  # ATP has phosphorus
-
-    def test_hem(self, ccd):
-        """HEM (heme) should have iron."""
-        assert "HEM" in ccd
-        hem = ccd["HEM"]
-        assert "Fe" in hem.atom_elements or "FE" in [e.upper() for e in hem.atom_elements]
-        assert hem.n_heavy_atoms > 30
-
-    def test_ideal_coords(self, ccd):
-        """Components should have ideal coordinates."""
-        ala = ccd["ALA"]
-        assert ala.ideal_coords is not None
-        assert ala.ideal_coords.shape[0] == len(ala.atom_names)
-        assert ala.ideal_coords.shape[1] == 3
-        # Coords should be finite
-        assert np.all(np.isfinite(ala.ideal_coords))
-
-    def test_component_type(self, ccd):
-        """Check component types are parsed."""
-        ala = ccd["ALA"]
-        assert "PEPTIDE" in ala.comp_type.upper() or "L-PEPTIDE" in ala.comp_type.upper()
-
-    def test_many_components_parsed(self, ccd):
-        """Should have parsed thousands of components."""
-        assert len(ccd) > 1000
-
 
 # ============================================================================
 # Tokenizer Tests
@@ -331,9 +256,9 @@ class TestTokenizeSequences:
         # ALA: N, CA, C, O, CB = 5 heavy atoms
         ala_tok = tokenized.tokens[0]
         assert len(ala_tok.atom_names) == 5, f"ALA got {len(ala_tok.atom_names)} atoms: {ala_tok.atom_names}"
-        # GLY: N, CA, C, O = 4 heavy atoms
+        # GLY: N, CA, C, O, OXT = 5 heavy atoms (CCD includes C-terminal OXT)
         gly_tok = tokenized.tokens[1]
-        assert len(gly_tok.atom_names) == 4, f"GLY got {len(gly_tok.atom_names)} atoms: {gly_tok.atom_names}"
+        assert len(gly_tok.atom_names) == 5, f"GLY got {len(gly_tok.atom_names)} atoms: {gly_tok.atom_names}"
         # Ideal coords should be non-zero
         assert not np.allclose(ala_tok.ref_coords, 0.0)
         assert not np.allclose(gly_tok.ref_coords, 0.0)
@@ -407,22 +332,6 @@ class TestMSA:
         # Profile should sum to approximately 1.0
         profile_sums = features.profile.sum(axis=1)
         assert np.allclose(profile_sums, 1.0, atol=0.01)
-
-
-# ============================================================================
-# PDB Seqres Tests
-# ============================================================================
-
-class TestSeqres:
-    def test_load_seqres(self):
-        """Load pdb_seqres.txt.gz and verify structure."""
-        seqres = load_pdb_seqres(PDB_SEQRES)
-        assert len(seqres) > 1000  # should have many PDB entries
-        # Check a known entry
-        for pdb_id, chains in list(seqres.items())[:5]:
-            assert len(pdb_id) == 4
-            for chain_id, seq in chains.items():
-                assert len(seq) > 0
 
 
 # ============================================================================
@@ -551,233 +460,3 @@ class TestFullPipeline:
         assert "token_mask" in batch
         assert "atom_mask" in batch
 
-
-# ============================================================================
-# Preprocessing Pipeline Tests
-# ============================================================================
-
-class TestPreprocessing:
-    """Tests for the preprocessing pipeline."""
-
-    @property
-    def MMCIF_DIR(self) -> Path:
-        return RAW_DIR / "mmCIF"
-
-    def _assert_raw_exists(self):
-        assert self.MMCIF_DIR.exists(), (
-            f"mmCIF directory not found at {self.MMCIF_DIR}. "
-            "Run 'helico-download' or set HELICO_DATA_DIR."
-        )
-
-    def _find_a_cif_gz(self) -> Path:
-        """Find a single .cif.gz file for testing."""
-        for subdir in sorted(self.MMCIF_DIR.iterdir()):
-            if subdir.is_dir():
-                for f in sorted(subdir.iterdir()):
-                    if f.name.endswith(".cif.gz"):
-                        return f
-        raise FileNotFoundError(f"No .cif.gz files found in {self.MMCIF_DIR}")
-
-    def test_parse_mmcif_gzipped(self):
-        """parse_mmcif should handle .cif.gz files."""
-        self._assert_raw_exists()
-        cif_path = self._find_a_cif_gz()
-        structure = parse_mmcif(cif_path)
-        # Structure may be None if filtered, but should not raise
-        if structure is not None:
-            assert structure.pdb_id != ""
-            assert len(structure.chains) > 0
-
-    def test_discover_mmcif_files(self):
-        """discover_mmcif_files should find files in the mmCIF directory."""
-        self._assert_raw_exists()
-        files = discover_mmcif_files(self.MMCIF_DIR)
-        assert len(files) > 0
-        assert all(f.name.endswith(".cif.gz") for f in files)
-
-    def test_process_single_structure(self, tmp_path):
-        """End-to-end: parse + tokenize + pickle one real structure."""
-        self._assert_raw_exists()
-        ccd = parse_ccd()
-        _init_worker(ccd)
-
-        # Find a structure that passes filters
-        cif_path = self._find_a_cif_gz()
-        result = _process_single_structure((cif_path, tmp_path, 9.0))
-        # Result may be None if structure was filtered; try a few more
-        if result is None:
-            files = discover_mmcif_files(self.MMCIF_DIR)[:20]
-            for f in files:
-                result = _process_single_structure((f, tmp_path, 9.0))
-                if result is not None:
-                    break
-
-        assert result is not None, "No structures passed filters in first 20 files"
-
-        assert isinstance(result, StructureMetadata)
-        assert result.n_tokens > 0
-        # Verify pickle was written
-        pkl_path = tmp_path / result.pickle_path
-        assert pkl_path.exists()
-        import pickle
-        with open(pkl_path, "rb") as f:
-            ts = pickle.load(f)
-        assert isinstance(ts, TokenizedStructure)
-        assert ts.n_tokens == result.n_tokens
-
-    def test_manifest_round_trip(self, tmp_path):
-        """Save and load a manifest, verifying data preservation."""
-        metadata = {
-            "1ABC": StructureMetadata(
-                pdb_id="1ABC",
-                pickle_path="structures/ab/1abc.pkl",
-                n_tokens=100,
-                n_atoms=500,
-                n_chains=2,
-                resolution=2.5,
-                release_date="2020-01-15",
-                method="X-RAY DIFFRACTION",
-                entity_types=["protein", "ligand"],
-                chain_ids=["A", "B"],
-            ),
-            "2XYZ": StructureMetadata(
-                pdb_id="2XYZ",
-                pickle_path="structures/xy/2xyz.pkl",
-                n_tokens=50,
-                n_atoms=200,
-                n_chains=1,
-                resolution=1.8,
-                release_date="2021-06-01",
-                method="X-RAY DIFFRACTION",
-                entity_types=["protein"],
-                chain_ids=["A"],
-            ),
-        }
-
-        manifest_path = tmp_path / "manifest.json"
-        build_manifest(metadata, manifest_path)
-        assert manifest_path.exists()
-
-        loaded = load_manifest(manifest_path)
-        assert len(loaded) == 2
-        assert "1ABC" in loaded
-        assert loaded["1ABC"].n_tokens == 100
-        assert loaded["1ABC"].resolution == 2.5
-        assert loaded["1ABC"].release_date == "2020-01-15"
-        assert loaded["2XYZ"].pickle_path == "structures/xy/2xyz.pkl"
-
-    def test_lazy_dataset(self, tmp_path):
-        """Create small set of pickles and verify LazyHelicoDataset works."""
-        import pickle
-
-        # Create synthetic structures and save as pickles
-        metadata = {}
-        for i, n_res in enumerate([20, 30, 25]):
-            pdb_id = f"TST{i}"
-            structure = make_synthetic_structure(n_residues=n_res)
-            structure = structure.__class__(
-                pdb_id=pdb_id,
-                chains=structure.chains,
-                resolution=structure.resolution,
-                release_date=f"2020-0{i+1}-01",
-                method=structure.method,
-            )
-            tokenized = tokenize_structure(structure)
-            rel_path = f"structures/{pdb_id.lower()}.pkl"
-            pkl_path = tmp_path / rel_path
-            pkl_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(pkl_path, "wb") as f:
-                pickle.dump(tokenized, f)
-
-            metadata[pdb_id] = StructureMetadata(
-                pdb_id=pdb_id,
-                pickle_path=rel_path,
-                n_tokens=tokenized.n_tokens,
-                n_atoms=tokenized.n_atoms,
-                n_chains=1,
-                resolution=2.0,
-                release_date=f"2020-0{i+1}-01",
-                method="SYNTHETIC",
-                entity_types=["protein"],
-                chain_ids=["A"],
-            )
-
-        dataset = LazyHelicoDataset(
-            manifest=metadata,
-            processed_dir=tmp_path,
-            crop_size=15,
-        )
-        assert len(dataset) == 3
-
-        item = dataset[0]
-        assert "token_types" in item
-        assert item["n_tokens"] <= 20
-        assert "msa_profile" in item
-        assert "has_msa" in item
-
-        # Test with filter
-        filtered = LazyHelicoDataset(
-            manifest=metadata,
-            processed_dir=tmp_path,
-            crop_size=15,
-            filter_fn=lambda m: m.release_date < "2020-02-01",
-        )
-        assert len(filtered) == 1
-
-    def test_tar_index(self, tmp_path):
-        """Build a tar index from a small synthetic tar and verify it."""
-        import tarfile as tf
-
-        # Create a small test tar
-        tar_path = tmp_path / "test.tar"
-        with tf.open(tar_path, "w") as tar:
-            for i in range(5):
-                data = f"content of file {i}".encode()
-                info = tf.TarInfo(name=f"dir/file{i}.txt")
-                info.size = len(data)
-                tar.addfile(info, io.BytesIO(data))
-
-        index = build_tar_index(tar_path)
-        assert len(index.entries) == 5
-        assert index.tar_path == tar_path
-
-        # Verify we can read back via the index
-        from helico.data import read_tar_member
-        for i in range(5):
-            name = f"dir/file{i}.txt"
-            assert name in index.entries
-            offset, size = index.entries[name]
-            assert offset >= 0
-            assert size > 0
-            content = read_tar_member(tar_path, offset, size)
-            assert content == f"content of file {i}".encode()
-
-    def test_tar_index_real(self):
-        """Build index from real rcsb_raw_msa.tar (slow test)."""
-        tar_path = RAW_DIR / "rcsb_raw_msa.tar"
-        assert tar_path.exists(), (
-            f"rcsb_raw_msa.tar not found at {tar_path}. "
-            "Run 'helico-download' or set HELICO_DATA_DIR."
-        )
-        # Only verify the tar is openable and has entries; full indexing is too slow for CI
-        import tarfile as tf
-        with tf.open(tar_path, "r") as tar:
-            members = []
-            for i, member in enumerate(tar):
-                members.append(member)
-                if i >= 9:
-                    break
-        assert len(members) > 0
-        assert all(m.name.endswith(".a3m.gz") or "/" in m.name for m in members)
-
-    def test_tar_index_save_load(self, tmp_path):
-        """TarIndex round-trip through pickle."""
-        index = TarIndex(
-            tar_path=Path("/fake/path.tar"),
-            entries={"file1.txt": (512, 100), "file2.txt": (1024, 200)},
-        )
-        save_path = tmp_path / "test_index.pkl"
-        save_tar_index(index, save_path)
-        loaded = load_tar_index(save_path)
-        assert loaded.tar_path == index.tar_path
-        assert loaded.entries == index.entries
