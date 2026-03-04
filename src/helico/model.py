@@ -2739,28 +2739,25 @@ class Helico(nn.Module):
             cycle_times.append(_sync_time() - t_c0)
         t_recycle = _sync_time() - t_recycle_start
 
-        # Generate samples
-        all_coords = []
-        t_diffusion_start = _sync_time()
-        sample_times = []
-        for _ in range(n_samples):
-            t_s0 = _sync_time()
-            coords = self.diffusion.sample(
-                ref_pos=batch["ref_coords"],
-                ref_charge=ref_charge,
-                ref_features=ref_features,
-                atom_to_token=batch["atom_to_token"],
-                atom_mask=atom_mask,
-                s_trunk=s,
-                z_trunk=z,
-                s_inputs=s_inputs,
-                relpe_feats=relpe_feats,
-                ref_space_uid=batch.get("ref_space_uid"),
-            )
-            sample_times.append(_sync_time() - t_s0)
-            all_coords.append(coords)
+        # Generate all samples in one batched call: expand (B, ...) → (B*n_samples, ...)
+        def _expand(t):
+            return t.unsqueeze(1).expand(-1, n_samples, *[-1] * (t.dim() - 1)).reshape(B * n_samples, *t.shape[1:])
 
-        all_coords = torch.stack(all_coords, dim=1)  # (B, n_samples, N_atoms, 3)
+        ref_space_uid = batch.get("ref_space_uid")
+        t_diffusion_start = _sync_time()
+        batched_coords = self.diffusion.sample(
+            ref_pos=_expand(batch["ref_coords"]),
+            ref_charge=_expand(ref_charge),
+            ref_features=_expand(ref_features),
+            atom_to_token=_expand(batch["atom_to_token"]),
+            atom_mask=_expand(atom_mask),
+            s_trunk=_expand(s),
+            z_trunk=_expand(z),
+            s_inputs=_expand(s_inputs),
+            relpe_feats={k: _expand(v) for k, v in relpe_feats.items()},
+            ref_space_uid=_expand(ref_space_uid) if ref_space_uid is not None else None,
+        )  # (B*n_samples, N_atoms, 3)
+        all_coords = batched_coords.reshape(B, n_samples, *batched_coords.shape[1:])
         t_diffusion = _sync_time() - t_diffusion_start
 
         # Score all samples and pick the best by ranking_score
@@ -2859,10 +2856,8 @@ class Helico(nn.Module):
             print(f"  Recycling ({actual_cycles} cycles):  {t_recycle:8.2f}s")
             for i, ct in enumerate(cycle_times):
                 print(f"    cycle {i:2d}:            {ct:8.2f}s")
-            print(f"  Diffusion ({n_samples} samples): {t_diffusion:8.2f}s")
-            for i, st in enumerate(sample_times):
-                print(f"    sample {i}:           {st:8.2f}s  ({st/n_steps:.3f}s/step)")
-            print(f"    avg per step:       {t_diffusion/n_samples/n_steps:8.3f}s  ({n_steps} steps)")
+            print(f"  Diffusion ({n_samples} samples): {t_diffusion:8.2f}s  (batched, B*S={B*n_samples})")
+            print(f"    avg per step:       {t_diffusion/n_steps:8.3f}s  ({n_steps} steps)")
             print(f"  Confidence ({n_samples} samples):{t_confidence:8.2f}s")
             for i, ct in enumerate(conf_times):
                 print(f"    sample {i}:           {ct:8.2f}s")
