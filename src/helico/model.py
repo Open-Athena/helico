@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -2675,6 +2676,7 @@ class Helico(nn.Module):
         batch: dict[str, torch.Tensor],
         n_samples: int = 5,
         n_cycles: int | None = None,
+        verbose_timing: bool = False,
     ) -> dict[str, torch.Tensor]:
         """Run inference: generate structure predictions.
 
@@ -2682,8 +2684,18 @@ class Helico(nn.Module):
             batch: Input feature dict.
             n_samples: Number of diffusion samples per input.
             n_cycles: Override number of recycling cycles (default: self.config.n_cycles).
+            verbose_timing: Print detailed timing breakdown for each phase.
         """
         self.eval()
+
+        def _sync_time():
+            if verbose_timing:
+                torch.cuda.synchronize()
+                return time.perf_counter()
+            return 0.0
+
+        t_overall_start = _sync_time()
+
         mask = batch.get("token_mask")
         pair_mask = None
         if mask is not None:
@@ -2692,6 +2704,7 @@ class Helico(nn.Module):
         B, N_tok = batch["token_types"].shape
         device = batch["token_types"].device
 
+        t0 = _sync_time()
         ref_charge, ref_features = self._build_ref_features(batch)
         atom_mask = batch.get("atom_mask", torch.ones(B, batch["ref_coords"].shape[1], device=device))
         atom_mask = atom_mask.float()
@@ -2707,22 +2720,31 @@ class Helico(nn.Module):
         token_bonds = batch.get("token_bonds")
         if token_bonds is not None:
             z_init = z_init + self.linear_token_bond(token_bonds.unsqueeze(-1).to(z_init.dtype))
+        t_embed = _sync_time() - t0
 
         # Recycling
         msa_raw, msa_mask = self._build_msa_raw(batch)
         s = torch.zeros_like(s_init)
         z = torch.zeros_like(z_init)
         actual_cycles = n_cycles if n_cycles is not None else self.config.n_cycles
+        t_recycle_start = _sync_time()
+        cycle_times = []
         for cycle in range(actual_cycles):
+            t_c0 = _sync_time()
             z = z_init + self.linear_z_cycle(self.layernorm_z_cycle(z))
             z = z + self.template_embedder(batch, z)
             z = self.msa_module(msa_raw, z, s_inputs, msa_mask, pair_mask)
             s = s_init + self.linear_s(self.layernorm_s(s))
             s, z = self.pairformer(s, z, mask=mask, pair_mask=pair_mask)
+            cycle_times.append(_sync_time() - t_c0)
+        t_recycle = _sync_time() - t_recycle_start
 
         # Generate samples
         all_coords = []
+        t_diffusion_start = _sync_time()
+        sample_times = []
         for _ in range(n_samples):
+            t_s0 = _sync_time()
             coords = self.diffusion.sample(
                 ref_pos=batch["ref_coords"],
                 ref_charge=ref_charge,
@@ -2735,9 +2757,11 @@ class Helico(nn.Module):
                 relpe_feats=relpe_feats,
                 ref_space_uid=batch.get("ref_space_uid"),
             )
+            sample_times.append(_sync_time() - t_s0)
             all_coords.append(coords)
 
         all_coords = torch.stack(all_coords, dim=1)  # (B, n_samples, N_atoms, 3)
+        t_diffusion = _sync_time() - t_diffusion_start
 
         # Score all samples and pick the best by ranking_score
         best_ranking = None
@@ -2752,7 +2776,10 @@ class Helico(nn.Module):
 
         rep_atom_idx = batch.get("rep_atom_idx")
         has_frame = batch.get("has_frame")
+        t_confidence_start = _sync_time()
+        conf_times = []
         for si in range(n_samples):
+            t_ci = _sync_time()
             confidence = self.confidence_head(
                 s_trunk=s, z_trunk=z, s_inputs=s_inputs,
                 pred_coords=all_coords[:, si],
@@ -2789,6 +2816,7 @@ class Helico(nn.Module):
                 has_clash = torch.zeros(B, device=device)
 
             ranking = compute_ranking_score(ptm, iptm, has_interface, has_clash=has_clash)
+            conf_times.append(_sync_time() - t_ci)
 
             if best_ranking is None:
                 best_ranking = ranking.clone()
@@ -2810,6 +2838,7 @@ class Helico(nn.Module):
                             best_plddt[b] = plddt[b]
                             best_pae[b] = pae[b]
                             best_confidence = {k: v.clone() for k, v in confidence.items()}  # save logits
+        t_confidence = _sync_time() - t_confidence_start
 
         # Gather best coords per batch element
         best_coords = torch.stack([all_coords[b, best_idx[b]] for b in range(B)])
@@ -2818,6 +2847,28 @@ class Helico(nn.Module):
         plddt_flat = _flatten_plddt(
             best_plddt, batch["atom_to_token"], batch["atoms_per_token"], atom_mask,
         )
+
+        t_overall = _sync_time() - t_overall_start
+
+        if verbose_timing:
+            n_steps = self.diffusion.n_steps
+            print(f"\n{'='*60}")
+            print(f"  Helico predict() timing  (N_tok={N_tok}, B={B})")
+            print(f"{'='*60}")
+            print(f"  Input embedding:      {t_embed:8.2f}s")
+            print(f"  Recycling ({actual_cycles} cycles):  {t_recycle:8.2f}s")
+            for i, ct in enumerate(cycle_times):
+                print(f"    cycle {i:2d}:            {ct:8.2f}s")
+            print(f"  Diffusion ({n_samples} samples): {t_diffusion:8.2f}s")
+            for i, st in enumerate(sample_times):
+                print(f"    sample {i}:           {st:8.2f}s  ({st/n_steps:.3f}s/step)")
+            print(f"    avg per step:       {t_diffusion/n_samples/n_steps:8.3f}s  ({n_steps} steps)")
+            print(f"  Confidence ({n_samples} samples):{t_confidence:8.2f}s")
+            for i, ct in enumerate(conf_times):
+                print(f"    sample {i}:           {ct:8.2f}s")
+            print(f"  {'─'*40}")
+            print(f"  Total wall time:      {t_overall:8.2f}s")
+            print(f"{'='*60}\n")
 
         return {
             "coords": best_coords,               # (B, N_atoms, 3)

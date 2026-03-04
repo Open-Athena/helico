@@ -721,11 +721,7 @@ class TokenizedStructure:
             all_atom_coords.append(tok.atom_coords)
             all_atom_elements.extend(tok.atom_elements)
             if tok.ref_coords is not None:
-                # Centralize per residue: subtract mean position (matches Protenix)
-                rc = tok.ref_coords
-                if rc.shape[0] > 0:
-                    rc = rc - rc.mean(axis=0, keepdims=True)
-                all_ref_coords.append(rc)
+                all_ref_coords.append(tok.ref_coords)
             else:
                 all_ref_coords.append(np.zeros((n_atoms, 3), dtype=np.float32))
             # ref_space_uid: group atoms by residue (same for all atoms in same residue)
@@ -765,7 +761,19 @@ class TokenizedStructure:
 
         total_atoms = sum(atoms_per_token)
         atom_coords = torch.tensor(np.concatenate(all_atom_coords, axis=0), dtype=torch.float32) if total_atoms > 0 else torch.zeros(0, 3)
-        ref_coords = torch.tensor(np.concatenate(all_ref_coords, axis=0), dtype=torch.float32) if total_atoms > 0 else torch.zeros(0, 3)
+
+        # Centralize ref_coords per ref_space_uid group (matches Protenix convention).
+        # This must be done across tokens sharing the same uid — per-token centralization
+        # would zero out single-atom ligand tokens.
+        if total_atoms > 0:
+            ref_flat = np.concatenate(all_ref_coords, axis=0)
+            uid_arr = np.array(all_ref_space_uid)
+            for uid in np.unique(uid_arr):
+                mask = uid_arr == uid
+                ref_flat[mask] -= ref_flat[mask].mean(axis=0, keepdims=True)
+            ref_coords = torch.tensor(ref_flat, dtype=torch.float32)
+        else:
+            ref_coords = torch.zeros(0, 3)
         atom_to_token_idx = torch.tensor(atom_to_token, dtype=torch.long)
         atoms_per_token_t = torch.tensor(atoms_per_token, dtype=torch.long)
         ref_space_uid = torch.tensor(all_ref_space_uid, dtype=torch.long)

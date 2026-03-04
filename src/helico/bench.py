@@ -204,6 +204,7 @@ def predict_target(
     msa_server_url: str | None = None,
     msa_cache_dir: Path | None = None,
     n_cycles: int | None = None,
+    verbose_timing: bool = False,
 ) -> tuple[TokenizedStructure, dict[str, torch.Tensor]] | None:
     """Run Helico inference on a target defined by chain dicts.
 
@@ -328,7 +329,7 @@ def predict_target(
         batch["cluster_deletion_mean"] = torch.zeros(1, 1, n_tok)
         batch["has_msa"] = torch.zeros(1)
 
-    results = run_inference(model, batch, n_samples=n_samples, device=device, dtype=dtype, n_cycles=n_cycles)
+    results = run_inference(model, batch, n_samples=n_samples, device=device, dtype=dtype, n_cycles=n_cycles, verbose_timing=verbose_timing)
     return tokenized, results
 
 
@@ -374,8 +375,10 @@ def match_atoms(
                 key = (chain.chain_id, res_pos, atom.name)
                 gt_lookup[key] = atom.coords
 
-    # Track per-chain token position to align with GT residue position
-    chain_token_counts: dict[str, int] = {}
+    # Track per-chain residue position using ref_space_uid to align with GT.
+    # Ligand atoms share the same ref_space_uid (one GT residue → many tokens),
+    # so we map by uid rather than incrementing per token.
+    chain_uid_to_pos: dict[str, dict[int, int]] = {}  # chain_id -> {uid -> pos}
 
     matched_pred = []
     matched_gt = []
@@ -390,11 +393,14 @@ def match_atoms(
         chain_id = tokenized.chain_ids[tok_idx]
         etype = tokenized.entity_types[tok_idx]
 
-        # Track position within this chain
-        if chain_id not in chain_token_counts:
-            chain_token_counts[chain_id] = 0
-        pos_in_chain = chain_token_counts[chain_id]
-        chain_token_counts[chain_id] += 1
+        # Track residue position within this chain by ref_space_uid
+        uid = token.ref_space_uid
+        if chain_id not in chain_uid_to_pos:
+            chain_uid_to_pos[chain_id] = {}
+        uid_map = chain_uid_to_pos[chain_id]
+        if uid not in uid_map:
+            uid_map[uid] = len(uid_map)
+        pos_in_chain = uid_map[uid]
 
         for ai, aname in enumerate(token.atom_names):
             global_ai = atom_offset + ai

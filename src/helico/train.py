@@ -376,6 +376,7 @@ def run_inference(
     device: str = "cuda",
     dtype: torch.dtype = torch.bfloat16,
     n_cycles: int | None = None,
+    verbose_timing: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Run inference on a batch.
 
@@ -383,6 +384,7 @@ def run_inference(
         n_cycles: Override number of recycling cycles.
             Default: 10 (Protenix inference standard). Use model.config.n_cycles=1
             for fast debugging; Protenix achieves reported accuracy with 10 cycles.
+        verbose_timing: Print detailed timing breakdown for each phase.
 
     Returns predicted coordinates, confidence scores, etc.
     """
@@ -394,7 +396,7 @@ def run_inference(
     effective_cycles = n_cycles if n_cycles is not None else 10
 
     with torch.no_grad(), torch.amp.autocast("cuda", dtype=dtype):
-        results = model.predict(batch, n_samples=n_samples, n_cycles=effective_cycles)
+        results = model.predict(batch, n_samples=n_samples, n_cycles=effective_cycles, verbose_timing=verbose_timing)
 
     return results
 
