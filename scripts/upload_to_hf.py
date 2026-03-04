@@ -2,7 +2,6 @@
 """Upload processed Helico data to HuggingFace dataset repo.
 
 Usage:
-    python scripts/upload_to_hf.py <processed-dir>
     python scripts/upload_to_hf.py /data/tim/helico-data/processed
 
 The processed dir is produced by:

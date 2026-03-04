@@ -484,12 +484,8 @@ def compute_lddt(
 
 def compute_tm_score(pred_coords: np.ndarray, gt_coords: np.ndarray) -> float:
     """Compute TM-score using tmtools package."""
-    try:
-        import tmtools
-    except ImportError:
-        logger.warning("tmtools not installed, skipping TM-score")
-        return float("nan")
-
+    import tmtools
+    
     if len(pred_coords) < 3:
         return 0.0
 
@@ -551,12 +547,8 @@ def compute_dockq(
     chain_ids: list[str] | None = None,
 ) -> dict[str, float]:
     """Compute DockQ score using the DockQ package."""
-    try:
-        from DockQ.DockQ import load_PDB, run_on_all_native_interfaces
-    except ImportError:
-        logger.warning("DockQ not installed, skipping interface scoring")
-        return {"dockq": float("nan"), "irmsd": float("nan"), "lrmsd": float("nan"), "fnat": float("nan")}
-
+    from DockQ.DockQ import load_PDB, run_on_all_native_interfaces
+    
     with tempfile.NamedTemporaryFile(suffix=".pdb", mode="w", delete=False) as f:
         f.write(pred_pdb_str)
         pred_path = f.name
@@ -818,31 +810,12 @@ def run_benchmark(
 
             try:
                 if cached is None:
-                    # Build chain dicts: prefer AF3 JSON, fall back to GT CIF
-                    chains = None
-                    if pdb_id in af3_inputs:
-                        chains = af3_entry_to_chains(af3_inputs[pdb_id])
-
-                    if not chains:
-                        # Extract from ground truth CIF
-                        gt_path = gt_dir / f"{pdb_id}.cif"
-                        if not gt_path.exists():
-                            logger.warning(f"No AF3 input and no GT CIF for {pdb_id}")
-                            result_row["status"] = "no_input"
-                            category_results.append(result_row)
-                            continue
-                        gt_for_chains = parse_mmcif(gt_path, max_resolution=float("inf"))
-                        if gt_for_chains is None:
-                            result_row["status"] = "gt_parse_failed"
-                            category_results.append(result_row)
-                            continue
-                        chains = structure_to_chains(gt_for_chains)
-
-                    if not chains:
-                        logger.warning(f"No chains for {pdb_id}")
-                        result_row["status"] = "no_chains"
-                        category_results.append(result_row)
-                        continue
+                    # Extract from ground truth CIF
+                    gt_path = gt_dir / f"{pdb_id}.cif"
+                    assert gt_path.exists(), f"Ground truth not found for {pdb_id}"
+                    gt_for_chains = parse_mmcif(gt_path, max_resolution=float("inf"))
+                    assert gt_for_chains is not None, f"Failed to parse ground truth: {gt_path}"
+                    chains = structure_to_chains(gt_for_chains)
 
                     # Predict
                     pred_result = predict_target(
@@ -886,26 +859,13 @@ def run_benchmark(
                 gt_path = gt_dir / f"{pdb_id}.cif"
                 if not gt_path.exists():
                     gt_path = gt_dir / f"{pdb_id}.cif.gz"
-                if not gt_path.exists():
-                    logger.warning(f"Ground truth not found for {pdb_id}")
-                    result_row["status"] = "no_gt"
-                    category_results.append(result_row)
-                    continue
-
+                assert gt_path.exists(), f"Ground truth not found for {pdb_id}"
                 gt_structure = parse_mmcif(gt_path, max_resolution=float("inf"))
-                if gt_structure is None:
-                    logger.warning(f"Failed to parse ground truth: {gt_path}")
-                    result_row["status"] = "gt_parse_failed"
-                    category_results.append(result_row)
-                    continue
+                assert gt_structure is not None, f"Failed to parse ground truth: {gt_path}"
 
                 # Match atoms
                 matched = match_atoms(tokenized, pred_coords_np, gt_structure)
-                if len(matched.pred_coords) == 0:
-                    logger.warning(f"No atoms matched for {pdb_id}")
-                    result_row["status"] = "no_match"
-                    category_results.append(result_row)
-                    continue
+                assert len(matched.pred_coords) > 0, f"No atoms matched for {pdb_id}"
 
                 # Score
                 n_predicted += 1
