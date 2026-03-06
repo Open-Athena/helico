@@ -18,10 +18,12 @@ import torch
 from scipy.spatial.transform import Rotation
 
 from helico.data import (
+    HF_REPO,
     MSAFeatures,
     Structure,
     TarIndex,
     TokenizedStructure,
+    _default_data_dir,
     _processed_dir,
     load_msa_for_chain,
     parse_ccd,
@@ -33,6 +35,9 @@ from helico.train import coords_to_pdb, run_inference
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+
+# HuggingFace path prefix for FoldBench data
+_HF_FOLDBENCH_PREFIX = "benchmarks/FoldBench"
 
 # ============================================================================
 # FoldBench categories (matching actual CSV filenames in BEAM-Labs/FoldBench)
@@ -59,6 +64,58 @@ ALL_CATEGORIES = INTERFACE_CATEGORIES + MONOMER_CATEGORIES
 # ============================================================================
 # Data loading
 # ============================================================================
+
+def _default_foldbench_dir() -> Path:
+    """Default local path for FoldBench data."""
+    return _default_data_dir() / "benchmarks" / "FoldBench"
+
+
+def download_foldbench(data_dir: Path | None = None) -> Path:
+    """Download FoldBench data from HuggingFace if not already present.
+
+    Downloads targets/ CSVs, examples/alphafold3_inputs.json, and
+    examples/ground_truths/*.cif.gz into the local cache.
+
+    Returns the local FoldBench directory path.
+    """
+    from huggingface_hub import snapshot_download
+
+    foldbench_dir = data_dir or _default_foldbench_dir()
+
+    # Check if already downloaded (targets dir with CSVs is the indicator)
+    targets_dir = foldbench_dir / "targets"
+    gt_dir = foldbench_dir / "examples" / "ground_truths"
+    if targets_dir.exists() and any(targets_dir.glob("*.csv")) and gt_dir.exists():
+        logger.info(f"FoldBench data already present at {foldbench_dir}")
+        return foldbench_dir
+
+    logger.info("Downloading FoldBench data from HuggingFace...")
+    hf_data_dir = _default_data_dir()
+    snapshot_download(
+        repo_id=HF_REPO,
+        repo_type="dataset",
+        local_dir=hf_data_dir,
+        allow_patterns=f"{_HF_FOLDBENCH_PREFIX}/**",
+    )
+
+    # snapshot_download puts files at hf_data_dir/benchmarks/FoldBench/...
+    downloaded = hf_data_dir / _HF_FOLDBENCH_PREFIX
+    if not downloaded.exists():
+        raise FileNotFoundError(
+            f"FoldBench download failed — expected data at {downloaded}"
+        )
+
+    logger.info(f"FoldBench data downloaded to {downloaded}")
+    return downloaded
+
+
+def _find_gt_path(gt_dir: Path, pdb_id: str) -> Path:
+    """Find ground truth CIF for a target (.cif.gz)."""
+    p = gt_dir / f"{pdb_id}.cif.gz"
+    if p.exists():
+        return p
+    raise FileNotFoundError(f"Ground truth not found for {pdb_id} in {gt_dir}")
+
 
 @dataclass
 class BenchTarget:
@@ -749,18 +806,19 @@ def run_benchmark(
 
     Directory layout expected:
         foldbench_dir/
-            targets/           # CSV files per category
-            ground_truths/     # CIF files per target
-            alphafold3_inputs.json  # (optional) AF3-format inputs
+            targets/                      # CSV files per category
+            examples/
+                ground_truths/            # .cif.gz files per target
+                alphafold3_inputs.json    # (optional) AF3-format inputs
     """
     from tqdm import tqdm
 
     targets_dir = foldbench_dir / "targets"
-    gt_dir = foldbench_dir / "ground_truths"
+    gt_dir = foldbench_dir / "examples" / "ground_truths"
 
     # Load AF3 inputs if available
     af3_inputs: dict[str, dict] = {}
-    af3_json_path = foldbench_dir / "alphafold3_inputs.json"
+    af3_json_path = foldbench_dir / "examples" / "alphafold3_inputs.json"
     if af3_json_path.exists():
         af3_inputs = load_af3_inputs(af3_json_path)
         logger.info(f"Loaded {len(af3_inputs)} AF3 inputs from {af3_json_path}")
@@ -811,8 +869,7 @@ def run_benchmark(
             try:
                 if cached is None:
                     # Extract from ground truth CIF
-                    gt_path = gt_dir / f"{pdb_id}.cif"
-                    assert gt_path.exists(), f"Ground truth not found for {pdb_id}"
+                    gt_path = _find_gt_path(gt_dir, pdb_id)
                     gt_for_chains = parse_mmcif(gt_path, max_resolution=float("inf"))
                     assert gt_for_chains is not None, f"Failed to parse ground truth: {gt_path}"
                     chains = structure_to_chains(gt_for_chains)
@@ -856,10 +913,7 @@ def run_benchmark(
                     torch.cuda.empty_cache()
 
                 # Load ground truth for scoring
-                gt_path = gt_dir / f"{pdb_id}.cif"
-                if not gt_path.exists():
-                    gt_path = gt_dir / f"{pdb_id}.cif.gz"
-                assert gt_path.exists(), f"Ground truth not found for {pdb_id}"
+                gt_path = _find_gt_path(gt_dir, pdb_id)
                 gt_structure = parse_mmcif(gt_path, max_resolution=float("inf"))
                 assert gt_structure is not None, f"Failed to parse ground truth: {gt_path}"
 
@@ -954,7 +1008,8 @@ def main():
     )
     parser.add_argument("--checkpoint", type=str, default=None, help="Path to Helico checkpoint")
     parser.add_argument("--protenix", type=str, default=None, help="Path to Protenix checkpoint (.pt)")
-    parser.add_argument("--foldbench-dir", type=str, required=True, help="Path to FoldBench directory")
+    parser.add_argument("--foldbench-dir", type=str, default=None,
+                        help="Path to FoldBench directory (auto-downloads from HuggingFace if not specified)")
     parser.add_argument("--output-dir", type=str, required=True, help="Output directory for results")
     parser.add_argument("--categories", type=str, default=None,
                         help="Comma-separated category names (default: all)")
@@ -1029,10 +1084,16 @@ def main():
 
     msa_dir = Path(args.msa_dir) if args.msa_dir else None
 
+    # Resolve FoldBench directory (auto-download if not specified)
+    if args.foldbench_dir:
+        foldbench_dir = Path(args.foldbench_dir)
+    else:
+        foldbench_dir = download_foldbench()
+
     # Run benchmark
     run_benchmark(
         model=model,
-        foldbench_dir=Path(args.foldbench_dir),
+        foldbench_dir=foldbench_dir,
         output_dir=Path(args.output_dir),
         ccd=ccd,
         categories=categories,

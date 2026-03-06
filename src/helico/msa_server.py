@@ -141,10 +141,13 @@ def run_mmseqs2(
         if out.get("status") in ("ERROR", "MAINTENANCE"):
             raise RuntimeError(f"MSA server error: {out.get('status')}")
 
-        # Poll for completion
+        # Poll for completion (timeout after 30 min)
         job_id = out["id"]
         logger.info(f"MSA job submitted (id={job_id}), waiting for completion...")
+        poll_start = time.time()
         while out.get("status") in ["UNKNOWN", "RUNNING", "PENDING"]:
+            if time.time() - poll_start > 1800:
+                raise RuntimeError(f"MSA server timed out after 30 min (job {job_id})")
             time.sleep(5 + random.randint(0, 5))
             out = poll_status(job_id)
 

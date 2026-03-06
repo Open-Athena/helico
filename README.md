@@ -199,88 +199,48 @@ uv pip install -e ".[bench]"
 
 This adds `tmtools` (TM-score), `DockQ` (interface scoring), and `tqdm`.
 
-### Download FoldBench Data
+### FoldBench Data
 
-```bash
-# Clone the FoldBench repository
-git clone https://github.com/BEAM-Labs/FoldBench.git
-cd FoldBench
+FoldBench data (target CSVs, ground truth structures, AF3 inputs) is hosted on HuggingFace at [`timodonnell/helico-data`](https://huggingface.co/datasets/timodonnell/helico-data/tree/main/benchmarks/FoldBench) and **auto-downloads** on first run. No manual setup is needed.
 
-# Download ground truth structures (1.06 GB tar from Google Drive)
-pip install gdown
-gdown 17KdWDXKATaeHF6inPxhPHIRuIzeqiJxS -O ground_truths.tar
-tar xf ground_truths.tar
-```
-
-After extraction, the directory layout should be:
-
-```
-FoldBench/
-  targets/                              # 9 CSV files (one per category)
-    interface_protein_protein.csv
-    interface_antibody_antigen.csv
-    interface_protein_peptide.csv
-    interface_protein_ligand.csv
-    interface_protein_dna.csv
-    interface_protein_rna.csv
-    monomer_protein.csv
-    monomer_rna.csv
-    monomer_dna.csv
-  examples/
-    alphafold3_inputs.json              # AF3-style input JSON (4 example targets)
-  ground_truth_20250520/                # Ground truth CIF files
-    *.cif                               # One CIF per target assembly
-```
-
-### Download CCD (if not already available)
-
-The Chemical Component Dictionary is needed for tokenization. It auto-downloads from HuggingFace on first use. To download it explicitly:
-
-```bash
-helico-download --subset ccd-only
-```
-
-Or if you have a custom data location:
-
-```bash
-helico-download --subset ccd-only --data-dir /path/to/data
-```
+Data is cached at `~/.cache/helico/data/benchmarks/FoldBench/` (or `$HELICO_DATA_DIR/benchmarks/FoldBench/`).
 
 ### Running the Benchmark
 
 ```bash
-# Run on all categories with Protenix weights (CCD auto-downloads if needed)
+# Run on all categories with Protenix weights (data auto-downloads)
 helico-bench \
     --protenix checkpoints/protenix_base_default_v1.0.0.pt \
-    --foldbench-dir /path/to/FoldBench \
     --output-dir bench_results/
 
 # Run a single category
 helico-bench \
     --protenix checkpoints/protenix_base_default_v1.0.0.pt \
-    --foldbench-dir /path/to/FoldBench \
     --output-dir bench_results/ \
     --categories monomer_protein
 
 # Run multiple specific categories
 helico-bench \
     --protenix checkpoints/protenix_base_default_v1.0.0.pt \
-    --foldbench-dir /path/to/FoldBench \
     --output-dir bench_results/ \
     --categories monomer_protein,interface_protein_ligand
 
 # With a Helico checkpoint instead of Protenix
 helico-bench \
     --checkpoint checkpoints/final.pt \
-    --foldbench-dir /path/to/FoldBench \
     --output-dir bench_results/
 
 # Resume a partially completed run (reuses cached predictions)
 helico-bench \
     --protenix checkpoints/protenix_base_default_v1.0.0.pt \
-    --foldbench-dir /path/to/FoldBench \
     --output-dir bench_results/ \
     --resume
+
+# Use a local FoldBench directory instead of auto-download
+helico-bench \
+    --protenix checkpoints/protenix_base_default_v1.0.0.pt \
+    --foldbench-dir /path/to/FoldBench \
+    --output-dir bench_results/
 ```
 
 ### Input Sources
