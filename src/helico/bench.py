@@ -810,11 +810,19 @@ def run_benchmark(
             examples/
                 ground_truths/            # .cif.gz files per target
                 alphafold3_inputs.json    # (optional) AF3-format inputs
+            foldbench-msas/               # Pre-computed MSAs ({sha256}.a3m.gz)
     """
     from tqdm import tqdm
 
     targets_dir = foldbench_dir / "targets"
     gt_dir = foldbench_dir / "examples" / "ground_truths"
+
+    # Use bundled MSAs if no MSA source specified
+    if msa_dir is None and msa_tar_indices is None and msa_server_url is None:
+        bundled_msa_dir = foldbench_dir / "foldbench-msas"
+        if bundled_msa_dir.exists():
+            msa_dir = bundled_msa_dir
+            logger.info(f"Using bundled FoldBench MSAs from {msa_dir}")
 
     # Load AF3 inputs if available
     af3_inputs: dict[str, dict] = {}
