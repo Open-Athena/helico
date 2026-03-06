@@ -201,7 +201,7 @@ This adds `tmtools` (TM-score), `DockQ` (interface scoring), and `tqdm`.
 
 ### FoldBench Data
 
-FoldBench data (target CSVs, ground truth structures, AF3 inputs) is hosted on HuggingFace at [`timodonnell/helico-data`](https://huggingface.co/datasets/timodonnell/helico-data/tree/main/benchmarks/FoldBench) and **auto-downloads** on first run. No manual setup is needed.
+FoldBench data (target CSVs, ground truth structures, AF3 inputs, and pre-computed MSAs) is hosted on HuggingFace at [`timodonnell/helico-data`](https://huggingface.co/datasets/timodonnell/helico-data/tree/main/benchmarks/FoldBench) and **auto-downloads** on first run. No manual setup is needed — MSAs are used automatically.
 
 Data is cached at `~/.cache/helico/data/benchmarks/FoldBench/` (or `$HELICO_DATA_DIR/benchmarks/FoldBench/`).
 
