@@ -18,4 +18,4 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install modal
-      - run: modal run ci.py
+      - run: modal run modal/ci.py
