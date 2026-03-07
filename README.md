@@ -293,6 +293,26 @@ interface_protein_ligand            |  558 |       550 |    12.3% |      0.65 | 
 ==========================================================================================
 ```
 
+### Parallel Benchmark on Modal
+
+For faster runs, `modal/bench.py` fans out predictions across multiple GPU workers on [Modal](https://modal.com). Scoring is done locally after all predictions complete.
+
+```bash
+# Default: 4 H100 workers
+modal run modal/bench.py
+
+# Specific categories
+modal run modal/bench.py --categories monomer_dna
+
+# Resume an interrupted run
+modal run modal/bench.py --resume --output-dir bench_results
+
+# Override worker count or GPU type via environment variables
+HELICO_BENCH_WORKERS=8 HELICO_BENCH_GPU=H100 modal run modal/bench.py
+```
+
+Prediction caches (`predictions/*.pkl`) are compatible between `helico-bench` and `modal/bench.py`, so `--resume` works across both.
+
 
 ## References
 

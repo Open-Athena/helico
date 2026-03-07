@@ -14,9 +14,13 @@ src/helico/
   model.py       All neural network modules in a single file
   data.py        Data pipeline (CCD, mmCIF, tokenizer, MSA, cropping)
   train.py       Training loop, DDP, checkpointing, inference
+  bench.py       FoldBench benchmark scoring and local runner
 tests/
   test_data.py   Integration tests for the data pipeline
   test_model.py  Integration tests for all model components
+modal/
+  ci.py          CI tests on Modal
+  bench.py       Parallel FoldBench benchmark on Modal
 ```
 
 ## Build & Test Commands

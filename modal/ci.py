@@ -1,7 +1,7 @@
 from pathlib import Path
 import modal
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 PROTENIX_URL = "https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_default_v1.0.0.pt"
 
 image = (
