@@ -747,9 +747,9 @@ def write_category_csv(results: list[dict], output_path: Path):
     if not results:
         return
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(results[0].keys())
+    fieldnames = list(dict.fromkeys(k for r in results for k in r))
     with open(output_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, restval="")
         writer.writeheader()
         writer.writerows(results)
 
