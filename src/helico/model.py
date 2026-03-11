@@ -2500,11 +2500,8 @@ class Helico(nn.Module):
         device = batch["token_types"].device
         dtype = ref_charge.dtype
 
-        # restype one-hot (32 dims): remap token_types from Helico order to Protenix order
-        from helico.data import TOKEN_TYPE_TO_RESTYPE
-        remap = torch.tensor(TOKEN_TYPE_TO_RESTYPE, device=device, dtype=torch.long)
-        restype_idx = remap[batch["token_types"].clamp(max=len(remap) - 1)]
-        restype = F.one_hot(restype_idx, 32).to(dtype)
+        # restype one-hot (32 dims): precomputed in data pipeline (handles RNA/DNA correctly)
+        restype = F.one_hot(batch["restype"], 32).to(dtype)
 
         # MSA profile (32 dims, already Protenix 32-class from data pipeline)
         profile = batch.get("msa_profile", torch.zeros(B, N_tok, 32, device=device, dtype=dtype))

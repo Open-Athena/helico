@@ -8,6 +8,7 @@ from pathlib import Path
 
 from helico.data import (
     PROCESSED_DIR,
+    PROTENIX_MSA_GAP,
     CCDComponent,
     LazyHelicoDataset,
     StructureMetadata,
@@ -279,6 +280,132 @@ sequences:
         assert chains[0] == {"type": "protein", "id": "A", "sequence": "MKFLILF"}
         assert chains[1] == {"type": "rna", "id": "B", "sequence": "AUGCCU"}
         assert chains[2] == {"type": "ligand", "id": "C", "ccd": "ATP"}
+
+
+# ============================================================================
+# RNA / DNA / sym_id / ligand feature tests
+# ============================================================================
+
+def _make_nuc_ccd():
+    """Build a fake CCD with RNA, DNA, protein, and ligand entries."""
+    ccd = {}
+    # Protein
+    for comp_id, atoms, elems in [
+        ("ALA", ["N", "CA", "C", "O", "CB"], ["N", "C", "C", "O", "C"]),
+        ("GLY", ["N", "CA", "C", "O"], ["N", "C", "C", "O"]),
+    ]:
+        ccd[comp_id] = _make_fake_ccd_component(comp_id, atoms, elems)
+    # RNA nucleotides
+    nuc_atoms = ["P", "OP1", "OP2", "O5'", "C5'", "C4'", "O4'", "C3'", "O3'",
+                 "C2'", "O2'", "C1'", "N9", "C8", "N7", "C5", "C6", "N1", "C2",
+                 "N3", "C4"]
+    nuc_elems = ["P", "O", "O", "O", "C", "C", "O", "C", "O",
+                 "C", "O", "C", "N", "C", "N", "C", "C", "N", "C",
+                 "N", "C"]
+    for code in ["A", "C", "G", "U"]:
+        ccd[code] = _make_fake_ccd_component(code, nuc_atoms, nuc_elems)
+    # DNA nucleotides (same atoms but without O2')
+    dna_atoms = [a for a in nuc_atoms if a != "O2'"]
+    dna_elems = [e for a, e in zip(nuc_atoms, nuc_elems) if a != "O2'"]
+    for code in ["DA", "DC", "DG", "DT"]:
+        ccd[code] = _make_fake_ccd_component(code, dna_atoms, dna_elems)
+    # Ligand
+    ccd["ATP"] = _make_fake_ccd_component(
+        "ATP",
+        ["PG", "O1G", "O2G", "O3G", "PB", "O1B", "C1'", "N9"],
+        ["P", "O", "O", "O", "P", "O", "C", "N"],
+    )
+    return ccd
+
+
+class TestNucleotideAndSymId:
+    """Tests for RNA/DNA restype, sym_id, and ligand features."""
+
+    def test_rna_restype(self):
+        """RNA tokens should get Protenix restype 21-24, not gap (31)."""
+        ccd = _make_nuc_ccd()
+        chains = [{"type": "rna", "id": "A", "sequence": "AUGC"}]
+        tokenized = tokenize_sequences(chains, ccd)
+        features = tokenized.to_features()
+        restype = features["restype"]
+        # A=21, U=24, G=23, C=22
+        assert restype[0].item() == 21, f"A got {restype[0].item()}"
+        assert restype[1].item() == 24, f"U got {restype[1].item()}"
+        assert restype[2].item() == 23, f"G got {restype[2].item()}"
+        assert restype[3].item() == 22, f"C got {restype[3].item()}"
+        assert (restype != PROTENIX_MSA_GAP).all(), "No RNA token should be gap"
+
+    def test_dna_restype(self):
+        """DNA tokens should get Protenix restype 26-29, not gap (31)."""
+        ccd = _make_nuc_ccd()
+        chains = [{"type": "dna", "id": "A", "sequence": "ATGC"}]
+        tokenized = tokenize_sequences(chains, ccd)
+        features = tokenized.to_features()
+        restype = features["restype"]
+        # DA=26, DT=29, DG=28, DC=27
+        assert restype[0].item() == 26, f"DA got {restype[0].item()}"
+        assert restype[1].item() == 29, f"DT got {restype[1].item()}"
+        assert restype[2].item() == 28, f"DG got {restype[2].item()}"
+        assert restype[3].item() == 27, f"DC got {restype[3].item()}"
+        assert (restype != PROTENIX_MSA_GAP).all(), "No DNA token should be gap"
+
+    def test_sym_id_homo_multimer(self):
+        """Two identical protein chains should get distinct sym_id values."""
+        ccd = _make_nuc_ccd()
+        chains = [
+            {"type": "protein", "id": "A", "sequence": "AG"},
+            {"type": "protein", "id": "B", "sequence": "AG"},
+        ]
+        tokenized = tokenize_sequences(chains, ccd)
+        features = tokenized.to_features()
+        sym_id = features["sym_id"]
+        # Chain A tokens should be sym_id=0, chain B tokens should be sym_id=1
+        assert sym_id[0].item() == 0
+        assert sym_id[1].item() == 0
+        assert sym_id[2].item() == 1
+        assert sym_id[3].item() == 1
+
+    def test_sym_id_hetero(self):
+        """Different-sequence chains get independent sym_id counters."""
+        ccd = _make_nuc_ccd()
+        chains = [
+            {"type": "protein", "id": "A", "sequence": "AG"},
+            {"type": "protein", "id": "B", "sequence": "AA"},
+        ]
+        tokenized = tokenize_sequences(chains, ccd)
+        features = tokenized.to_features()
+        sym_id = features["sym_id"]
+        # Both are sym_id=0 for their respective entities (each entity has one chain)
+        assert sym_id[0].item() == 0
+        assert sym_id[2].item() == 0
+
+    def test_ligand_features(self):
+        """Ligand tokens should exist and have gap restype."""
+        ccd = _make_nuc_ccd()
+        chains = [
+            {"type": "protein", "id": "A", "sequence": "AG"},
+            {"type": "ligand", "id": "B", "ccd": "ATP"},
+        ]
+        tokenized = tokenize_sequences(chains, ccd)
+        features = tokenized.to_features()
+        # 2 protein tokens + 8 ligand tokens = 10
+        assert features["n_tokens"] == 10
+        # Ligand tokens should have gap restype (31)
+        restype = features["restype"]
+        assert (restype[2:] == PROTENIX_MSA_GAP).all()
+        # Protein tokens should not be gap
+        assert (restype[:2] != PROTENIX_MSA_GAP).all()
+
+    def test_protein_restype_unchanged(self):
+        """Protein restype should still map correctly (regression test)."""
+        ccd = _make_nuc_ccd()
+        chains = [{"type": "protein", "id": "A", "sequence": "AG"}]
+        tokenized = tokenize_sequences(chains, ccd)
+        features = tokenized.to_features()
+        restype = features["restype"]
+        # ALA(A) = Protenix index 0, GLY(G) = Protenix index 7
+        assert restype[0].item() == 0, f"ALA got {restype[0].item()}"
+        assert restype[1].item() == 7, f"GLY got {restype[1].item()}"
 
 
 # ============================================================================

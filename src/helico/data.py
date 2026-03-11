@@ -101,6 +101,16 @@ TOKEN_TYPE_TO_RESTYPE = _HELICO_AA_TO_PROTENIX + [PROTENIX_MSA_UNK_PROTEIN]  # i
 # For nucleotides (token_types 21-26) and ligands (27+), map to gap (31) as placeholder
 TOKEN_TYPE_TO_RESTYPE += [PROTENIX_MSA_GAP] * (NUM_TOKEN_TYPES - 21)
 
+# CCD res_name -> Protenix restype index for nucleotides.
+# TOKEN_TYPE_TO_RESTYPE can't distinguish RNA from DNA (both map to gap), so we
+# fix up nucleotide restypes using the token's res_name (CCD code) instead.
+RES_NAME_TO_RESTYPE: dict[str, int] = {
+    # RNA (CCD codes are single letters)
+    "A": 21, "C": 22, "G": 23, "U": 24,
+    # DNA (CCD codes are "DA", "DC", "DG", "DT")
+    "DA": 26, "DC": 27, "DG": 28, "DT": 29,
+}
+
 # Amino acid 3-letter <-> 1-letter mappings
 THREE_TO_ONE = {
     "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C",
@@ -401,6 +411,8 @@ class Structure:
     release_date: str = ""
     method: str = ""
     bioassembly_ops: list[np.ndarray] = field(default_factory=list)  # list of 4x4 transform matrices
+    # Covalent connections from _struct_conn: list of (asym1, seq_id1, comp1, atom1, asym2, seq_id2, comp2, atom2)
+    struct_conn: list[tuple[str, str, str, str, str, str, str, str]] = field(default_factory=list)
 
     @property
     def all_atoms(self) -> list[tuple[str, str, int, Atom]]:
@@ -611,6 +623,32 @@ def parse_mmcif(cif_path: str | Path, max_resolution: float = 9.0) -> Structure 
                     pass
         bioassembly_ops.append(mat)
 
+    # Parse _struct_conn for covalent bonds (COVALE, METALC, DISULF)
+    struct_conn = []
+    conn_types = mmcif_dict.get("_struct_conn.conn_type_id", [])
+    conn_asym1 = mmcif_dict.get("_struct_conn.ptnr1_label_asym_id", [])
+    conn_seq1 = mmcif_dict.get("_struct_conn.ptnr1_label_seq_id", [])
+    conn_comp1 = mmcif_dict.get("_struct_conn.ptnr1_label_comp_id", [])
+    conn_atom1 = mmcif_dict.get("_struct_conn.ptnr1_label_atom_id", [])
+    conn_asym2 = mmcif_dict.get("_struct_conn.ptnr2_label_asym_id", [])
+    conn_seq2 = mmcif_dict.get("_struct_conn.ptnr2_label_seq_id", [])
+    conn_comp2 = mmcif_dict.get("_struct_conn.ptnr2_label_comp_id", [])
+    conn_atom2 = mmcif_dict.get("_struct_conn.ptnr2_label_atom_id", [])
+    for i in range(len(conn_types)):
+        ctype = conn_types[i].upper() if i < len(conn_types) else ""
+        if ctype not in ("COVALE", "METALC", "DISULF"):
+            continue
+        struct_conn.append((
+            conn_asym1[i] if i < len(conn_asym1) else "",
+            conn_seq1[i] if i < len(conn_seq1) else "",
+            conn_comp1[i] if i < len(conn_comp1) else "",
+            conn_atom1[i] if i < len(conn_atom1) else "",
+            conn_asym2[i] if i < len(conn_asym2) else "",
+            conn_seq2[i] if i < len(conn_seq2) else "",
+            conn_comp2[i] if i < len(conn_comp2) else "",
+            conn_atom2[i] if i < len(conn_atom2) else "",
+        ))
+
     # Filter: must have at least one polymer chain with residues
     polymer_chains = [c for c in chains if c.entity_type == "polymer" and len(c.residues) > 0]
     if not polymer_chains:
@@ -623,6 +661,7 @@ def parse_mmcif(cif_path: str | Path, max_resolution: float = 9.0) -> Structure 
         release_date=release_date,
         method=method,
         bioassembly_ops=bioassembly_ops,
+        struct_conn=struct_conn,
     )
 
 
@@ -675,6 +714,7 @@ class TokenizedStructure:
     chain_ids: list[str]          # chain_id per token
     entity_types: list[str]       # entity type per token
     chain_sequences: dict[str, str] = field(default_factory=dict)  # chain_id -> sequence
+    token_bonds: torch.Tensor | None = None  # (N_tok, N_tok) float; 1.0 for covalent bonds
 
     @property
     def n_tokens(self) -> int:
@@ -692,6 +732,15 @@ class TokenizedStructure:
         token_types = torch.tensor([t.token_type for t in self.tokens], dtype=torch.long)
         chain_indices = torch.tensor([t.chain_idx for t in self.tokens], dtype=torch.long)
         res_indices = torch.tensor([t.res_idx for t in self.tokens], dtype=torch.long)
+
+        # Restype: Protenix 32-class index per token.
+        # Start from TOKEN_TYPE_TO_RESTYPE, then fix up nucleotides using res_name
+        # (TOKEN_TYPE_TO_RESTYPE maps all nucleotides/ligands to gap=31).
+        restype = [TOKEN_TYPE_TO_RESTYPE[t.token_type] for t in self.tokens]
+        for i, token in enumerate(self.tokens):
+            if restype[i] == PROTENIX_MSA_GAP:
+                restype[i] = RES_NAME_TO_RESTYPE.get(token.res_name, PROTENIX_MSA_GAP)
+        restype = torch.tensor(restype, dtype=torch.long)
 
         # Relative position encoding (within each chain)
         rel_pos = torch.zeros(n_tok, dtype=torch.long)
@@ -801,8 +850,9 @@ class TokenizedStructure:
         entity_id = torch.tensor([t.entity_id for t in self.tokens], dtype=torch.long)
         sym_id = torch.tensor([t.sym_id for t in self.tokens], dtype=torch.long)
 
-        return {
+        result = {
             "token_types": token_types,            # (N_tok,)
+            "restype": restype,                      # (N_tok,) Protenix 32-class index
             "chain_indices": chain_indices,          # (N_tok,)
             "res_indices": res_indices,              # (N_tok,)
             "rel_pos": rel_pos,                      # (N_tok,)
@@ -823,6 +873,9 @@ class TokenizedStructure:
             "n_tokens": n_tok,
             "n_atoms": total_atoms,
         }
+        if self.token_bonds is not None:
+            result["token_bonds"] = self.token_bonds
+        return result
 
 
 def tokenize_structure(
@@ -840,6 +893,11 @@ def tokenize_structure(
     entity_types: list[str] = []
     res_counter = 0
     residue_uid_counter = 0  # groups atoms by residue for ref_space_uid
+
+    # Mapping for token_bonds: (asym_id, seq_id_str) → token index for polymers,
+    # (asym_id, seq_id_str, atom_name) → token index for ligands (one token per atom)
+    residue_to_token: dict[tuple[str, str], int] = {}
+    atom_to_token_bond: dict[tuple[str, str, str], int] = {}
 
     # Build entity_id mapping: chains with the same sequence share an entity_id
     seq_to_entity: dict[str, int] = {}
@@ -913,6 +971,10 @@ def tokenize_structure(
                 ))
                 chain_ids.append(chain.chain_id)
                 entity_types.append("protein")
+                tok_idx = len(tokens) - 1
+                residue_to_token[(chain.chain_id, str(res.seq_id))] = tok_idx
+                for aname in atom_names:
+                    atom_to_token_bond[(chain.chain_id, str(res.seq_id), aname)] = tok_idx
                 res_counter += 1
                 residue_uid_counter += 1
 
@@ -960,6 +1022,10 @@ def tokenize_structure(
                 ))
                 chain_ids.append(chain.chain_id)
                 entity_types.append("nucleotide")
+                tok_idx = len(tokens) - 1
+                residue_to_token[(chain.chain_id, str(res.seq_id))] = tok_idx
+                for aname in atom_names:
+                    atom_to_token_bond[(chain.chain_id, str(res.seq_id), aname)] = tok_idx
                 res_counter += 1
                 residue_uid_counter += 1
 
@@ -1017,7 +1083,39 @@ def tokenize_structure(
                     ))
                     chain_ids.append(chain.chain_id)
                     entity_types.append("ligand")
+                    tok_idx = len(tokens) - 1
+                    atom_to_token_bond[(chain.chain_id, str(res.seq_id), atom.name)] = tok_idx
+                    # Also map residue for ligands (first atom wins; others reachable via atom key)
+                    if (chain.chain_id, str(res.seq_id)) not in residue_to_token:
+                        residue_to_token[(chain.chain_id, str(res.seq_id))] = tok_idx
                     res_counter += 1
+
+    # Compute sym_id: per-entity counter so homo-multimer chains get distinct sym_ids
+    entity_sym_counter: dict[int, int] = {}
+    chain_sym: dict[str, int] = {}
+    for token, cid in zip(tokens, chain_ids):
+        if cid not in chain_sym:
+            eid = token.entity_id
+            chain_sym[cid] = entity_sym_counter.get(eid, 0)
+            entity_sym_counter[eid] = entity_sym_counter.get(eid, 0) + 1
+        token.sym_id = chain_sym[cid]
+
+    # Compute token_bonds from _struct_conn (covalent/metallic/disulfide bonds)
+    n_tokens = len(tokens)
+    token_bonds_tensor = None
+    if structure.struct_conn:
+        token_bonds_tensor = torch.zeros(n_tokens, n_tokens)
+        for asym1, seq1, _comp1, atom1, asym2, seq2, _comp2, atom2 in structure.struct_conn:
+            # Try atom-level match first (needed for ligand per-atom tokens)
+            ti = atom_to_token_bond.get((asym1, seq1, atom1))
+            tj = atom_to_token_bond.get((asym2, seq2, atom2))
+            if ti is None:
+                ti = residue_to_token.get((asym1, seq1))
+            if tj is None:
+                tj = residue_to_token.get((asym2, seq2))
+            if ti is not None and tj is not None and ti != tj:
+                token_bonds_tensor[ti, tj] = 1.0
+                token_bonds_tensor[tj, ti] = 1.0
 
     chain_sequences = {c.chain_id: c.sequence for c in structure.chains if c.sequence}
 
@@ -1027,6 +1125,7 @@ def tokenize_structure(
         chain_ids=chain_ids,
         entity_types=entity_types,
         chain_sequences=chain_sequences,
+        token_bonds=token_bonds_tensor,
     )
 
 
@@ -1216,6 +1315,16 @@ def tokenize_sequences(
                 chain_ids.append(chain_id)
                 entity_types.append("ligand")
                 res_counter += 1
+
+    # Compute sym_id: per-entity counter so homo-multimer chains get distinct sym_ids
+    entity_sym_counter: dict[int, int] = {}
+    chain_sym: dict[str, int] = {}
+    for token, cid in zip(tokens, chain_ids):
+        if cid not in chain_sym:
+            eid = token.entity_id
+            chain_sym[cid] = entity_sym_counter.get(eid, 0)
+            entity_sym_counter[eid] = entity_sym_counter.get(eid, 0) + 1
+        token.sym_id = chain_sym[cid]
 
     return TokenizedStructure(
         pdb_id="PREDICT",
@@ -1730,6 +1839,7 @@ def _subset_features(
 
     result = {
         "token_types": features["token_types"][token_indices],
+        "restype": features["restype"][token_indices],
         "chain_indices": features["chain_indices"][token_indices],
         "res_indices": features["res_indices"][token_indices],
         "rel_pos": features["rel_pos"][token_indices],
@@ -1746,6 +1856,10 @@ def _subset_features(
         "n_tokens": n_new,
         "n_atoms": atom_mask.sum().item(),
     }
+
+    # token_bonds: (N_tok, N_tok) pair tensor
+    if "token_bonds" in features:
+        result["token_bonds"] = features["token_bonds"][token_indices][:, token_indices]
 
     # Atom-level optional features
     if "ref_space_uid" in features:
@@ -1840,7 +1954,7 @@ def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
     result: dict[str, torch.Tensor] = {}
 
     # Token-level tensors: pad to max_tokens
-    for key in ["token_types", "chain_indices", "res_indices", "rel_pos", "token_index", "entity_id", "sym_id", "atoms_per_token", "rep_atom_idx", "has_frame"]:
+    for key in ["token_types", "restype", "chain_indices", "res_indices", "rel_pos", "token_index", "entity_id", "sym_id", "atoms_per_token", "rep_atom_idx", "has_frame"]:
         tensors = []
         for b in batch:
             t = b[key]
@@ -1860,6 +1974,21 @@ def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
             t = torch.nn.functional.pad(t, (0, pad, 0, pad))
         chain_same_list.append(t)
     result["chain_same"] = torch.stack(chain_same_list)
+
+    # token_bonds: (N_tok, N_tok) pair tensor, optional
+    if any("token_bonds" in b for b in batch):
+        tb_list = []
+        for b in batch:
+            if "token_bonds" in b:
+                t = b["token_bonds"]
+            else:
+                t = torch.zeros(b["n_tokens"], b["n_tokens"])
+            n = t.shape[0]
+            pad = max_tokens - n
+            if pad > 0:
+                t = torch.nn.functional.pad(t, (0, pad, 0, pad))
+            tb_list.append(t)
+        result["token_bonds"] = torch.stack(tb_list)
 
     # Atom-level tensors: pad to max_atoms
     for key in ["atom_coords", "ref_coords", "atom_name_chars"]:
@@ -2070,6 +2199,7 @@ def make_synthetic_batch(
 
     batch = {
         "token_types": torch.randint(0, NUM_TOKEN_TYPES, (batch_size, n_tokens), device=device),
+        "restype": torch.randint(0, PROTENIX_NUM_MSA_CLASSES, (batch_size, n_tokens), device=device),
         "chain_indices": torch.zeros(batch_size, n_tokens, dtype=torch.long, device=device),
         "res_indices": torch.arange(n_tokens, device=device).unsqueeze(0).expand(batch_size, -1),
         "rel_pos": torch.arange(n_tokens, device=device).unsqueeze(0).expand(batch_size, -1),
