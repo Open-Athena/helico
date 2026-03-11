@@ -86,9 +86,9 @@ NUM_TOKEN_TYPES = 28 + UNK_ELEM_IDX + 1  # protein + nucleotide + per-element li
 PROTENIX_MSA_AAS = "ARNDCQEGHILKMFPSTWYV"  # 3-letter alphabetical order
 PROTENIX_MSA_AA_MAP = {aa: i for i, aa in enumerate(PROTENIX_MSA_AAS)}
 PROTENIX_MSA_UNK_PROTEIN = 20
-PROTENIX_MSA_RNA = {c: 21 + i for i, c in enumerate("ACGU")}  # 21-24
+PROTENIX_MSA_RNA = {c: 21 + i for i, c in enumerate("AGCU")}  # 21-24 (purines first)
 PROTENIX_MSA_UNK_RNA = 25
-PROTENIX_MSA_DNA = {c: 26 + i for i, c in enumerate("ACGT")}  # 26-29
+PROTENIX_MSA_DNA = {c: 26 + i for i, c in enumerate("AGCT")}  # 26-29 (purines first)
 PROTENIX_MSA_UNK_DNA = 30
 PROTENIX_MSA_GAP = 31
 PROTENIX_NUM_MSA_CLASSES = 32
@@ -105,10 +105,10 @@ TOKEN_TYPE_TO_RESTYPE += [PROTENIX_MSA_GAP] * (NUM_TOKEN_TYPES - 21)
 # TOKEN_TYPE_TO_RESTYPE can't distinguish RNA from DNA (both map to gap), so we
 # fix up nucleotide restypes using the token's res_name (CCD code) instead.
 RES_NAME_TO_RESTYPE: dict[str, int] = {
-    # RNA (CCD codes are single letters)
-    "A": 21, "C": 22, "G": 23, "U": 24,
-    # DNA (CCD codes are "DA", "DC", "DG", "DT")
-    "DA": 26, "DC": 27, "DG": 28, "DT": 29,
+    # RNA — purines first: A=21, G=22, C=23, U=24 (matching Protenix)
+    "A": 21, "G": 22, "C": 23, "U": 24,
+    # DNA — purines first: DA=26, DG=27, DC=28, DT=29 (matching Protenix)
+    "DA": 26, "DG": 27, "DC": 28, "DT": 29,
 }
 
 # Amino acid 3-letter <-> 1-letter mappings
@@ -152,6 +152,13 @@ class CCDComponent:
     @property
     def n_heavy_atoms(self) -> int:
         return sum(1 for e in self.atom_elements if e != "H")
+
+    @property
+    def non_leaving_heavy_atom_mask(self) -> list[bool]:
+        """Mask for heavy atoms that are NOT leaving atoms (e.g. OP3, OXT)."""
+        if self.atom_leaving:
+            return [e != "H" and not lv for e, lv in zip(self.atom_elements, self.atom_leaving)]
+        return self.heavy_atom_mask
 
 
 def parse_ccd(cif_path: Path | None = None, cache_path: Path | None = None) -> dict[str, CCDComponent]:
@@ -995,12 +1002,13 @@ def tokenize_structure(
                     comp = ccd[res.name]
                     ref_c = comp.ideal_coords
                     if ref_c is not None:
-                        mask = comp.heavy_atom_mask
+                        # Use non_leaving mask for nucleotides (removes OP3 etc.)
+                        mask = comp.non_leaving_heavy_atom_mask
                         ref_c = ref_c[mask] if len(mask) == len(ref_c) else None
                         if ref_c is not None and len(ref_c) != len(heavy_atoms):
                             ref_c = None
                     if comp.atom_charges:
-                        mask = comp.heavy_atom_mask
+                        mask = comp.non_leaving_heavy_atom_mask
                         atom_charges = [c for c, m in zip(comp.atom_charges, mask) if m]
                         if len(atom_charges) != len(heavy_atoms):
                             atom_charges = None
@@ -1239,8 +1247,9 @@ def tokenize_sequences(
 
                 if ccd_code in ccd:
                     comp = ccd[ccd_code]
-                    mask = comp.heavy_atom_mask
-                    atom_names = comp.heavy_atom_names
+                    # Use non_leaving mask for nucleotides (removes OP3 etc.)
+                    mask = comp.non_leaving_heavy_atom_mask
+                    atom_names = [n for n, m in zip(comp.atom_names, mask) if m]
                     atom_elements = [e for e, m in zip(comp.atom_elements, mask) if m]
                     atom_charges = [c for c, m in zip(comp.atom_charges, mask) if m] if comp.atom_charges else None
                     if comp.ideal_coords is not None and len(mask) == len(comp.ideal_coords):

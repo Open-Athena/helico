@@ -183,6 +183,7 @@ def run_bench(
     resume: bool = False,
     max_tokens: int = 2048,
     n_cycles: int = 10,
+    cutoff_date: str = "2024-01-01",
 ):
     import logging
     import pickle
@@ -195,11 +196,12 @@ def run_bench(
     )
     logger = logging.getLogger(__name__)
 
-    from helico.data import parse_mmcif
     from helico.bench import (
         INTERFACE_CATEGORIES,
         _find_gt_path,
+        _pdb_code,
         download_foldbench,
+        fetch_release_dates,
         load_targets,
         match_atoms,
         print_summary,
@@ -221,6 +223,19 @@ def run_bench(
     if categories:
         cat_list = [c.strip() for c in categories.split(",")]
         all_targets = {k: v for k, v in all_targets.items() if k in cat_list}
+
+    # Filter targets by release date
+    if cutoff_date:
+        logger.info(f"Filtering targets with release date > {cutoff_date}")
+        all_pdb_codes = [_pdb_code(t.pdb_id) for ts in all_targets.values() for t in ts]
+        release_dates = fetch_release_dates(all_pdb_codes)
+        filtered_targets = {}
+        for category, targets in all_targets.items():
+            kept = [t for t in targets
+                    if release_dates.get(_pdb_code(t.pdb_id), "") > cutoff_date]
+            logger.info(f"  {category}: {len(kept)}/{len(targets)} targets after date filter")
+            filtered_targets[category] = kept
+        all_targets = filtered_targets
 
     output_path = Path(output_dir)
     predictions_dir = output_path / "predictions"

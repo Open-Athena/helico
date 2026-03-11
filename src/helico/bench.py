@@ -10,6 +10,7 @@ import os
 import pickle
 import tempfile
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -146,6 +147,52 @@ def load_targets(targets_dir: Path) -> dict[str, list[BenchTarget]]:
         results[category] = targets
         logger.info(f"Loaded {len(targets)} targets for {category}")
     return results
+
+
+def _pdb_code(target_id: str) -> str:
+    """Extract 4-character PDB code from target ID like '8ayg-assembly1'."""
+    return target_id.split("-")[0].lower()
+
+
+def fetch_release_dates(pdb_ids: list[str], cache_dir: Path | None = None) -> dict[str, str]:
+    """Fetch release dates from RCSB PDB API for a list of PDB codes.
+
+    Returns dict mapping PDB code -> release date string (YYYY-MM-DD).
+    Results are cached to a JSON file in cache_dir to avoid repeated API calls.
+    """
+    # Deduplicate
+    unique_ids = sorted(set(pdb_ids))
+    result: dict[str, str] = {}
+
+    # Try loading from cache
+    cache_path = (cache_dir or _default_data_dir()) / "pdb_release_dates.json"
+    if cache_path.exists():
+        with open(cache_path) as f:
+            result = json.load(f)
+
+    # Find missing IDs
+    missing = [pid for pid in unique_ids if pid not in result]
+    if not missing:
+        return result
+
+    # Fetch missing dates one at a time from RCSB REST API
+    logger.info(f"Fetching release dates for {len(missing)} PDB entries from RCSB...")
+    for pid in missing:
+        try:
+            url = f"https://data.rcsb.org/rest/v1/core/entry/{pid}"
+            data = json.loads(urllib.request.urlopen(url, timeout=10).read())
+            date_str = data.get("rcsb_accession_info", {}).get("initial_release_date", "")
+            result[pid] = date_str[:10]  # "2023-09-13T00:00:00+0000" -> "2023-09-13"
+        except Exception:
+            logger.warning(f"Failed to fetch release date for {pid}")
+            result[pid] = ""
+
+    # Save cache
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cache_path, "w") as f:
+        json.dump(result, f, indent=2)
+
+    return result
 
 
 def load_af3_inputs(json_path: Path) -> dict[str, dict]:
@@ -801,6 +848,7 @@ def run_benchmark(
     msa_dir: Path | None = None,
     msa_server_url: str | None = None,
     n_cycles: int | None = None,
+    cutoff_date: str | None = None,
 ):
     """Run the full FoldBench benchmark.
 
@@ -835,6 +883,19 @@ def run_benchmark(
 
     if categories:
         all_targets = {k: v for k, v in all_targets.items() if k in categories}
+
+    # Filter targets by release date if cutoff specified
+    if cutoff_date:
+        logger.info(f"Filtering targets with release date > {cutoff_date}")
+        all_pdb_codes = [_pdb_code(t.pdb_id) for ts in all_targets.values() for t in ts]
+        release_dates = fetch_release_dates(all_pdb_codes)
+        filtered_targets: dict[str, list[BenchTarget]] = {}
+        for category, targets in all_targets.items():
+            kept = [t for t in targets
+                    if release_dates.get(_pdb_code(t.pdb_id), "") > cutoff_date]
+            logger.info(f"  {category}: {len(kept)}/{len(targets)} targets after date filter")
+            filtered_targets[category] = kept
+        all_targets = filtered_targets
 
     results_dir = output_dir / "results"
     predictions_dir = output_dir / "predictions"
@@ -1035,6 +1096,8 @@ def main():
                         help="MMseqs2 server URL (default: https://api.colabfold.com)")
     parser.add_argument("--n-cycles", type=int, default=10,
                         help="Number of recycling cycles (default: 10, matching Protenix)")
+    parser.add_argument("--cutoff-date", type=str, default="2024-01-01",
+                        help="Only include targets released after this date, YYYY-MM-DD (default: 2024-01-01)")
     args = parser.parse_args()
 
     if args.checkpoint is None and args.protenix is None:
@@ -1112,6 +1175,7 @@ def main():
         msa_dir=msa_dir,
         msa_server_url=args.msa_server_url if args.use_msa_server else None,
         n_cycles=args.n_cycles,
+        cutoff_date=args.cutoff_date,
     )
 
 

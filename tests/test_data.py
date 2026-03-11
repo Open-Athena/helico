@@ -328,11 +328,11 @@ class TestNucleotideAndSymId:
         tokenized = tokenize_sequences(chains, ccd)
         features = tokenized.to_features()
         restype = features["restype"]
-        # A=21, U=24, G=23, C=22
+        # Purines first: A=21, G=22, C=23, U=24
         assert restype[0].item() == 21, f"A got {restype[0].item()}"
         assert restype[1].item() == 24, f"U got {restype[1].item()}"
-        assert restype[2].item() == 23, f"G got {restype[2].item()}"
-        assert restype[3].item() == 22, f"C got {restype[3].item()}"
+        assert restype[2].item() == 22, f"G got {restype[2].item()}"
+        assert restype[3].item() == 23, f"C got {restype[3].item()}"
         assert (restype != PROTENIX_MSA_GAP).all(), "No RNA token should be gap"
 
     def test_dna_restype(self):
@@ -342,11 +342,11 @@ class TestNucleotideAndSymId:
         tokenized = tokenize_sequences(chains, ccd)
         features = tokenized.to_features()
         restype = features["restype"]
-        # DA=26, DT=29, DG=28, DC=27
+        # Purines first: DA=26, DG=27, DC=28, DT=29
         assert restype[0].item() == 26, f"DA got {restype[0].item()}"
         assert restype[1].item() == 29, f"DT got {restype[1].item()}"
-        assert restype[2].item() == 28, f"DG got {restype[2].item()}"
-        assert restype[3].item() == 27, f"DC got {restype[3].item()}"
+        assert restype[2].item() == 27, f"DG got {restype[2].item()}"
+        assert restype[3].item() == 28, f"DC got {restype[3].item()}"
         assert (restype != PROTENIX_MSA_GAP).all(), "No DNA token should be gap"
 
     def test_sym_id_homo_multimer(self):
