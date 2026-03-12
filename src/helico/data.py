@@ -175,7 +175,12 @@ def parse_ccd(cif_path: Path | None = None, cache_path: Path | None = None) -> d
 
     if cache_path.exists():
         with open(cache_path, "rb") as f:
-            return pickle.load(f)
+            components = pickle.load(f)
+        # Strip CIF quoting from atom names (e.g. "C3'" -> C3')
+        for comp in components.values():
+            comp.atom_names = [n.strip('"') for n in comp.atom_names]
+            comp.bonds = [(a1.strip('"'), a2.strip('"'), o) for a1, a2, o in comp.bonds]
+        return components
 
     # If components.cif is available, parse it directly
     if cif_path.exists():
@@ -321,7 +326,7 @@ def parse_ccd(cif_path: Path | None = None, cache_path: Path | None = None) -> d
                 row = dict(zip(atom_fields, parts))
                 if row.get("comp_id") != current_id:
                     continue
-                current_comp.atom_names.append(row.get("atom_id", ""))
+                current_comp.atom_names.append(row.get("atom_id", "").strip('"'))
                 current_comp.atom_elements.append(row.get("type_symbol", ""))
                 charge_str = row.get("charge", "0")
                 try:
@@ -353,8 +358,8 @@ def parse_ccd(cif_path: Path | None = None, cache_path: Path | None = None) -> d
                 if row.get("comp_id") != current_id:
                     continue
                 current_comp.bonds.append((
-                    row.get("atom_id_1", ""),
-                    row.get("atom_id_2", ""),
+                    row.get("atom_id_1", "").strip('"'),
+                    row.get("atom_id_2", "").strip('"'),
                     row.get("value_order", "SING"),
                 ))
 
