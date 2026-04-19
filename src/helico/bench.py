@@ -343,13 +343,20 @@ def predict_target(
     batch["token_mask"] = torch.ones(1, n_tok, dtype=torch.bool)
     batch["atom_mask"] = torch.ones(1, n_atoms, dtype=torch.bool)
 
-    # MSA features — per protein chain, scattered block-diagonally into token
-    # slots. Previous version loaded MSA for only the first chain and pasted
-    # it at positions 0..L_A, leaving other chains with zero MSA and possibly
-    # overwriting non-protein tokens. That broke every multichain target.
-    from helico.data import PROTENIX_NUM_MSA_CLASSES
+    # MSA features — load raw per-chain MSA, run species-pairing to align
+    # rows across chains by UniProt/UniRef taxonomy, then assemble a single
+    # complex-level MSA. Scatter profile/clusters from combined L_protein
+    # positions into the full n_tok tensor by chain token slots.
+    from helico.data import (
+        PROTENIX_NUM_MSA_CLASSES,
+        RawChainMSA,
+        a3m_to_msa_matrix,
+        assemble_complex_msa_features,
+        get_species_ids,
+        load_raw_msa_for_chain,
+        parse_a3m,
+    )
 
-    # Collect token indices per distinct protein chain (stable order).
     protein_chain_tokens: dict[str, list[int]] = {}
     for t_idx, (cid, etype) in enumerate(
         zip(tokenized.chain_ids, tokenized.entity_types)
@@ -358,35 +365,32 @@ def predict_target(
             continue
         protein_chain_tokens.setdefault(cid, []).append(t_idx)
 
-    chain_msa: dict[str, "MSAFeatures"] = {}
+    chain_raws: dict[str, "RawChainMSA"] = {}
     if msa_features is not None:
-        # Caller provided pre-computed MSA; assume it's for the first chain
-        # (legacy interface for tests / single-chain predictions).
-        first_cid = next(iter(protein_chain_tokens), None)
-        if first_cid is not None:
-            chain_msa[first_cid] = msa_features
+        # Legacy: caller provided already-computed features (single chain).
+        # Fall through to scatter-by-chain below via chain_msa path.
+        pass
     elif msa_tar_indices or msa_dir:
         for cid in protein_chain_tokens:
             seq = tokenized.chain_sequences.get(cid, "")
             if not seq:
                 continue
-            feat = None
+            raw = None
             for tar_idx in (msa_tar_indices or []):
-                feat = load_msa_for_chain(
+                raw = load_raw_msa_for_chain(
                     tokenized.pdb_id, cid, sequence=seq, tar_index=tar_idx,
                 )
-                if feat is not None:
+                if raw is not None:
                     break
-            if feat is None and msa_dir:
-                feat = load_msa_for_chain(
+            if raw is None and msa_dir:
+                raw = load_raw_msa_for_chain(
                     tokenized.pdb_id, cid, sequence=seq, msa_dir=msa_dir,
                 )
-            if feat is not None:
-                chain_msa[cid] = feat
+            if raw is not None:
+                chain_raws[cid] = raw
 
-    if not chain_msa and msa_server_url:
+    if not chain_raws and msa_features is None and msa_server_url:
         from helico.msa_server import run_mmseqs2
-        from helico.data import parse_a3m, a3m_to_msa_matrix, compute_msa_features
         cache_dir = msa_cache_dir or Path("msa_cache")
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_name = target_name or tokenized.pdb_id
@@ -401,46 +405,71 @@ def predict_target(
                     host_url=msa_server_url,
                 )
                 if a3m_lines and a3m_lines[0].strip():
-                    seqs, _ = parse_a3m(a3m_lines[0])
+                    seqs, descs = parse_a3m(a3m_lines[0])
                     if seqs:
-                        msa, dels = a3m_to_msa_matrix(seqs)
-                        chain_msa[cid] = compute_msa_features(msa, dels)
+                        msa_arr, dels = a3m_to_msa_matrix(seqs)
+                        chain_raws[cid] = RawChainMSA(
+                            msa=msa_arr, deletion_matrix=dels,
+                            species_ids=get_species_ids(descs),
+                        )
             except Exception as e:
                 logger.warning(f"MSA server error for {tokenized.pdb_id} chain {cid}: {e}")
 
-    if chain_msa:
-        logger.debug(
-            f"MSA loaded for {len(chain_msa)}/{len(protein_chain_tokens)} protein chains"
-        )
-        # n_seqs on the struct is the raw MSA depth; cluster_msa is pre-clustered
-        # to shape (n_clusters, L). Use the clustered count for the S dimension.
-        s_total = sum(int(feat.cluster_msa.shape[0]) for feat in chain_msa.values())
-        profile = torch.zeros(n_tok, PROTENIX_NUM_MSA_CLASSES)
-        cluster_msa = torch.zeros(s_total, n_tok, dtype=torch.long)
-        cluster_profile = torch.zeros(s_total, n_tok, PROTENIX_NUM_MSA_CLASSES)
-        deletion_mean = torch.zeros(n_tok)
-        cluster_deletion_mean = torch.zeros(s_total, n_tok)
+    if chain_raws or msa_features is not None:
+        if msa_features is not None:
+            # Legacy path: use pre-computed features for the first chain.
+            first_cid = next(iter(protein_chain_tokens), None)
+            assembled = msa_features
+            ordered_chains = [first_cid] if first_cid is not None else []
+            lengths = [msa_features.length]
+        else:
+            ordered_chains = [cid for cid in protein_chain_tokens if cid in chain_raws]
+            raws_list = [chain_raws[cid] for cid in ordered_chains]
+            logger.debug(
+                f"MSA loaded for {len(ordered_chains)}/{len(protein_chain_tokens)} "
+                "protein chains; running species pairing"
+            )
+            assembled = assemble_complex_msa_features(raws_list)
+            lengths = [r.length for r in raws_list]
 
-        s_off = 0
-        for cid, feat in chain_msa.items():
-            tok_idx = protein_chain_tokens[cid]
-            l_use = min(len(tok_idx), feat.profile.shape[0])
-            tok_slice = torch.tensor(tok_idx[:l_use], dtype=torch.long)
-            n_cluster = int(feat.cluster_msa.shape[0])
-            profile[tok_slice] = torch.tensor(feat.profile[:l_use], dtype=torch.float32)
-            deletion_mean[tok_slice] = torch.tensor(
-                feat.deletion_mean[:l_use], dtype=torch.float32,
-            )
-            cluster_msa[s_off:s_off + n_cluster, tok_slice] = torch.tensor(
-                feat.cluster_msa[:, :l_use], dtype=torch.long,
-            )
-            cluster_profile[s_off:s_off + n_cluster, tok_slice] = torch.tensor(
-                feat.cluster_profile[:, :l_use], dtype=torch.float32,
-            )
-            cluster_deletion_mean[s_off:s_off + n_cluster, tok_slice] = torch.tensor(
-                feat.cluster_deletion_mean[:, :l_use], dtype=torch.float32,
-            )
-            s_off += n_cluster
+        # Map the assembled features' L_total axis back to n_tok token slots.
+        # Chain i in `ordered_chains` contributes `lengths[i]` consecutive
+        # columns in the assembled MSA; those map to the first lengths[i]
+        # token indices of that chain.
+        flat_tok_idx: list[int] = []
+        col_ptr = 0
+        for cid, L_i in zip(ordered_chains, lengths):
+            tok_idx = protein_chain_tokens[cid][:L_i]
+            flat_tok_idx.extend(tok_idx)
+            col_ptr += L_i
+        if len(flat_tok_idx) != assembled.profile.shape[0]:
+            # Truncate to the smaller of the two just in case lengths mismatch.
+            k = min(len(flat_tok_idx), assembled.profile.shape[0])
+            flat_tok_idx = flat_tok_idx[:k]
+
+        tok_sel = torch.tensor(flat_tok_idx, dtype=torch.long)
+        n_cluster = int(assembled.cluster_msa.shape[0])
+
+        profile = torch.zeros(n_tok, PROTENIX_NUM_MSA_CLASSES)
+        cluster_msa = torch.zeros(n_cluster, n_tok, dtype=torch.long)
+        cluster_profile = torch.zeros(n_cluster, n_tok, PROTENIX_NUM_MSA_CLASSES)
+        deletion_mean = torch.zeros(n_tok)
+        cluster_deletion_mean = torch.zeros(n_cluster, n_tok)
+
+        k = len(flat_tok_idx)
+        profile[tok_sel] = torch.tensor(assembled.profile[:k], dtype=torch.float32)
+        deletion_mean[tok_sel] = torch.tensor(
+            assembled.deletion_mean[:k], dtype=torch.float32,
+        )
+        cluster_msa[:, tok_sel] = torch.tensor(
+            assembled.cluster_msa[:, :k], dtype=torch.long,
+        )
+        cluster_profile[:, tok_sel] = torch.tensor(
+            assembled.cluster_profile[:, :k], dtype=torch.float32,
+        )
+        cluster_deletion_mean[:, tok_sel] = torch.tensor(
+            assembled.cluster_deletion_mean[:, :k], dtype=torch.float32,
+        )
 
         batch["msa_profile"] = profile.unsqueeze(0)
         batch["cluster_msa"] = cluster_msa.unsqueeze(0)

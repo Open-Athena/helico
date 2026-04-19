@@ -1490,6 +1490,34 @@ class MSAFeatures:
     length: int
 
 
+# Species-ID regexes from Protenix (msa_utils.py). Protein MSA descriptions
+# carry species info via UniProt (>tr|ACCESSION|GENE_SPEC) or UniRef100 format.
+_UNIPROT_REGEX = re.compile(
+    r"(?:tr|sp)\|[A-Z0-9]{6,10}(?:_\d+)?\|(?:[A-Z0-9]{1,10}_)(?P<SpeciesId>[A-Z0-9]{1,5})"
+)
+_UNIREF_REGEX = re.compile(r"^UniRef100_[^_]+_([^_/]+)")
+
+
+def get_species_ids(descriptions: list[str]) -> list[str]:
+    """Extract species identifiers from MSA description lines.
+
+    Returns one ID per description (empty string if no species identifier
+    was recognizable). Follows Protenix's regex exactly.
+    """
+    ids = []
+    for d in descriptions:
+        d = d.strip()
+        m = _UNIPROT_REGEX.match(d) or _UNIREF_REGEX.match(d)
+        if m:
+            if "SpeciesId" in m.groupdict():
+                ids.append(m.group("SpeciesId"))
+            else:
+                ids.append(m.group(1))
+        else:
+            ids.append("")
+    return ids
+
+
 def parse_a3m(content: str) -> tuple[list[str], list[str]]:
     """Parse A3M format content into sequences and descriptions.
 
@@ -1684,6 +1712,217 @@ def _read_a3m_features(raw_gz: bytes) -> MSAFeatures | None:
         msa, dels = a3m_to_msa_matrix(seqs)
         return compute_msa_features(msa, dels)
     return None
+
+
+@dataclass
+class RawChainMSA:
+    """Per-chain raw MSA, pre-feature-computation. Used as input to
+    `assemble_complex_msa_features` for species pairing across chains."""
+    msa: np.ndarray             # (N_seqs, L) int8, Protenix 32-class
+    deletion_matrix: np.ndarray  # (N_seqs, L) int16
+    species_ids: list[str]       # per-row species ID ("" if unidentified)
+
+    @property
+    def n_seqs(self) -> int:
+        return int(self.msa.shape[0])
+
+    @property
+    def length(self) -> int:
+        return int(self.msa.shape[1])
+
+
+def _raw_msa_from_a3m(content: str) -> RawChainMSA | None:
+    seqs, descs = parse_a3m(content)
+    if not seqs:
+        return None
+    msa, dels = a3m_to_msa_matrix(seqs)
+    species = get_species_ids(descs)
+    return RawChainMSA(msa=msa, deletion_matrix=dels, species_ids=species)
+
+
+def load_raw_msa_for_chain(
+    pdb_id: str,
+    chain_id: str,
+    sequence: str = "",
+    msa_dir: Path | None = None,
+    msa_tar_path: Path | None = None,
+    tar_index: TarIndex | None = None,
+) -> RawChainMSA | None:
+    """Load raw MSA (with species IDs) for a given chain. Same lookup
+    strategy as `load_msa_for_chain` but returns the pre-featurization
+    matrix + species IDs so multi-chain pairing can be performed."""
+    seq_hash = hashlib.sha256((sequence + "\n").encode()).hexdigest() if sequence else ""
+
+    if msa_dir and msa_dir.exists():
+        for hash_name in [seq_hash] if seq_hash else []:
+            msa_path = msa_dir / f"{hash_name}.a3m.gz"
+            if msa_path.exists():
+                with gzip.open(msa_path, "rt") as f:
+                    content = f.read()
+                return _raw_msa_from_a3m(content)
+
+    if tar_index is not None and seq_hash:
+        target = f"rcsb_raw_msa/{seq_hash}.a3m.gz"
+        if target in tar_index.entries:
+            offset, size = tar_index.entries[target]
+            raw = read_tar_member(tar_index.tar_path, offset, size)
+            return _raw_msa_from_a3m(gzip.decompress(raw).decode())
+
+    if msa_tar_path is not None and msa_tar_path.exists() and seq_hash:
+        target = f"rcsb_raw_msa/{seq_hash}.a3m.gz"
+        try:
+            with tarfile.open(msa_tar_path, "r") as tar:
+                member = tar.getmember(target)
+                f = tar.extractfile(member)
+                if f:
+                    return _raw_msa_from_a3m(gzip.decompress(f.read()).decode())
+        except (KeyError, tarfile.TarError):
+            pass
+
+    return None
+
+
+def _pair_rows_across_chains(
+    chain_species: list[list[str]],
+    max_paired: int,
+    max_per_species: int = 1,
+) -> np.ndarray:
+    """Protenix-style species pairing. Returns an (S_paired, n_chains) int32
+    matrix where entry [s, i] is the row index into chain i's MSA for the
+    s-th paired row; -1 means "chain i has no row for this species —
+    gap-fill."
+
+    Always includes row 0 (query) as the first paired row."""
+    n_chains = len(chain_species)
+    chain_species_map: list[dict[str, np.ndarray]] = []
+    all_species_counts: dict[str, int] = {}
+    species_min_hits: dict[str, int] = {}
+
+    for ids in chain_species:
+        if len(ids) == 0 or (len(ids) == 1 and not ids[0]):
+            chain_species_map.append({})
+            continue
+        ids_arr = np.array(ids, dtype=object)
+        row_indices = np.arange(len(ids_arr))
+        sort = ids_arr.argsort(kind="stable")
+        ids_arr = ids_arr[sort]
+        row_indices = row_indices[sort]
+        species, unique_first = np.unique(ids_arr, return_index=True)
+        grouped = np.split(row_indices, unique_first[1:])
+        mapping = dict(zip(species, grouped))
+        chain_species_map.append(mapping)
+        for s in species:
+            if not s:
+                continue
+            all_species_counts[s] = all_species_counts.get(s, 0) + 1
+        for s, idxs in mapping.items():
+            if not s:
+                continue
+            species_min_hits[s] = min(
+                species_min_hits.get(s, max_per_species), len(idxs)
+            )
+
+    # Rank species by chain count (descending); skip singletons.
+    ranked: dict[int, list[str]] = {}
+    for s, count in all_species_counts.items():
+        if not s or count <= 1:
+            continue
+        ranked.setdefault(count, []).append(s)
+
+    pair_blocks: list[np.ndarray] = [np.zeros((1, n_chains), dtype=np.int32)]
+    total = 0
+    for count in sorted(ranked.keys(), reverse=True):
+        for species in ranked[count]:
+            min_hits = species_min_hits[species]
+            chain_rows = []
+            for mapping in chain_species_map:
+                if species in mapping:
+                    rows = mapping[species][:min_hits]
+                else:
+                    rows = np.full(min_hits, -1, dtype=np.int32)
+                chain_rows.append(rows.astype(np.int32))
+            block = np.stack(chain_rows, axis=1)  # (min_hits, n_chains)
+            pair_blocks.append(block)
+            total += block.shape[0]
+            if total >= max_paired:
+                break
+        if total >= max_paired:
+            break
+
+    return np.concatenate(pair_blocks, axis=0)[:max_paired]
+
+
+def assemble_complex_msa_features(
+    chain_raws: list[RawChainMSA],
+    max_paired: int = 8192,
+    max_seqs: int = 512,
+    n_clusters: int = 64,
+    max_per_species: int = 1,
+) -> MSAFeatures:
+    """Combine per-chain raw MSAs into a single complex-level feature set.
+
+    Rows are laid out as: [paired rows (rows span all chains via species
+    matching), then per-chain unpaired rows (block-diagonal, one chain's
+    columns populated, others gap)]. The column axis is the concatenation
+    of per-chain lengths.
+
+    Profile and clustering are computed on the combined matrix.
+    """
+    gap = PROTENIX_MSA_GAP
+    n_chains = len(chain_raws)
+    lengths = [c.length for c in chain_raws]
+    L_total = sum(lengths)
+    col_offsets = np.cumsum([0] + lengths).tolist()
+
+    # Species-pair row indices (S_paired, n_chains), -1 means missing-for-chain.
+    chain_species = [c.species_ids for c in chain_raws]
+    pair_idxs = _pair_rows_across_chains(
+        chain_species, max_paired=max_paired, max_per_species=max_per_species
+    )
+    S_paired = pair_idxs.shape[0]
+
+    # Paired block: fill per-chain columns using chain i's msa[pair_idxs[:, i]].
+    paired_msa = np.full((S_paired, L_total), gap, dtype=np.int8)
+    paired_dels = np.zeros((S_paired, L_total), dtype=np.int16)
+    for i, c in enumerate(chain_raws):
+        col0, col1 = col_offsets[i], col_offsets[i + 1]
+        sel = pair_idxs[:, i]
+        valid = sel >= 0
+        if valid.any():
+            paired_msa[valid, col0:col1] = c.msa[sel[valid]]
+            paired_dels[valid, col0:col1] = c.deletion_matrix[sel[valid]]
+
+    # Unpaired blocks: one per chain; drop rows already used in pairing.
+    # (Protenix's cleanup_unpaired_features does byte-equality on whole rows;
+    # we approximate by dropping rows whose indices were chosen for pairing.)
+    unpaired_parts = []
+    unpaired_dels_parts = []
+    for i, c in enumerate(chain_raws):
+        used = set(int(x) for x in pair_idxs[:, i] if x >= 0)
+        keep = np.array([r for r in range(c.n_seqs) if r not in used], dtype=np.int64)
+        if keep.size == 0:
+            continue
+        col0, col1 = col_offsets[i], col_offsets[i + 1]
+        block_msa = np.full((keep.size, L_total), gap, dtype=np.int8)
+        block_dels = np.zeros((keep.size, L_total), dtype=np.int16)
+        block_msa[:, col0:col1] = c.msa[keep]
+        block_dels[:, col0:col1] = c.deletion_matrix[keep]
+        unpaired_parts.append(block_msa)
+        unpaired_dels_parts.append(block_dels)
+
+    if unpaired_parts:
+        msa = np.concatenate([paired_msa] + unpaired_parts, axis=0)
+        dels = np.concatenate([paired_dels] + unpaired_dels_parts, axis=0)
+    else:
+        msa = paired_msa
+        dels = paired_dels
+
+    # Cap at max_seqs (keep query + paired first, then unpaired).
+    if msa.shape[0] > max_seqs:
+        msa = msa[:max_seqs]
+        dels = dels[:max_seqs]
+
+    return compute_msa_features(msa, dels, max_seqs=max_seqs, n_clusters=n_clusters)
 
 
 def load_msa_for_chain(

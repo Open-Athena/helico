@@ -463,6 +463,72 @@ class TestMSA:
         profile_sums = features.profile.sum(axis=1)
         assert np.allclose(profile_sums, 1.0, atol=0.01)
 
+    def test_species_ids(self):
+        """Species-ID parsing matches Protenix convention."""
+        from helico.data import get_species_ids
+        descs = [
+            "tr|A0A0C5B5G6|ABC_HUMAN sapiens",
+            "sp|P12345|XYZ_MOUSE",
+            "UniRef100_Q12345_HUMAN/1-100",
+            "101",  # query
+            "UniRef100_A0A6C0PQN6",  # accession-only, no species suffix
+        ]
+        assert get_species_ids(descs) == ["HUMAN", "MOUSE", "HUMAN", "", ""]
+
+    def test_pair_rows_across_chains(self):
+        """Pairing puts species-matched rows at the same index across chains."""
+        from helico.data import _pair_rows_across_chains
+        # Chain A: query + 3 rows (HUMAN, MOUSE, HUMAN).
+        # Chain B: query + 2 rows (HUMAN, MOUSE).
+        chain_species = [
+            ["", "HUMAN", "MOUSE", "HUMAN"],
+            ["", "HUMAN", "MOUSE"],
+        ]
+        idxs = _pair_rows_across_chains(chain_species, max_paired=10, max_per_species=1)
+        # First paired row is always the query (row 0 of each chain).
+        assert idxs[0].tolist() == [0, 0]
+        # Both species appear in both chains; max_per_species=1 means one row
+        # each. Every paired row should have non-negative indices (no gap fills).
+        assert (idxs >= 0).all()
+        # At least 3 rows (query + 2 species blocks); <= max_paired.
+        assert idxs.shape == (3, 2)
+
+    def test_pair_gap_fills_missing_species(self):
+        """Species only in chain A becomes gap (-1) for chain B."""
+        from helico.data import _pair_rows_across_chains
+        chain_species = [
+            ["", "HUMAN", "RAT"],
+            ["", "HUMAN"],
+        ]
+        idxs = _pair_rows_across_chains(chain_species, max_paired=10, max_per_species=1)
+        # HUMAN in both, RAT only in A: RAT row for chain B is -1 (gap).
+        # Singleton species (only in one chain) are SKIPPED by the algorithm
+        # (matches Protenix). So only HUMAN is paired.
+        assert (idxs[:, 0] >= 0).all()
+        # Query + HUMAN in both = 2 paired rows, no -1s because RAT is skipped.
+        assert idxs.shape[0] == 2
+
+    def test_assemble_complex_msa(self):
+        """End-to-end: raw per-chain MSAs → combined complex features."""
+        from helico.data import RawChainMSA, assemble_complex_msa_features
+        msa_a = np.array([[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14]],
+                         dtype=np.int8)
+        msa_b = np.array([[0, 1, 2], [3, 4, 5]], dtype=np.int8)
+        dels_a = np.zeros_like(msa_a, dtype=np.int16)
+        dels_b = np.zeros_like(msa_b, dtype=np.int16)
+        raws = [
+            RawChainMSA(msa=msa_a, deletion_matrix=dels_a,
+                        species_ids=["", "HUMAN", "MOUSE"]),
+            RawChainMSA(msa=msa_b, deletion_matrix=dels_b,
+                        species_ids=["", "HUMAN"]),
+        ]
+        feats = assemble_complex_msa_features(raws, max_seqs=64, n_clusters=8)
+        # Combined L = 5 + 3 = 8; n_seqs includes query + paired + unpaired.
+        assert feats.length == 8
+        assert feats.profile.shape == (8, 32)
+        assert feats.deletion_mean.shape == (8,)
+        assert feats.cluster_msa.shape[1] == 8
+
 
 # ============================================================================
 # Cropping Tests
