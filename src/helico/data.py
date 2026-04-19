@@ -746,12 +746,31 @@ class TokenizedStructure:
         res_indices = torch.tensor([t.res_idx for t in self.tokens], dtype=torch.long)
 
         # Restype: Protenix 32-class index per token.
-        # Start from TOKEN_TYPE_TO_RESTYPE, then fix up nucleotides using res_name
-        # (TOKEN_TYPE_TO_RESTYPE maps all nucleotides/ligands to gap=31).
+        # TOKEN_TYPE_TO_RESTYPE maps nucleotides and ligands to gap (31) as a
+        # placeholder; fix that up here using res_name and entity_type.
+        # IMPORTANT: restype 31 is the MSA-gap sentinel — if a ligand token is
+        # left at 31 the restype embedding treats it as "MSA gap" rather than
+        # a real residue, which silently corrupts every ligand token.
+        # Protenix uses UNK (20) for ligand tokens and modified residues,
+        # and RNA_UNK (25) / DNA_UNK (30) for unknown nucleotides.
         restype = [TOKEN_TYPE_TO_RESTYPE[t.token_type] for t in self.tokens]
         for i, token in enumerate(self.tokens):
-            if restype[i] == PROTENIX_MSA_GAP:
-                restype[i] = RES_NAME_TO_RESTYPE.get(token.res_name, PROTENIX_MSA_GAP)
+            if restype[i] != PROTENIX_MSA_GAP:
+                continue
+            mapped = RES_NAME_TO_RESTYPE.get(token.res_name)
+            if mapped is not None:
+                restype[i] = mapped
+                continue
+            etype = self.entity_types[i]
+            if etype == "nucleotide":
+                restype[i] = (
+                    PROTENIX_MSA_UNK_DNA
+                    if token.res_name.startswith("D")
+                    else PROTENIX_MSA_UNK_RNA
+                )
+            else:
+                # Ligand, modified residue, or anything we couldn't classify
+                restype[i] = PROTENIX_MSA_UNK_PROTEIN
         restype = torch.tensor(restype, dtype=torch.long)
 
         # Relative position encoding (within each chain)

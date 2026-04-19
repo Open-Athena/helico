@@ -380,7 +380,7 @@ class TestNucleotideAndSymId:
         assert sym_id[2].item() == 0
 
     def test_ligand_features(self):
-        """Ligand tokens should exist and have gap restype."""
+        """Ligand tokens should have restype=UNK (20), not the MSA-gap sentinel (31)."""
         ccd = _make_nuc_ccd()
         chains = [
             {"type": "protein", "id": "A", "sequence": "AG"},
@@ -390,9 +390,12 @@ class TestNucleotideAndSymId:
         features = tokenized.to_features()
         # 2 protein tokens + 8 ligand tokens = 10
         assert features["n_tokens"] == 10
-        # Ligand tokens should have gap restype (31)
         restype = features["restype"]
-        assert (restype[2:] == PROTENIX_MSA_GAP).all()
+        # Ligand tokens must NOT be the MSA-gap sentinel (which would make the
+        # restype embedding treat them as missing-alignment positions).
+        assert (restype[2:] != PROTENIX_MSA_GAP).all()
+        # Ligand tokens use UNK-protein (20) per Protenix convention.
+        assert (restype[2:] == 20).all()
         # Protein tokens should not be gap
         assert (restype[:2] != PROTENIX_MSA_GAP).all()
 
