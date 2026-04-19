@@ -300,13 +300,19 @@ def run_bench(
     predictions_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build flat list of (pdb_id, category) to predict
+    # Build flat list of (pdb_id, category) to predict. Dedupe by pdb_id —
+    # some targets appear in multiple category CSVs; predict once, score
+    # against each category.
     to_predict = []
     cached_results = {}  # pdb_id -> cached prediction dict
+    seen_pdb_ids = set()
 
     for category, targets in all_targets.items():
         for target in targets:
             pdb_id = target.pdb_id
+            if pdb_id in seen_pdb_ids:
+                continue
+            seen_pdb_ids.add(pdb_id)
             pred_cache_path = predictions_dir / f"{pdb_id}.pkl"
             if resume and pred_cache_path.exists():
                 try:

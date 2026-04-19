@@ -857,8 +857,11 @@ class TokenizedStructure:
         # Chain-pair mask (same chain = 1, different chain = 0)
         chain_same = (chain_indices.unsqueeze(0) == chain_indices.unsqueeze(1)).long()
 
-        # Per-token relpe features
-        token_index = torch.tensor([t.token_index for t in self.tokens], dtype=torch.long)
+        # Per-token relpe features. token_index is a global monotonic index
+        # (Protenix convention); the per-token stored value is ignored. Within
+        # one residue (a ligand), atom tokens are consecutive in the token list
+        # so their token_index differences encode their relative order.
+        token_index = torch.arange(n_tok, dtype=torch.long)
         entity_id = torch.tensor([t.entity_id for t in self.tokens], dtype=torch.long)
         sym_id = torch.tensor([t.sym_id for t in self.tokens], dtype=torch.long)
 
@@ -910,6 +913,7 @@ def tokenize_structure(
     # (asym_id, seq_id_str, atom_name) → token index for ligands (one token per atom)
     residue_to_token: dict[tuple[str, str], int] = {}
     atom_to_token_bond: dict[tuple[str, str, str], int] = {}
+    ligand_bond_edges: list[tuple[int, int]] = []
 
     # Build entity_id mapping: chains with the same sequence share an entity_id
     seq_to_entity: dict[str, int] = {}
@@ -1003,20 +1007,30 @@ def tokenize_structure(
 
                 ref_c = None
                 atom_charges = None
+                # Match CCD ideal coords to structure atoms by NAME, not by
+                # position. Positional matching used to require the non-leaving
+                # heavy-atom list to exactly equal the structure's atom set; a
+                # single mismatch (e.g. a 5' OP3 present or missing) wiped the
+                # entire ref_c to None.
                 if ccd and res.name in ccd:
                     comp = ccd[res.name]
-                    ref_c = comp.ideal_coords
-                    if ref_c is not None:
-                        # Use non_leaving mask for nucleotides (removes OP3 etc.)
-                        mask = comp.non_leaving_heavy_atom_mask
-                        ref_c = ref_c[mask] if len(mask) == len(ref_c) else None
-                        if ref_c is not None and len(ref_c) != len(heavy_atoms):
-                            ref_c = None
+                    if comp.ideal_coords is not None:
+                        mask = comp.heavy_atom_mask
+                        if len(mask) == len(comp.ideal_coords):
+                            heavy_names = comp.heavy_atom_names
+                            heavy_coords = comp.ideal_coords[mask]
+                            name_to_ref = {n: c for n, c in zip(heavy_names, heavy_coords)}
+                            matched = [
+                                name_to_ref.get(n, np.zeros(3, dtype=np.float32))
+                                for n in atom_names
+                            ]
+                            ref_c = np.stack(matched).astype(np.float32)
                     if comp.atom_charges:
-                        mask = comp.non_leaving_heavy_atom_mask
-                        atom_charges = [c for c, m in zip(comp.atom_charges, mask) if m]
-                        if len(atom_charges) != len(heavy_atoms):
-                            atom_charges = None
+                        mask = comp.heavy_atom_mask
+                        heavy_names_c = comp.heavy_atom_names
+                        heavy_charges = [c for c, m in zip(comp.atom_charges, mask) if m]
+                        name_to_charge = dict(zip(heavy_names_c, heavy_charges))
+                        atom_charges = [name_to_charge.get(n, 0) for n in atom_names]
 
                 tokens.append(Token(
                     token_type=token_type,
@@ -1067,6 +1081,11 @@ def tokenize_structure(
                 lig_uid = residue_uid_counter
                 residue_uid_counter += 1
 
+                # All atoms of a ligand residue must share res_idx so that
+                # RelPE's `same_res` is True between them — needed for
+                # `a_rel_token` to carry intra-ligand relative positions.
+                lig_res_idx = res_counter
+                lig_name_to_tok: dict[str, int] = {}
                 for atom_idx, atom in enumerate(heavy_atoms):
                     elem_idx = ELEM_TO_IDX.get(atom.element, UNK_ELEM_IDX)
                     token_type = TOKEN_LIGAND_ATOM + elem_idx
@@ -1082,7 +1101,7 @@ def tokenize_structure(
                     tokens.append(Token(
                         token_type=token_type,
                         chain_idx=chain_idx,
-                        res_idx=res_counter,
+                        res_idx=lig_res_idx,
                         atom_names=[atom.name],
                         atom_elements=[atom.element],
                         atom_coords=atom.coords.reshape(1, 3),
@@ -1090,7 +1109,7 @@ def tokenize_structure(
                         res_name=res.name,
                         entity_id=chain_to_entity[chain.chain_id],
                         sym_id=0,
-                        token_index=atom_idx,
+                        token_index=0,  # overwritten to global arange in to_features
                         ref_space_uid=lig_uid,
                         atom_charges=charge,
                     ))
@@ -1098,10 +1117,21 @@ def tokenize_structure(
                     entity_types.append("ligand")
                     tok_idx = len(tokens) - 1
                     atom_to_token_bond[(chain.chain_id, str(res.seq_id), atom.name)] = tok_idx
+                    lig_name_to_tok[atom.name] = tok_idx
                     # Also map residue for ligands (first atom wins; others reachable via atom key)
                     if (chain.chain_id, str(res.seq_id)) not in residue_to_token:
                         residue_to_token[(chain.chain_id, str(res.seq_id))] = tok_idx
-                    res_counter += 1
+
+                # Emit intra-ligand CCD bonds as token_bonds (Bug 3). Without
+                # these, multi-atom ligands lose their chemistry graph and the
+                # model has no bond signal between ligand atoms.
+                if ccd and res.name in ccd:
+                    for a1, a2, _order in ccd[res.name].bonds:
+                        ti = lig_name_to_tok.get(a1)
+                        tj = lig_name_to_tok.get(a2)
+                        if ti is not None and tj is not None and ti != tj:
+                            ligand_bond_edges.append((ti, tj))
+                res_counter += 1
 
     # Compute sym_id: per-entity counter so homo-multimer chains get distinct sym_ids
     entity_sym_counter: dict[int, int] = {}
@@ -1114,9 +1144,10 @@ def tokenize_structure(
         token.sym_id = chain_sym[cid]
 
     # Compute token_bonds from _struct_conn (covalent/metallic/disulfide bonds)
+    # plus intra-ligand CCD bonds (Bug 3).
     n_tokens = len(tokens)
     token_bonds_tensor = None
-    if structure.struct_conn:
+    if structure.struct_conn or ligand_bond_edges:
         token_bonds_tensor = torch.zeros(n_tokens, n_tokens)
         for asym1, seq1, _comp1, atom1, asym2, seq2, _comp2, atom2 in structure.struct_conn:
             # Try atom-level match first (needed for ligand per-atom tokens)
@@ -1129,6 +1160,9 @@ def tokenize_structure(
             if ti is not None and tj is not None and ti != tj:
                 token_bonds_tensor[ti, tj] = 1.0
                 token_bonds_tensor[tj, ti] = 1.0
+        for ti, tj in ligand_bond_edges:
+            token_bonds_tensor[ti, tj] = 1.0
+            token_bonds_tensor[tj, ti] = 1.0
 
     chain_sequences = {c.chain_id: c.sequence for c in structure.chains if c.sequence}
 
@@ -1160,6 +1194,8 @@ def tokenize_sequences(
     chain_ids: list[str] = []
     entity_types: list[str] = []
     chain_sequences: dict[str, str] = {}
+    # Ligand intra-residue bond edges, collected as we build tokens.
+    ligand_bond_edges: list[tuple[int, int]] = []
     res_counter = 0
     residue_uid_counter = 0  # groups atoms by residue for ref_space_uid
 
@@ -1303,8 +1339,11 @@ def tokenize_sequences(
                 heavy_coords = np.zeros((len(heavy_names), 3), dtype=np.float32)
 
             # All atoms of this ligand residue share the same ref_space_uid
+            # and res_idx (same_res is needed for RelPE a_rel_token).
             lig_uid = residue_uid_counter
             residue_uid_counter += 1
+            lig_res_idx = res_counter
+            lig_name_to_tok: dict[str, int] = {}
 
             for atom_idx, (aname, aelem) in enumerate(zip(heavy_names, heavy_elements)):
                 elem_idx = ELEM_TO_IDX.get(aelem, UNK_ELEM_IDX)
@@ -1314,7 +1353,7 @@ def tokenize_sequences(
                 tokens.append(Token(
                     token_type=token_type,
                     chain_idx=chain_idx,
-                    res_idx=res_counter,
+                    res_idx=lig_res_idx,
                     atom_names=[aname],
                     atom_elements=[aelem],
                     atom_coords=coord.copy(),
@@ -1322,13 +1361,22 @@ def tokenize_sequences(
                     res_name=ccd_code,
                     entity_id=entity_id,
                     sym_id=0,
-                    token_index=atom_idx,
+                    token_index=0,  # overwritten to global arange in to_features
                     ref_space_uid=lig_uid,
                     atom_charges=[heavy_charges[atom_idx]] if heavy_charges else None,
                 ))
                 chain_ids.append(chain_id)
                 entity_types.append("ligand")
-                res_counter += 1
+                lig_name_to_tok[aname] = len(tokens) - 1
+
+            # Emit intra-ligand covalent bonds from the CCD for this residue.
+            # Without these, multi-atom ligands lose their chemistry graph.
+            for a1, a2, _order in comp.bonds:
+                ti = lig_name_to_tok.get(a1)
+                tj = lig_name_to_tok.get(a2)
+                if ti is not None and tj is not None and ti != tj:
+                    ligand_bond_edges.append((ti, tj))
+            res_counter += 1
 
     # Compute sym_id: per-entity counter so homo-multimer chains get distinct sym_ids
     entity_sym_counter: dict[int, int] = {}
@@ -1340,12 +1388,22 @@ def tokenize_sequences(
             entity_sym_counter[eid] = entity_sym_counter.get(eid, 0) + 1
         token.sym_id = chain_sym[cid]
 
+    # Build token_bonds tensor from ligand intra-residue bonds (Bug 3).
+    token_bonds_tensor = None
+    if ligand_bond_edges:
+        n_tokens = len(tokens)
+        token_bonds_tensor = torch.zeros(n_tokens, n_tokens)
+        for ti, tj in ligand_bond_edges:
+            token_bonds_tensor[ti, tj] = 1.0
+            token_bonds_tensor[tj, ti] = 1.0
+
     return TokenizedStructure(
         pdb_id="PREDICT",
         tokens=tokens,
         chain_ids=chain_ids,
         entity_types=entity_types,
         chain_sequences=chain_sequences,
+        token_bonds=token_bonds_tensor,
     )
 
 
