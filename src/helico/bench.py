@@ -44,6 +44,18 @@ _HF_FOLDBENCH_PREFIX = "benchmarks/FoldBench"
 # FoldBench categories (matching actual CSV filenames in BEAM-Labs/FoldBench)
 # ============================================================================
 
+# Crystallization aids / buffer ligands excluded from inference input by
+# Protenix (protenix/data/constants.py). Predicting these is not useful — they
+# aren't biologically informative and the model has no training signal for
+# their specific crystal-contact positions. Our previous behaviour included
+# them in every target, which both (a) added poorly-predicted atoms that
+# dragged down LDDT, and (b) diverged from Protenix's setup on FoldBench.
+CRYSTALLIZATION_AIDS = frozenset({
+    "SO4", "GOL", "EDO", "PO4", "ACT", "PEG", "DMS", "TRS",
+    "PGE", "PG4", "FMT", "EPE", "MPD", "MES", "CD", "IOD",
+})
+
+
 INTERFACE_CATEGORIES = [
     "interface_protein_protein",
     "interface_antibody_antigen",
@@ -315,6 +327,14 @@ def structure_to_chains(structure: Structure) -> list[dict]:
                     chains.append({"type": "rna", "id": chain.chain_id, "sequence": seq})
         elif chain.entity_type == "non-polymer":
             for res in chain.residues:
+                # Skip crystallization aids (buffers / solvent / cryoprotectants).
+                # Protenix's JSON converter excludes these from inference input
+                # (protenix/data/constants.py CRYSTALLIZATION_AIDS). Leaving
+                # them in makes Helico predict buffer coords our model isn't
+                # trained for; those atoms drag down LDDT vs the GT even
+                # though they're biologically irrelevant.
+                if res.name in CRYSTALLIZATION_AIDS:
+                    continue
                 chains.append({
                     "type": "ligand",
                     "id": chain.chain_id,
