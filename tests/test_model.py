@@ -984,6 +984,34 @@ class TestLoadProtenix:
         stats = load_protenix_state_dict(protenix_sd, model)
         return model, stats
 
+    def test_infer_config_v1(self, protenix_sd):
+        """Auto-detect picks v1 config for the real v1 checkpoint."""
+        from helico.load_protenix import infer_protenix_config
+        cfg = infer_protenix_config(protenix_sd)
+        assert cfg.d_pair == 128
+        assert cfg.d_msa == 64
+        assert cfg.n_heads_pair == 4
+
+    def test_infer_config_v2_synthetic(self):
+        """Auto-detect picks v2 config when probe tensors have v2 shapes."""
+        from helico.load_protenix import infer_protenix_config
+        fake_sd = {
+            "pairformer_stack.blocks.0.tri_mul_out.layer_norm_in.weight": torch.zeros(256),
+            "msa_module.blocks.0.outer_product_mean_msa.layer_norm.weight": torch.zeros(128),
+        }
+        cfg = infer_protenix_config(fake_sd)
+        assert cfg.d_pair == 256
+        assert cfg.d_msa == 128
+        assert cfg.n_heads_pair == 8
+        assert cfg.n_msa_pw_heads == 16
+
+    def test_v2_config_instantiates(self):
+        """v2-shaped Helico model instantiates with ~464M params."""
+        cfg = HelicoConfig.protenix_v2()
+        model = Helico(cfg)
+        n_params = sum(p.numel() for p in model.parameters())
+        assert 460e6 < n_params < 470e6, f"v2 params out of expected range: {n_params}"
+
     def test_transfer_stats(self, loaded_model):
         """All Protenix params transfer with zero mismatches."""
         _, stats = loaded_model

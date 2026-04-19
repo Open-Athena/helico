@@ -10,7 +10,9 @@ from pathlib import Path
 import modal
 
 ROOT = Path(__file__).parent.parent
-PROTENIX_URL = "https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_default_v1.0.0.pt"
+PROTENIX_URL_DEFAULT = "https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_default_v1.0.0.pt"
+PROTENIX_URL = os.environ.get("HELICO_PROTENIX_URL", PROTENIX_URL_DEFAULT)
+PROTENIX_CKPT_PATH = "/root/helico/checkpoints/" + PROTENIX_URL.rsplit("/", 1)[-1]
 
 # Modal decorator params are static — configure via env vars before `modal run`
 N_WORKERS = int(os.environ.get("HELICO_BENCH_WORKERS", "4"))
@@ -18,7 +20,7 @@ GPU_TYPE = os.environ.get("HELICO_BENCH_GPU", "H100")
 
 bench_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("wget")
+    .apt_install("wget", "curl")
     .pip_install(
         "torch>=2.7",
         "cuequivariance-torch>=0.8",
@@ -34,20 +36,13 @@ bench_image = (
         "tqdm",
     )
     # Protenix checkpoint baked into image (1.4 GB, cached by Modal)
+    # curl with retries + progress dots — wget -q hangs silently on stalls
     .run_commands(
         f"mkdir -p /root/helico/checkpoints && "
-        f"wget -q -O /root/helico/checkpoints/protenix_base_default_v1.0.0.pt {PROTENIX_URL}"
-    )
-    # CCD cache
-    .run_commands(
-        "mkdir -p /root/.cache/helico/data && "
-        "hf download timodonnell/helico-data processed/ccd_cache.pkl "
-        "--repo-type dataset --local-dir /root/.cache/helico/data"
-    )
-    # FoldBench data: targets, ground truths, AF3 inputs, MSAs
-    .run_commands(
-        "hf download timodonnell/helico-data 'benchmarks/FoldBench/**' "
-        "--repo-type dataset --local-dir /root/.cache/helico/data"
+        f"curl -fL --retry 5 --retry-delay 5 --retry-connrefused "
+        f"--connect-timeout 30 --max-time 900 "
+        f"-o {PROTENIX_CKPT_PATH} {PROTENIX_URL} && "
+        f"ls -lh {PROTENIX_CKPT_PATH}"
     )
     # Project code last (changes most frequently)
     .add_local_dir(str(ROOT / "src"), remote_path="/root/helico/src")
@@ -57,12 +52,25 @@ bench_image = (
 
 app = modal.App("helico-bench", image=bench_image)
 
+# Shared Volume caches CCD + FoldBench data across workers and runs. First
+# worker to start populates it via snapshot_download (~2 GB); subsequent
+# workers see the files immediately. Persists across runs — no re-download.
+data_volume = modal.Volume.from_name("helico-bench-data", create_if_missing=True)
+DATA_CACHE = "/cache/helico-data"
 
-@app.cls(gpu=GPU_TYPE, timeout=600, max_containers=N_WORKERS)
+
+@app.cls(gpu=GPU_TYPE, timeout=600, max_containers=N_WORKERS,
+         volumes={DATA_CACHE: data_volume})
 class Predictor:
     @modal.enter()
     def setup(self):
+        import os
         import subprocess
+
+        # Point HELICO cache at the shared Volume so CCD + FoldBench are persisted.
+        os.environ["HELICO_DATA_DIR"] = DATA_CACHE
+        os.makedirs(DATA_CACHE, exist_ok=True)
+
         subprocess.run(
             "cd /root/helico && uv venv --python 3.11 && uv pip install -e '.[bench]'",
             check=True, shell=True,
@@ -73,22 +81,45 @@ class Predictor:
 
         from collections import OrderedDict
         import torch
+        from huggingface_hub import snapshot_download
         from helico.data import parse_ccd
-        from helico.model import Helico, HelicoConfig
-        from helico.load_protenix import load_protenix_state_dict
+        from helico.model import Helico
+        from helico.load_protenix import infer_protenix_config, load_protenix_state_dict
         from helico.bench import download_foldbench
 
-        # Load model
-        config = HelicoConfig()
-        self.model = Helico(config)
-        ckpt = torch.load(
-            "/root/helico/checkpoints/protenix_base_default_v1.0.0.pt",
-            map_location="cpu", weights_only=False,
-        )
+        # Populate shared volume on first worker. Chunks + retries keep this
+        # robust against transient HF CDN stalls (see image-build history).
+        chunks = [
+            ["processed/ccd_cache.pkl"],
+            ["benchmarks/FoldBench/targets/**", "benchmarks/FoldBench/examples/**"],
+            ["benchmarks/FoldBench/foldbench-msas/**"],
+        ]
+        for i, patterns in enumerate(chunks):
+            for attempt in range(5):
+                try:
+                    print(f"[data chunk {i}] {patterns} attempt {attempt+1}", flush=True)
+                    snapshot_download(
+                        "timodonnell/helico-data", repo_type="dataset",
+                        local_dir=DATA_CACHE,
+                        allow_patterns=patterns, max_workers=8,
+                        etag_timeout=30,
+                    )
+                    break
+                except Exception as e:
+                    print(f"[data chunk {i}] failed: {e}", flush=True)
+            else:
+                raise RuntimeError(f"data chunk {i} failed after 5 attempts")
+        data_volume.commit()
+
+        # Load model — infer config from checkpoint shapes (handles v1 and v2)
+        ckpt = torch.load(PROTENIX_CKPT_PATH, map_location="cpu", weights_only=False)
         ptx_sd = ckpt["model"]
         ptx_sd = OrderedDict(
             (k.removeprefix("module."), v) for k, v in ptx_sd.items()
         )
+        config = infer_protenix_config(ptx_sd)
+        print(f"Inferred Protenix config: d_pair={config.d_pair}, d_msa={config.d_msa}")
+        self.model = Helico(config)
         load_protenix_state_dict(ptx_sd, self.model)
 
         # Load CCD
@@ -184,6 +215,7 @@ def run_bench(
     max_tokens: int = 2048,
     n_cycles: int = 10,
     cutoff_date: str = "2024-01-01",
+    max_targets: int = 0,
 ):
     import logging
     import pickle
@@ -211,6 +243,7 @@ def run_bench(
         write_category_csv,
         write_summary_csv,
     )
+    from helico.data import parse_mmcif
 
     logger.info(f"Using {N_WORKERS} {GPU_TYPE} workers (set HELICO_BENCH_WORKERS / HELICO_BENCH_GPU to change)")
 
@@ -236,6 +269,30 @@ def run_bench(
             logger.info(f"  {category}: {len(kept)}/{len(targets)} targets after date filter")
             filtered_targets[category] = kept
         all_targets = filtered_targets
+
+    # Cap total targets for shakedown runs (distributes across categories, round-robin)
+    if max_targets > 0:
+        total = sum(len(t) for t in all_targets.values())
+        if total > max_targets:
+            logger.info(f"Capping to max_targets={max_targets} (from {total})")
+            remaining = max_targets
+            capped = {c: [] for c in all_targets}
+            cats = list(all_targets.keys())
+            idx = 0
+            pulled = True
+            while remaining > 0 and pulled:
+                pulled = False
+                for c in cats:
+                    if remaining <= 0:
+                        break
+                    if idx < len(all_targets[c]):
+                        capped[c].append(all_targets[c][idx])
+                        remaining -= 1
+                        pulled = True
+                idx += 1
+            all_targets = capped
+            for c, ts in all_targets.items():
+                logger.info(f"  {c}: {len(ts)} targets after cap")
 
     output_path = Path(output_dir)
     predictions_dir = output_path / "predictions"

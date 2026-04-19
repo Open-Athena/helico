@@ -98,6 +98,29 @@ class HelicoConfig:
         """Input feature dim: d_single (from atom encoder) + 32 restype + 32 profile + 1 deletion_mean."""
         return self.d_single + 65
 
+    @classmethod
+    def protenix_v2(cls, **overrides) -> "HelicoConfig":
+        """Config matching Protenix v2.0.0 (464M params).
+
+        Protenix v2 is a width scale-up of v1: c_z 128→256, c_m 64→128, with
+        ``hidden_scale_up=True`` which doubles triangle-mul inner width and bumps
+        pair-attention heads (head_dim=32 preserved, so n_heads_pair 4→8).
+        The MSA pair-weighted-averaging head count similarly doubles
+        (n_msa_pw_heads 8→16, head_dim=8 preserved).
+
+        Note: v2 weights are not yet publicly released (as of April 2026 the
+        checkpoint URL returns HTTP 403). This config is provided so the model
+        can be instantiated at v2 shapes once weights become available.
+        """
+        v2 = dict(
+            d_pair=256,
+            d_msa=128,
+            n_heads_pair=8,
+            n_msa_pw_heads=16,
+        )
+        v2.update(overrides)
+        return cls(**v2)
+
 
 # ============================================================================
 # Building Blocks

@@ -935,6 +935,36 @@ def build_distogram_mapping(protenix_sd: dict[str, torch.Tensor]) -> dict[str, s
     return direct
 
 
+def infer_protenix_config(ptx_sd: dict[str, torch.Tensor]):
+    """Return a HelicoConfig matching the Protenix checkpoint's dims.
+
+    Inspects a few known tensors to distinguish v1 (c_z=128, c_m=64) from
+    v2 (c_z=256, c_m=128). Raises if c_z is neither, to avoid silently
+    loading weights with the wrong config.
+    """
+    from helico.model import HelicoConfig
+
+    # c_z = d_pair: pairformer tri_mul layer norm has shape (c_z,)
+    c_z_key = "pairformer_stack.blocks.0.tri_mul_out.layer_norm_in.weight"
+    c_m_key = "msa_module.blocks.0.outer_product_mean_msa.layer_norm.weight"
+    if c_z_key not in ptx_sd or c_m_key not in ptx_sd:
+        raise KeyError(
+            "Could not infer Protenix config: missing probe keys in state dict "
+            f"({c_z_key}, {c_m_key})"
+        )
+    c_z = int(ptx_sd[c_z_key].shape[0])
+    c_m = int(ptx_sd[c_m_key].shape[0])
+
+    if c_z == 128 and c_m == 64:
+        return HelicoConfig()  # v1 defaults
+    if c_z == 256 and c_m == 128:
+        return HelicoConfig.protenix_v2()
+    raise ValueError(
+        f"Unrecognized Protenix shape combination: c_z={c_z}, c_m={c_m}. "
+        "Expected (128, 64) for v1 or (256, 128) for v2."
+    )
+
+
 def load_protenix_checkpoint(
     protenix_path: str | Path,
     helico_model: torch.nn.Module,

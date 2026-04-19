@@ -1106,12 +1106,13 @@ def main():
     # Load model
     if args.protenix is not None:
         from collections import OrderedDict
-        from helico.load_protenix import load_protenix_state_dict
-        config = HelicoConfig()
-        model = Helico(config)
+        from helico.load_protenix import infer_protenix_config, load_protenix_state_dict
         ckpt = torch.load(args.protenix, map_location="cpu", weights_only=False)
         ptx_sd = ckpt["model"]
         ptx_sd = OrderedDict((k.removeprefix("module."), v) for k, v in ptx_sd.items())
+        config = infer_protenix_config(ptx_sd)
+        logger.info(f"Inferred Protenix config: d_pair={config.d_pair}, d_msa={config.d_msa}")
+        model = Helico(config)
         stats = load_protenix_state_dict(ptx_sd, model)
         logger.info(f"Loaded Protenix checkpoint: {stats['n_transferred']} params transferred")
     else:
