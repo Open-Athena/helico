@@ -260,6 +260,40 @@ def structure_to_chains(structure: Structure) -> list[dict]:
         "LEU": "L", "LYS": "K", "MET": "M", "PHE": "F", "PRO": "P",
         "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V",
     }
+    # Common modified amino acids → parent canonical one-letter.
+    # Without this mapping they'd become "X" (UNK), losing restype identity
+    # and getting UNK's atom set (backbone only). Protenix uses the CCD's
+    # `mon_nstd_parent_comp_id` field to recover the parent automatically; we
+    # maintain a small hardcoded list of the common cases seen in PDB files.
+    MODIFIED_TO_PARENT = {
+        # Methionine variants
+        "MSE": "M",  # selenomethionine (very common in crystallography)
+        "FME": "M",  # N-formyl-Met
+        # Serine variants
+        "SEP": "S",  # phosphoserine
+        # Threonine variants
+        "TPO": "T",  # phosphothreonine
+        # Tyrosine variants
+        "PTR": "Y",  # phosphotyrosine
+        # Cysteine variants
+        "CSO": "C", "CSD": "C", "CME": "C", "CMT": "C", "OCS": "C",
+        "SCY": "C", "SCH": "C",
+        # Proline variants
+        "HYP": "P",  # hydroxyproline
+        # Lysine variants
+        "MLY": "K", "MLZ": "K", "KCX": "K", "ALY": "K", "LLP": "K",
+        # Histidine variants
+        "MHS": "H", "HIC": "H", "NEP": "H",
+        # Arginine variants
+        "AGM": "R", "ARM": "R",
+        # Glutamate/Aspartate
+        "CGU": "E",  # gamma-carboxyglutamate
+        # Asparagine
+        "MEN": "N",
+        # Aspartate
+        "ASQ": "D",
+    }
+    THREE_TO_ONE = {**THREE_TO_ONE, **MODIFIED_TO_PARENT}
     RNA_CODES = {"A", "C", "G", "U"}
     DNA_CODES = {"DA", "DC", "DG", "DT"}
 
