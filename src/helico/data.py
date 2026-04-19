@@ -119,8 +119,8 @@ THREE_TO_ONE = {
     "SER": "S", "THR": "T", "TRP": "W", "TYR": "Y", "VAL": "V",
 }
 ONE_TO_THREE = {v: k for k, v in THREE_TO_ONE.items()}
-RNA_ONE_TO_CCD = {"A": "A", "C": "C", "G": "G", "U": "U"}
-DNA_ONE_TO_CCD = {"A": "DA", "C": "DC", "G": "DG", "T": "DT"}
+RNA_ONE_TO_CCD = {"A": "A", "C": "C", "G": "G", "U": "U", "N": "N"}
+DNA_ONE_TO_CCD = {"A": "DA", "C": "DC", "G": "DG", "T": "DT", "N": "DN"}
 
 # ============================================================================
 # CCD Parser
@@ -830,10 +830,19 @@ class TokenizedStructure:
                 rep_offset = tok.atom_names.index("CA")
             rep_atom_idx.append(atom_offset + rep_offset)
 
-            # has_frame: proteins/nucleotides always have frames; ligands need ≥3 atoms
+            # has_frame: token has a rigid backbone frame (for pTM / ipTM masking).
+            # Protein needs N, CA, C present. Nucleic acid needs C1', C3', C4'.
+            # Ligand: ≥3 atoms. Previously this was unconditionally True for
+            # protein/nucleotide which inflated pTM for tokens with partial
+            # backbone atoms (e.g. disordered termini) and skewed best-of-N
+            # sample selection.
             etype = self.entity_types[ti] if ti < len(self.entity_types) else "ligand"
-            if etype in ("protein", "nucleotide"):
-                has_frame.append(True)
+            if etype == "protein":
+                names = set(tok.atom_names)
+                has_frame.append({"N", "CA", "C"}.issubset(names))
+            elif etype == "nucleotide":
+                names = set(tok.atom_names)
+                has_frame.append({"C1'", "C3'", "C4'"}.issubset(names))
             else:
                 has_frame.append(n_atoms >= 3)
 
