@@ -263,6 +263,21 @@ def train(
     if resume_path:
         start_step = load_checkpoint(resume_path, model, optimizer, ema)
 
+    # W&B (rank 0 only). Enabled by HELICO_WANDB_ENABLE=1 in env.
+    wandb_run = None
+    if rank == 0 and os.environ.get("HELICO_WANDB_ENABLE") == "1":
+        try:
+            import wandb
+            wandb_run = wandb.init(
+                project=os.environ.get("WANDB_PROJECT", "helico"),
+                name=os.environ.get("WANDB_RUN_NAME"),
+                config=asdict(config),
+                resume="allow",
+            )
+        except Exception as e:
+            logger.warning(f"wandb init failed: {e}")
+            wandb_run = None
+
     # DataLoader
     if dataset is None:
         dataset = HelicoDataset(
@@ -345,6 +360,13 @@ def train(
                     f"Step {step} | Loss: {avg_loss:.4f} | LR: {current_lr:.2e} | "
                     f"Stage: {stage['name']} | Tokens/s: {throughput:.0f}"
                 )
+                if wandb_run is not None:
+                    wandb_run.log({
+                        "loss": avg_loss,
+                        "lr": current_lr,
+                        "tokens_per_sec": throughput,
+                        "stage": stage["name"],
+                    }, step=step)
                 running_loss = 0.0
                 tokens_processed = 0
                 t_start = time.time()
