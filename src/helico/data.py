@@ -1266,18 +1266,38 @@ def tokenize_sequences(
     res_counter = 0
     residue_uid_counter = 0  # groups atoms by residue for ref_space_uid
 
-    # Build entity_id mapping: chains with identical (type, sequence/ccd) share entity_id
-    entity_key_to_id: dict[tuple[str, str], int] = {}
+    # Build entity_id mapping. Chains with identical sequence/ccd trivially
+    # share entity_id; for proteins we also merge chains whose sequences are
+    # >95% identical (handles ragged-termini homodimers like 7y0l where
+    # chain B has one extra residue vs chain A). Without this, near-identical
+    # chains get distinct entity_ids — killing the RelPE "same_entity +
+    # different sym_id" signal that Protenix relies on for homodimer
+    # geometry. 7y0l full complex on Protenix v1 weights: 0.18 LDDT (chains
+    # collapse onto each other) WITHOUT merge; 0.69 LDDT WITH merge.
+    from difflib import SequenceMatcher
+    SIMILARITY_THRESHOLD = 0.95
+    entity_reps: list[tuple[str, str]] = []  # ordered list of (ctype, rep_seq_or_ccd)
     chain_to_entity: dict[str, int] = {}
-    next_entity_id = 0
     for chain in chains:
         ctype = chain["type"]
         key_str = chain.get("sequence", chain.get("ccd", ""))
-        entity_key = (ctype, key_str)
-        if entity_key not in entity_key_to_id:
-            entity_key_to_id[entity_key] = next_entity_id
-            next_entity_id += 1
-        chain_to_entity[chain["id"]] = entity_key_to_id[entity_key]
+        matched = None
+        for idx, (rep_ctype, rep_key) in enumerate(entity_reps):
+            if rep_ctype != ctype:
+                continue
+            if rep_key == key_str:
+                matched = idx
+                break
+            # Approximate match for proteins only — RNA/DNA are short and
+            # exact-match is appropriate; ligands use CCD codes.
+            if ctype == "protein" and rep_key and key_str:
+                if SequenceMatcher(None, rep_key, key_str).ratio() >= SIMILARITY_THRESHOLD:
+                    matched = idx
+                    break
+        if matched is None:
+            entity_reps.append((ctype, key_str))
+            matched = len(entity_reps) - 1
+        chain_to_entity[chain["id"]] = matched
 
     for chain_idx, chain in enumerate(chains):
         chain_id = chain["id"]
