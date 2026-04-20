@@ -226,11 +226,38 @@ def parse_ccd(cif_path: Path | None = None, cache_path: Path | None = None) -> d
 
     def _flush():
         nonlocal current_comp, coords_x, coords_y, coords_z
-        if current_comp is not None and coords_x:
-            current_comp.ideal_coords = np.array(
-                list(zip(coords_x, coords_y, coords_z)), dtype=np.float32
-            )
         if current_comp is not None:
+            # Single-atom CCD entries (CL, NA, MG, ZN, ...) use the mmCIF
+            # single-value format, not a loop_ block. Materialize the
+            # accumulated row here if atom_names is still empty.
+            if not current_comp.atom_names and hasattr(current_comp, "_single_atom_row"):
+                row = current_comp._single_atom_row
+                atom_id = row.get("atom_id", "").strip('"')
+                type_symbol = row.get("type_symbol", "")
+                if atom_id and type_symbol:
+                    current_comp.atom_names.append(atom_id)
+                    current_comp.atom_elements.append(type_symbol)
+                    try:
+                        current_comp.atom_charges.append(
+                            int(row.get("charge", "0")) if row.get("charge", "0") not in ("?", ".", "") else 0
+                        )
+                    except (ValueError, TypeError):
+                        current_comp.atom_charges.append(0)
+                    current_comp.atom_leaving.append(
+                        row.get("pdbx_leaving_atom_flag", "N") == "Y"
+                    )
+                    try:
+                        x = float(row.get("pdbx_model_Cartn_x_ideal", "?"))
+                        y = float(row.get("pdbx_model_Cartn_y_ideal", "?"))
+                        z = float(row.get("pdbx_model_Cartn_z_ideal", "?"))
+                        coords_x.append(x); coords_y.append(y); coords_z.append(z)
+                    except (ValueError, TypeError):
+                        coords_x.append(0.0); coords_y.append(0.0); coords_z.append(0.0)
+                delattr(current_comp, "_single_atom_row")
+            if coords_x:
+                current_comp.ideal_coords = np.array(
+                    list(zip(coords_x, coords_y, coords_z)), dtype=np.float32
+                )
             components[current_comp.comp_id] = current_comp
         coords_x, coords_y, coords_z = [], [], []
 
@@ -287,11 +314,23 @@ def parse_ccd(cif_path: Path | None = None, cache_path: Path | None = None) -> d
                 descriptor_fields = []
                 continue
 
-            # Atom loop fields
+            # Atom loop fields (or single-value atom row if followed by a value
+            # on the same line — used for single-atom CCD entries like CL, NA).
             elif line_stripped.startswith("_chem_comp_atom."):
-                field_name = line_stripped.split(".")[1].strip()
-                atom_fields.append(field_name)
-                in_atom_loop = True
+                # Split into field and optional value. If there's a value on
+                # the same line, this is a single-atom compound using the
+                # single-value mmCIF format.
+                full = line_stripped[len("_chem_comp_atom."):]
+                parts = full.split(None, 1)
+                field_name = parts[0].strip()
+                if len(parts) > 1:
+                    # Single-value: accumulate into `_single_atom_row` buffer.
+                    if not hasattr(current_comp, "_single_atom_row"):
+                        current_comp._single_atom_row = {}
+                    current_comp._single_atom_row[field_name] = parts[1].strip().strip('"')
+                else:
+                    atom_fields.append(field_name)
+                    in_atom_loop = True
                 continue
 
             # Bond loop fields

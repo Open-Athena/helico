@@ -401,7 +401,10 @@ def predict_target(
     # slots. Previous version loaded MSA for only the first chain and pasted
     # it at positions 0..L_A, leaving other chains with zero MSA and possibly
     # overwriting non-protein tokens. That broke every multichain target.
-    from helico.data import PROTENIX_NUM_MSA_CLASSES
+    from helico.data import (
+        PROTENIX_NUM_MSA_CLASSES, RawChainMSA, compute_msa_features,
+        load_raw_msa_for_chain,
+    )
 
     # Collect token indices per distinct protein chain (stable order).
     protein_chain_tokens: dict[str, list[int]] = {}
@@ -412,35 +415,46 @@ def predict_target(
             continue
         protein_chain_tokens.setdefault(cid, []).append(t_idx)
 
-    chain_msa: dict[str, "MSAFeatures"] = {}
+    # Load RAW per-chain MSAs (preserving all rows, not clustered).
+    chain_raws: dict[str, "RawChainMSA"] = {}
+    chain_msa: dict[str, "MSAFeatures"] = {}  # for profile/deletion_mean
+
     if msa_features is not None:
-        # Caller provided pre-computed MSA; assume it's for the first chain
-        # (legacy interface for tests / single-chain predictions).
         first_cid = next(iter(protein_chain_tokens), None)
         if first_cid is not None:
             chain_msa[first_cid] = msa_features
+            chain_raws[first_cid] = RawChainMSA(
+                msa=msa_features.msa,
+                deletion_matrix=msa_features.deletion_matrix,
+                species_ids=[""] * int(msa_features.msa.shape[0]),
+            )
     elif msa_tar_indices or msa_dir:
         for cid in protein_chain_tokens:
             seq = tokenized.chain_sequences.get(cid, "")
             if not seq:
                 continue
-            feat = None
+            raw = None
             for tar_idx in (msa_tar_indices or []):
-                feat = load_msa_for_chain(
+                raw = load_raw_msa_for_chain(
                     tokenized.pdb_id, cid, sequence=seq, tar_index=tar_idx,
                 )
-                if feat is not None:
+                if raw is not None:
                     break
-            if feat is None and msa_dir:
-                feat = load_msa_for_chain(
+            if raw is None and msa_dir:
+                raw = load_raw_msa_for_chain(
                     tokenized.pdb_id, cid, sequence=seq, msa_dir=msa_dir,
                 )
-            if feat is not None:
-                chain_msa[cid] = feat
+            if raw is not None:
+                chain_raws[cid] = raw
+                # Compute profile/deletion_mean from the raw MSA.
+                chain_msa[cid] = compute_msa_features(
+                    raw.msa, raw.deletion_matrix,
+                    max_seqs=int(raw.msa.shape[0]), n_clusters=1,
+                )
 
-    if not chain_msa and msa_server_url:
+    if not chain_raws and msa_server_url:
         from helico.msa_server import run_mmseqs2
-        from helico.data import parse_a3m, a3m_to_msa_matrix, compute_msa_features
+        from helico.data import parse_a3m, a3m_to_msa_matrix
         cache_dir = msa_cache_dir or Path("msa_cache")
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_name = target_name or tokenized.pdb_id
@@ -457,57 +471,104 @@ def predict_target(
                 if a3m_lines and a3m_lines[0].strip():
                     seqs, _ = parse_a3m(a3m_lines[0])
                     if seqs:
-                        msa, dels = a3m_to_msa_matrix(seqs)
-                        chain_msa[cid] = compute_msa_features(msa, dels)
+                        msa_arr, dels = a3m_to_msa_matrix(seqs)
+                        chain_raws[cid] = RawChainMSA(
+                            msa=msa_arr, deletion_matrix=dels,
+                            species_ids=[""] * len(seqs),
+                        )
+                        chain_msa[cid] = compute_msa_features(
+                            msa_arr, dels, max_seqs=len(seqs), n_clusters=1,
+                        )
             except Exception as e:
                 logger.warning(f"MSA server error for {tokenized.pdb_id} chain {cid}: {e}")
 
-    if chain_msa:
+    if chain_raws:
         logger.debug(
-            f"MSA loaded for {len(chain_msa)}/{len(protein_chain_tokens)} protein chains"
+            f"MSA loaded for {len(chain_raws)}/{len(protein_chain_tokens)} protein chains"
         )
-        # n_seqs on the struct is the raw MSA depth; cluster_msa is pre-clustered
-        # to shape (n_clusters, L). Use the clustered count for the S dimension.
-        s_total = sum(int(feat.cluster_msa.shape[0]) for feat in chain_msa.values())
-        profile = torch.zeros(n_tok, PROTENIX_NUM_MSA_CLASSES)
-        cluster_msa = torch.zeros(s_total, n_tok, dtype=torch.long)
-        cluster_profile = torch.zeros(s_total, n_tok, PROTENIX_NUM_MSA_CLASSES)
-        deletion_mean = torch.zeros(n_tok)
-        cluster_deletion_mean = torch.zeros(s_total, n_tok)
+        # Assemble per Protenix's `merge_chain_features`: pad each chain's
+        # MSA to max depth with GAP rows, then CONCATENATE ALONG THE TOKEN
+        # AXIS. This produces a (max_depth, L_total) matrix where row r
+        # has chain i's r-th sequence at chain i's columns (not block-
+        # diagonal). Crucially every column has real sequence signal for
+        # up to max_depth rows — vs block-diagonal where 2/3 of rows at
+        # a given column would be gap-fill. This matches exactly what
+        # Protenix's assembly does for multichain inputs with no species
+        # pairing available.
+        MSA_MAX_ROWS = 4096  # memory cap (Protenix uses 16384 with chunking)
+        max_depth = min(max(r.msa.shape[0] for r in chain_raws.values()), MSA_MAX_ROWS)
+        ordered_chains = [cid for cid in protein_chain_tokens if cid in chain_raws]
 
-        s_off = 0
-        for cid, feat in chain_msa.items():
+        # Per-chain lengths and (max_depth, L_chain) padded MSA matrices.
+        # Random-subsample each chain's rows when over the cap, matching
+        # Protenix's `sample_msa_feature_dict_random_without_replacement`.
+        # Row 0 is always kept (query).
+        rng = np.random.default_rng(42)
+        msa_cols = []  # list of (max_depth, L_chain) int8 arrays
+        del_cols = []
+        chain_lens = []
+        for cid in ordered_chains:
+            r = chain_raws[cid]
+            L_c = int(r.msa.shape[1])
+            chain_lens.append(L_c)
+            avail = int(r.msa.shape[0])
+            if avail <= max_depth:
+                sel = np.arange(avail)
+            else:
+                # Keep row 0 (query), random-subsample the rest.
+                sel = np.concatenate([[0], rng.choice(np.arange(1, avail),
+                                                      size=max_depth - 1,
+                                                      replace=False)])
+            n_rows = sel.size
+            msa_c = np.full((max_depth, L_c), PROTENIX_NUM_MSA_CLASSES - 1, dtype=np.int8)
+            del_c = np.zeros((max_depth, L_c), dtype=np.int16)
+            msa_c[:n_rows] = r.msa[sel]
+            del_c[:n_rows] = r.deletion_matrix[sel]
+            msa_cols.append(msa_c)
+            del_cols.append(del_c)
+        merged_msa = np.concatenate(msa_cols, axis=1)   # (max_depth, sum L_c)
+        merged_del = np.concatenate(del_cols, axis=1)
+
+        # Flat token indices matching the merged MSA's column order.
+        flat_tok: list[int] = []
+        for cid, L_c in zip(ordered_chains, chain_lens):
+            flat_tok.extend(protein_chain_tokens[cid][:L_c])
+
+        # Scatter into (max_depth, n_tok) with gap-fill for non-protein tokens.
+        raw_msa = torch.full(
+            (max_depth, n_tok), PROTENIX_NUM_MSA_CLASSES - 1, dtype=torch.long,
+        )
+        raw_del = torch.zeros(max_depth, n_tok)
+        tok_sel = torch.tensor(flat_tok, dtype=torch.long)
+        k = min(len(flat_tok), merged_msa.shape[1])
+        raw_msa[:, tok_sel[:k]] = torch.tensor(merged_msa[:, :k], dtype=torch.long)
+        raw_del[:, tok_sel[:k]] = torch.tensor(merged_del[:, :k], dtype=torch.float32)
+
+        # Profile / deletion_mean scattered per-chain (unchanged).
+        profile = torch.zeros(n_tok, PROTENIX_NUM_MSA_CLASSES)
+        deletion_mean = torch.zeros(n_tok)
+        for cid in ordered_chains:
+            feat = chain_msa[cid]
             tok_idx = protein_chain_tokens[cid]
             l_use = min(len(tok_idx), feat.profile.shape[0])
             tok_slice = torch.tensor(tok_idx[:l_use], dtype=torch.long)
-            n_cluster = int(feat.cluster_msa.shape[0])
             profile[tok_slice] = torch.tensor(feat.profile[:l_use], dtype=torch.float32)
             deletion_mean[tok_slice] = torch.tensor(
                 feat.deletion_mean[:l_use], dtype=torch.float32,
             )
-            cluster_msa[s_off:s_off + n_cluster, tok_slice] = torch.tensor(
-                feat.cluster_msa[:, :l_use], dtype=torch.long,
-            )
-            cluster_profile[s_off:s_off + n_cluster, tok_slice] = torch.tensor(
-                feat.cluster_profile[:, :l_use], dtype=torch.float32,
-            )
-            cluster_deletion_mean[s_off:s_off + n_cluster, tok_slice] = torch.tensor(
-                feat.cluster_deletion_mean[:, :l_use], dtype=torch.float32,
-            )
-            s_off += n_cluster
 
         batch["msa_profile"] = profile.unsqueeze(0)
-        batch["cluster_msa"] = cluster_msa.unsqueeze(0)
-        batch["cluster_profile"] = cluster_profile.unsqueeze(0)
+        batch["msa"] = raw_msa.unsqueeze(0)
+        batch["deletion_matrix"] = raw_del.unsqueeze(0)
         batch["deletion_mean"] = deletion_mean.unsqueeze(0)
-        batch["cluster_deletion_mean"] = cluster_deletion_mean.unsqueeze(0)
         batch["has_msa"] = torch.ones(1)
     else:
         batch["msa_profile"] = torch.zeros(1, n_tok, PROTENIX_NUM_MSA_CLASSES)
-        batch["cluster_msa"] = torch.zeros(1, 1, n_tok, dtype=torch.long)
-        batch["cluster_profile"] = torch.zeros(1, 1, n_tok, PROTENIX_NUM_MSA_CLASSES)
+        batch["msa"] = torch.full(
+            (1, 1, n_tok), PROTENIX_NUM_MSA_CLASSES - 1, dtype=torch.long,
+        )
+        batch["deletion_matrix"] = torch.zeros(1, 1, n_tok)
         batch["deletion_mean"] = torch.zeros(1, n_tok)
-        batch["cluster_deletion_mean"] = torch.zeros(1, 1, n_tok)
         batch["has_msa"] = torch.zeros(1)
 
     results = run_inference(model, batch, n_samples=n_samples, device=device, dtype=dtype, n_cycles=n_cycles, verbose_timing=verbose_timing)
