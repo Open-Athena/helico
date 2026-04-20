@@ -1803,6 +1803,19 @@ def _raw_msa_from_a3m(content: str) -> RawChainMSA | None:
     seqs, descs = parse_a3m(content)
     if not seqs:
         return None
+    # Deduplicate identical sequences (Protenix's RawMsa.from_a3m passes
+    # dedup=True for unpaired MSAs). Keep query (row 0) and first occurrence
+    # of each unique sequence. Identical sequences add no information and
+    # Protenix measurably has fewer rows (e.g. 13837 vs our 13906 for 8tuz).
+    seen: set[str] = set()
+    keep_seqs, keep_descs = [], []
+    for s, d in zip(seqs, descs):
+        if s in seen:
+            continue
+        seen.add(s)
+        keep_seqs.append(s)
+        keep_descs.append(d)
+    seqs, descs = keep_seqs, keep_descs
     msa, dels = a3m_to_msa_matrix(seqs)
     species = get_species_ids(descs)
     return RawChainMSA(msa=msa, deletion_matrix=dels, species_ids=species)
