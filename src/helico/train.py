@@ -201,7 +201,10 @@ def load_checkpoint(
         optimizer.load_state_dict(state["optimizer_state_dict"])
 
     if ema is not None and "ema_shadow" in state:
-        ema.shadow = state["ema_shadow"]
+        target_device = next(
+            (model.module if isinstance(model, DDP) else model).parameters()
+        ).device
+        ema.shadow = {k: v.to(target_device) for k, v in state["ema_shadow"].items()}
 
     step = state.get("step", 0)
     logger.info(f"Loaded checkpoint from {path} at step {step}")
