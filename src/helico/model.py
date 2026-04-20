@@ -486,11 +486,18 @@ class OuterProductMean(nn.Module):
         self.linear_2 = nn.Linear(c_m, c_hidden, bias=False)
         self.linear_out = nn.Linear(c_hidden * c_hidden, c_z, bias=True)
 
-    def forward(self, m: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self,
+        m: torch.Tensor,
+        mask: torch.Tensor | None = None,
+        chunk_size: int | None = None,
+    ) -> torch.Tensor:
         """
         Args:
             m: (*, N_msa, N_tok, c_m) MSA embedding
             mask: (*, N_msa, N_tok) MSA mask
+            chunk_size: if set, process MSA rows in chunks of this size to
+                bound peak memory. Essential for >4k MSA depth to avoid OOM.
         Returns:
             (*, N_tok, N_tok, c_z) pair update
         """
@@ -500,28 +507,39 @@ class OuterProductMean(nn.Module):
         m = self.norm(m)
         mask = mask.unsqueeze(-1)  # (*, N_msa, N_tok, 1)
 
-        a = self.linear_1(m) * mask  # (*, N_msa, N_tok, c_hidden)
-        b = self.linear_2(m) * mask
-
-        # Transpose: (*, N_msa, N_tok, C) -> (*, N_tok, N_msa, C)
-        a = a.transpose(-2, -3)
-        b = b.transpose(-2, -3)
-
-        # Outer product (matches Protenix einsum "...bac,...dae->...bdce")
-        # a: (*, N_tok_i, N_msa, C), b: (*, N_tok_j, N_msa, C)
-        # -> (*, N_tok_i, N_tok_j, C, C)
-        outer = torch.einsum("...bac,...dae->...bdce", a, b)
-        outer = outer.flatten(-2)  # (*, N_tok, N_tok, C*C)
-
-        # Protenix applies linear_out BEFORE norm division (order matters due to bias)
-        outer = self.linear_out(outer)
-
-        # Normalize by mask overlap count
-        # mask shape: (*, N_msa, N_tok, 1) -> einsum sums over N_msa
+        N_msa = m.shape[-3]
+        # Normalize by mask overlap count — same regardless of chunking.
         norm = torch.einsum("...abc,...adc->...bdc", mask, mask)  # (*, N_tok, N_tok, 1)
-        outer = outer / (norm + self.eps)
 
-        return outer
+        if chunk_size is None or chunk_size >= N_msa:
+            a = self.linear_1(m) * mask            # (*, N_msa, N_tok, C)
+            b = self.linear_2(m) * mask
+            a = a.transpose(-2, -3)                # (*, N_tok, N_msa, C)
+            b = b.transpose(-2, -3)
+            outer = torch.einsum("...bac,...dae->...bdce", a, b)  # (*, Ni, Nj, C, C)
+            outer = outer.flatten(-2)
+            outer = self.linear_out(outer)
+            return outer / (norm + self.eps)
+
+        # Chunked path: accumulate the flattened outer product BEFORE linear_out.
+        # linear_out has a bias; summing raw outer products first then applying
+        # linear_out once gives mathematically identical output.
+        *batch, _N_msa, N_tok, _c_m = m.shape
+        C = self.c_hidden
+        outer_acc = m.new_zeros(*batch, N_tok, N_tok, C * C)
+        for start in range(0, N_msa, chunk_size):
+            end = min(start + chunk_size, N_msa)
+            m_chunk = m[..., start:end, :, :]
+            mask_chunk = mask[..., start:end, :, :]
+            a = self.linear_1(m_chunk) * mask_chunk
+            b = self.linear_2(m_chunk) * mask_chunk
+            a = a.transpose(-2, -3)
+            b = b.transpose(-2, -3)
+            outer_chunk = torch.einsum("...bac,...dae->...bdce", a, b)
+            outer_chunk = outer_chunk.flatten(-2)
+            outer_acc = outer_acc + outer_chunk
+        outer = self.linear_out(outer_acc)
+        return outer / (norm + self.eps)
 
 
 class MSAPairWeightedAveraging(nn.Module):
@@ -542,35 +560,48 @@ class MSAPairWeightedAveraging(nn.Module):
         nn.init.zeros_(self.linear_mg.weight)
         nn.init.zeros_(self.linear_out.weight)
 
-    def forward(self, m: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        m: torch.Tensor,
+        z: torch.Tensor,
+        chunk_size: int | None = None,
+    ) -> torch.Tensor:
         """
         Args:
             m: (*, N_msa, N_tok, c_m)
             z: (*, N_tok, N_tok, c_z)
+            chunk_size: optional MSA-axis chunk size. Each row's update is
+                independent of other rows (only pair weights `w` are shared),
+                so we can chunk naively to bound memory for deep MSAs.
         Returns:
             (*, N_msa, N_tok, c_m) updated MSA embedding
         """
         H, dh = self.n_heads, self.head_dim
 
-        m_norm = self.layernorm_m(m)
-        v = self.linear_mv(m_norm)  # (*, N_msa, N_tok, H*dh)
-        v = v.unflatten(-1, (H, dh))  # (*, N_msa, N_tok, H, dh)
+        # Pair weights: independent of MSA axis, compute once.
+        w = self.linear_z(self.layernorm_z(z))      # (*, N_tok, N_tok, H)
+        w = F.softmax(w, dim=-2)
 
-        # Pair weights: softmax over j dimension
-        w = self.linear_z(self.layernorm_z(z))  # (*, N_tok, N_tok, H)
-        w = F.softmax(w, dim=-2)  # softmax over source token dim
+        N_msa = m.shape[-3]
+        if chunk_size is None or chunk_size >= N_msa:
+            m_norm = self.layernorm_m(m)
+            v = self.linear_mv(m_norm).unflatten(-1, (H, dh))
+            g = torch.sigmoid(self.linear_mg(m_norm)).unflatten(-1, (H, dh))
+            o = torch.einsum("...ijh,...mjhc->...mihc", w, v)
+            o = (g * o).flatten(-2)
+            return self.linear_out(o)
 
-        # Gate
-        g = torch.sigmoid(self.linear_mg(m_norm))  # (*, N_msa, N_tok, H*dh)
-        g = g.unflatten(-1, (H, dh))  # (*, N_msa, N_tok, H, dh)
-
-        # Weighted average: o_mih = sum_j w_ijh * v_mjhc
-        o = torch.einsum("...ijh,...mjhc->...mihc", w, v)
-
-        # Gate and project
-        o = g * o  # (*, N_msa, N_tok, H, dh)
-        o = o.flatten(-2)  # (*, N_msa, N_tok, H*dh)
-        return self.linear_out(o)
+        chunks = []
+        for start in range(0, N_msa, chunk_size):
+            end = min(start + chunk_size, N_msa)
+            m_c = m[..., start:end, :, :]
+            m_norm = self.layernorm_m(m_c)
+            v = self.linear_mv(m_norm).unflatten(-1, (H, dh))
+            g = torch.sigmoid(self.linear_mg(m_norm)).unflatten(-1, (H, dh))
+            o = torch.einsum("...ijh,...mjhc->...mihc", w, v)
+            o = (g * o).flatten(-2)
+            chunks.append(self.linear_out(o))
+        return torch.cat(chunks, dim=-3)
 
 
 class MSAStack(nn.Module):
@@ -581,17 +612,37 @@ class MSAStack(nn.Module):
         self.pair_avg = MSAPairWeightedAveraging(c_m, c_z, n_heads, head_dim)
         self.transition = Transition(c_m, factor=4)
 
-    def forward(self, m: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        m: torch.Tensor,
+        z: torch.Tensor,
+        chunk_size: int | None = None,
+    ) -> torch.Tensor:
         """
         Args:
             m: (*, N_msa, N_tok, c_m)
             z: (*, N_tok, N_tok, c_z)
+            chunk_size: if set, process MSA rows in chunks; bounds memory
+                for Transition's (N_msa, N_tok, 4*c_m) activation.
         Returns:
             (*, N_msa, N_tok, c_m)
         """
-        m = m + self.pair_avg(m, z)
-        m = m + self.transition(m)
-        return m
+        N_msa = m.shape[-3]
+        if chunk_size is None or chunk_size >= N_msa:
+            m = m + self.pair_avg(m, z)
+            m = m + self.transition(m)
+            return m
+
+        # Chunk the whole stack along MSA axis. pair_avg + transition are
+        # both per-row independent (pair weights come from z which is shared).
+        out_chunks = []
+        for start in range(0, N_msa, chunk_size):
+            end = min(start + chunk_size, N_msa)
+            m_chunk = m[..., start:end, :, :]
+            m_chunk = m_chunk + self.pair_avg(m_chunk, z)
+            m_chunk = m_chunk + self.transition(m_chunk)
+            out_chunks.append(m_chunk)
+        return torch.cat(out_chunks, dim=-3)
 
 
 class MSABlock(nn.Module):
@@ -614,6 +665,7 @@ class MSABlock(nn.Module):
         z: torch.Tensor,
         msa_mask: torch.Tensor | None = None,
         pair_mask: torch.Tensor | None = None,
+        msa_chunk_size: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -621,16 +673,17 @@ class MSABlock(nn.Module):
             z: (B, N_tok, N_tok, c_z) pair embedding
             msa_mask: (B, N_msa, N_tok) MSA mask
             pair_mask: (B, N_tok, N_tok) pair mask
+            msa_chunk_size: chunk MSA rows in OPM/MSAStack to bound memory
         Returns:
             m: updated MSA embedding
             z: updated pair embedding
         """
         # OPM: MSA -> pair update
-        z = z + self.opm(m, mask=msa_mask)
+        z = z + self.opm(m, mask=msa_mask, chunk_size=msa_chunk_size)
 
         # MSA stack (not in last block) — runs BEFORE pair_stack (matching Protenix)
         if self.has_msa_stack:
-            m = self.msa_stack(m, z)
+            m = self.msa_stack(m, z, chunk_size=msa_chunk_size)
 
         # Pair stack (PairformerBlock without single path)
         _, z = self.pair_stack(None, z, pair_mask=pair_mask)
@@ -663,6 +716,7 @@ class MSAModule(nn.Module):
         s_inputs: torch.Tensor,
         msa_mask: torch.Tensor | None = None,
         pair_mask: torch.Tensor | None = None,
+        msa_chunk_size: int | None = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -671,6 +725,9 @@ class MSAModule(nn.Module):
             s_inputs: (B, N_tok, c_s_inputs) single input features
             msa_mask: (B, N_msa, N_tok) MSA mask
             pair_mask: (B, N_tok, N_tok) pair mask
+            msa_chunk_size: chunk MSA rows in OPM/MSAStack to bound memory —
+                enables deep MSAs (e.g. 16k rows) without OOM. Matches
+                Protenix's `msa_chunk_size` default of 2048 at inference.
         Returns:
             z: (B, N_tok, N_tok, c_z) updated pair embedding
         """
@@ -679,9 +736,15 @@ class MSAModule(nn.Module):
 
         for block in self.blocks:
             if self.config.gradient_checkpointing and self.training:
-                m, z = grad_checkpoint(block, m, z, msa_mask, pair_mask, use_reentrant=False)
+                m, z = grad_checkpoint(
+                    block, m, z, msa_mask, pair_mask, msa_chunk_size,
+                    use_reentrant=False,
+                )
             else:
-                m, z = block(m, z, msa_mask=msa_mask, pair_mask=pair_mask)
+                m, z = block(
+                    m, z, msa_mask=msa_mask, pair_mask=pair_mask,
+                    msa_chunk_size=msa_chunk_size,
+                )
 
         return z
 
@@ -2637,7 +2700,10 @@ class Helico(nn.Module):
         for cycle in range(n_cycles):
             z = z_init + self.linear_z_cycle(self.layernorm_z_cycle(z))
             z = z + self.template_embedder(batch, z)  # returns 0 for now
-            z = self.msa_module(msa_raw, z, s_inputs, msa_mask, pair_mask)
+            z = self.msa_module(
+                msa_raw, z, s_inputs, msa_mask, pair_mask,
+                msa_chunk_size=(None if self.training else 2048),
+            )
             s = s_init + self.linear_s(self.layernorm_s(s))
             s, z = self.pairformer(s, z, mask=mask, pair_mask=pair_mask)
 
@@ -2771,7 +2837,10 @@ class Helico(nn.Module):
             t_c0 = _sync_time()
             z = z_init + self.linear_z_cycle(self.layernorm_z_cycle(z))
             z = z + self.template_embedder(batch, z)
-            z = self.msa_module(msa_raw, z, s_inputs, msa_mask, pair_mask)
+            z = self.msa_module(
+                msa_raw, z, s_inputs, msa_mask, pair_mask,
+                msa_chunk_size=(None if self.training else 2048),
+            )
             s = s_init + self.linear_s(self.layernorm_s(s))
             s, z = self.pairformer(s, z, mask=mask, pair_mask=pair_mask)
             cycle_times.append(_sync_time() - t_c0)

@@ -495,7 +495,7 @@ def predict_target(
         # a given column would be gap-fill. This matches exactly what
         # Protenix's assembly does for multichain inputs with no species
         # pairing available.
-        MSA_MAX_ROWS = 4096  # memory cap (Protenix uses 16384 with chunking)
+        MSA_MAX_ROWS = 16384  # matches Protenix's msa_max_size; model chunks internally
         max_depth = min(max(r.msa.shape[0] for r in chain_raws.values()), MSA_MAX_ROWS)
         ordered_chains = [cid for cid in protein_chain_tokens if cid in chain_raws]
 
