@@ -2548,27 +2548,45 @@ class Helico(nn.Module):
         )
 
     def _build_msa_raw(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Build raw MSA features (B, N_msa, N_tok, 34) and mask."""
+        """Build raw MSA features (B, N_msa, N_tok, 34) and mask.
+
+        Protenix feeds the RAW MSA rows (with deletion matrix) to the MSA
+        module, not a clustered view: a 13k-row MSA enters as 13k rows
+        (optionally subsampled to test_cutoff=16384). We previously fed the
+        64-row cluster summary via `cluster_msa` which threw away >99% of the
+        alignment diversity and explains most of the reproduction gap on
+        multichain targets. Now prefer the raw `msa` + `deletion_matrix` when
+        provided, falling back to clustered fields for backward compat.
+        """
         B, N_tok = batch["token_types"].shape
         device = batch["token_types"].device
         dtype = batch.get("ref_coords", batch["atom_coords"]).dtype
 
-        cluster_msa = batch.get("cluster_msa")
-        if cluster_msa is None:
+        msa_int = batch.get("msa")
+        if msa_int is not None:
+            del_raw = batch.get(
+                "deletion_matrix",
+                torch.zeros(B, msa_int.shape[1], N_tok, device=device, dtype=dtype),
+            )
+        else:
+            msa_int = batch.get("cluster_msa")
+            del_raw = batch.get("cluster_deletion_mean")
+        if msa_int is None:
             msa_raw = torch.zeros(B, 1, N_tok, 34, device=device, dtype=dtype)
             return msa_raw, None
 
-        N_msa = cluster_msa.shape[1]
+        N_msa = msa_int.shape[1]
+        if del_raw is None:
+            del_raw = torch.zeros(B, N_msa, N_tok, device=device, dtype=dtype)
+
         # One-hot encode MSA residues (already in Protenix 32-class encoding)
-        msa_onehot = F.one_hot(cluster_msa.clamp(max=31), 32).to(dtype)
+        msa_onehot = F.one_hot(msa_int.clamp(max=31), 32).to(dtype)
 
-        # has_deletion: clamp(cluster_deletion_mean, 0, 1)
-        cluster_del = batch.get("cluster_deletion_mean",
-                                torch.zeros(B, N_msa, N_tok, device=device, dtype=dtype))
-        has_del = cluster_del.clamp(0, 1).unsqueeze(-1)  # (B, N_msa, N_tok, 1)
-
-        # deletion_value: arctan(cluster_deletion_mean / 3) * 2 / pi
-        del_val = (torch.arctan(cluster_del / 3.0) * (2.0 / math.pi)).unsqueeze(-1)
+        # Features per Protenix (pairformer.py:724-725):
+        # has_deletion = clip(deletion_matrix, 0, 1), deletion_value = arctan(d/3)*2/pi
+        del_raw = del_raw.to(dtype)
+        has_del = del_raw.clamp(0, 1).unsqueeze(-1)  # (B, N_msa, N_tok, 1)
+        del_val = (torch.arctan(del_raw / 3.0) * (2.0 / math.pi)).unsqueeze(-1)
 
         msa_raw = torch.cat([msa_onehot, has_del, del_val], dim=-1)  # (B, N_msa, N_tok, 34)
         return msa_raw, None

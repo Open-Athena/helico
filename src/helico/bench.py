@@ -466,48 +466,48 @@ def predict_target(
         logger.debug(
             f"MSA loaded for {len(chain_msa)}/{len(protein_chain_tokens)} protein chains"
         )
-        # n_seqs on the struct is the raw MSA depth; cluster_msa is pre-clustered
-        # to shape (n_clusters, L). Use the clustered count for the S dimension.
-        s_total = sum(int(feat.cluster_msa.shape[0]) for feat in chain_msa.values())
+        # Protenix feeds the RAW MSA rows (up to 16384 at inference) into the
+        # MSA module, NOT a 64-row cluster summary. Clustering discards
+        # >99% of the alignment diversity and is a large source of the
+        # multichain reproduction gap. Keep up to MAX_MSA raw rows instead.
+        MAX_MSA = 512
+        per_chain_rows = [min(int(feat.msa.shape[0]), MAX_MSA) for feat in chain_msa.values()]
+        s_total = sum(per_chain_rows)
+
         profile = torch.zeros(n_tok, PROTENIX_NUM_MSA_CLASSES)
-        cluster_msa = torch.zeros(s_total, n_tok, dtype=torch.long)
-        cluster_profile = torch.zeros(s_total, n_tok, PROTENIX_NUM_MSA_CLASSES)
         deletion_mean = torch.zeros(n_tok)
-        cluster_deletion_mean = torch.zeros(s_total, n_tok)
+        raw_msa = torch.full((s_total, n_tok), PROTENIX_NUM_MSA_CLASSES - 1, dtype=torch.long)
+        raw_del = torch.zeros(s_total, n_tok)
 
         s_off = 0
-        for cid, feat in chain_msa.items():
+        for (cid, feat), n_rows in zip(chain_msa.items(), per_chain_rows):
             tok_idx = protein_chain_tokens[cid]
             l_use = min(len(tok_idx), feat.profile.shape[0])
             tok_slice = torch.tensor(tok_idx[:l_use], dtype=torch.long)
-            n_cluster = int(feat.cluster_msa.shape[0])
             profile[tok_slice] = torch.tensor(feat.profile[:l_use], dtype=torch.float32)
             deletion_mean[tok_slice] = torch.tensor(
                 feat.deletion_mean[:l_use], dtype=torch.float32,
             )
-            cluster_msa[s_off:s_off + n_cluster, tok_slice] = torch.tensor(
-                feat.cluster_msa[:, :l_use], dtype=torch.long,
+            raw_msa[s_off:s_off + n_rows, tok_slice] = torch.tensor(
+                feat.msa[:n_rows, :l_use], dtype=torch.long,
             )
-            cluster_profile[s_off:s_off + n_cluster, tok_slice] = torch.tensor(
-                feat.cluster_profile[:, :l_use], dtype=torch.float32,
+            raw_del[s_off:s_off + n_rows, tok_slice] = torch.tensor(
+                feat.deletion_matrix[:n_rows, :l_use], dtype=torch.float32,
             )
-            cluster_deletion_mean[s_off:s_off + n_cluster, tok_slice] = torch.tensor(
-                feat.cluster_deletion_mean[:, :l_use], dtype=torch.float32,
-            )
-            s_off += n_cluster
+            s_off += n_rows
 
         batch["msa_profile"] = profile.unsqueeze(0)
-        batch["cluster_msa"] = cluster_msa.unsqueeze(0)
-        batch["cluster_profile"] = cluster_profile.unsqueeze(0)
+        batch["msa"] = raw_msa.unsqueeze(0)
+        batch["deletion_matrix"] = raw_del.unsqueeze(0)
         batch["deletion_mean"] = deletion_mean.unsqueeze(0)
-        batch["cluster_deletion_mean"] = cluster_deletion_mean.unsqueeze(0)
         batch["has_msa"] = torch.ones(1)
     else:
         batch["msa_profile"] = torch.zeros(1, n_tok, PROTENIX_NUM_MSA_CLASSES)
-        batch["cluster_msa"] = torch.zeros(1, 1, n_tok, dtype=torch.long)
-        batch["cluster_profile"] = torch.zeros(1, 1, n_tok, PROTENIX_NUM_MSA_CLASSES)
+        batch["msa"] = torch.full(
+            (1, 1, n_tok), PROTENIX_NUM_MSA_CLASSES - 1, dtype=torch.long,
+        )
+        batch["deletion_matrix"] = torch.zeros(1, 1, n_tok)
         batch["deletion_mean"] = torch.zeros(1, n_tok)
-        batch["cluster_deletion_mean"] = torch.zeros(1, 1, n_tok)
         batch["has_msa"] = torch.zeros(1)
 
     results = run_inference(model, batch, n_samples=n_samples, device=device, dtype=dtype, n_cycles=n_cycles, verbose_timing=verbose_timing)
