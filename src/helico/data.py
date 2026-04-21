@@ -765,7 +765,11 @@ class TokenizedStructure:
     chain_ids: list[str]          # chain_id per token
     entity_types: list[str]       # entity type per token
     chain_sequences: dict[str, str] = field(default_factory=dict)  # chain_id -> sequence
-    token_bonds: torch.Tensor | None = None  # (N_tok, N_tok) float; 1.0 for covalent bonds
+    # Sparse edge list of (ti, tj) covalent/metallic/disulfide + intra-ligand CCD bonds.
+    # Stored sparse because a dense (N_tok, N_tok) tensor is quadratic in n_tokens and
+    # blew up preprocess workers to 200+GB RSS on ribosomes/capsids. Materialized to
+    # dense (N_tok, N_tok) in to_features(). Older pickles may store a Tensor directly.
+    token_bonds: list[tuple[int, int]] | torch.Tensor | None = None
 
     @property
     def n_tokens(self) -> int:
@@ -956,7 +960,15 @@ class TokenizedStructure:
             "n_atoms": total_atoms,
         }
         if self.token_bonds is not None:
-            result["token_bonds"] = self.token_bonds
+            if isinstance(self.token_bonds, torch.Tensor):
+                # Legacy pickles stored a dense (N_tok, N_tok) tensor.
+                result["token_bonds"] = self.token_bonds
+            elif self.token_bonds:
+                bonds = torch.zeros(n_tok, n_tok)
+                for ti, tj in self.token_bonds:
+                    bonds[ti, tj] = 1.0
+                    bonds[tj, ti] = 1.0
+                result["token_bonds"] = bonds
         return result
 
 
@@ -1211,11 +1223,10 @@ def tokenize_structure(
         token.sym_id = chain_sym[cid]
 
     # Compute token_bonds from _struct_conn (covalent/metallic/disulfide bonds)
-    # plus intra-ligand CCD bonds (Bug 3).
-    n_tokens = len(tokens)
-    token_bonds_tensor = None
+    # plus intra-ligand CCD bonds (Bug 3). Emit sparse edge list — see note on
+    # TokenizedStructure.token_bonds.
+    token_bond_edges: list[tuple[int, int]] = []
     if structure.struct_conn or ligand_bond_edges:
-        token_bonds_tensor = torch.zeros(n_tokens, n_tokens)
         for asym1, seq1, _comp1, atom1, asym2, seq2, _comp2, atom2 in structure.struct_conn:
             # Try atom-level match first (needed for ligand per-atom tokens)
             ti = atom_to_token_bond.get((asym1, seq1, atom1))
@@ -1225,11 +1236,8 @@ def tokenize_structure(
             if tj is None:
                 tj = residue_to_token.get((asym2, seq2))
             if ti is not None and tj is not None and ti != tj:
-                token_bonds_tensor[ti, tj] = 1.0
-                token_bonds_tensor[tj, ti] = 1.0
-        for ti, tj in ligand_bond_edges:
-            token_bonds_tensor[ti, tj] = 1.0
-            token_bonds_tensor[tj, ti] = 1.0
+                token_bond_edges.append((ti, tj))
+        token_bond_edges.extend(ligand_bond_edges)
 
     chain_sequences = {c.chain_id: c.sequence for c in structure.chains if c.sequence}
 
@@ -1239,7 +1247,7 @@ def tokenize_structure(
         chain_ids=chain_ids,
         entity_types=entity_types,
         chain_sequences=chain_sequences,
-        token_bonds=token_bonds_tensor,
+        token_bonds=token_bond_edges if token_bond_edges else None,
     )
 
 
@@ -1475,22 +1483,15 @@ def tokenize_sequences(
             entity_sym_counter[eid] = entity_sym_counter.get(eid, 0) + 1
         token.sym_id = chain_sym[cid]
 
-    # Build token_bonds tensor from ligand intra-residue bonds (Bug 3).
-    token_bonds_tensor = None
-    if ligand_bond_edges:
-        n_tokens = len(tokens)
-        token_bonds_tensor = torch.zeros(n_tokens, n_tokens)
-        for ti, tj in ligand_bond_edges:
-            token_bonds_tensor[ti, tj] = 1.0
-            token_bonds_tensor[tj, ti] = 1.0
-
+    # Build token_bonds from ligand intra-residue bonds (Bug 3). Sparse edge
+    # list — see note on TokenizedStructure.token_bonds.
     return TokenizedStructure(
         pdb_id="PREDICT",
         tokens=tokens,
         chain_ids=chain_ids,
         entity_types=entity_types,
         chain_sequences=chain_sequences,
-        token_bonds=token_bonds_tensor,
+        token_bonds=list(ligand_bond_edges) if ligand_bond_edges else None,
     )
 
 
@@ -2746,7 +2747,10 @@ def preprocess_structures(
     Returns dict mapping pdb_id -> StructureMetadata.
     """
     if n_workers is None:
-        n_workers = min(32, os.cpu_count() or 4)
+        # Conservative cap: each worker can balloon to tens of GB on large
+        # assemblies (ribosomes, capsids), and workers leak memory across tasks.
+        # With ~500GB RAM this leaves ~30GB headroom per worker before swap.
+        n_workers = min(16, os.cpu_count() or 4)
 
     # Load CCD
     logger.info("Loading CCD...")
@@ -2785,8 +2789,11 @@ def preprocess_structures(
     n_done = 0
     n_total = len(args_list)
 
-    with ctx.Pool(n_workers, initializer=_init_worker, initargs=(ccd,)) as pool:
-        for result in pool.imap_unordered(_process_single_structure, args_list, chunksize=16):
+    # maxtasksperchild recycles workers periodically so leaked memory from
+    # parse_mmcif/tokenize_structure doesn't accumulate (the pre-2026-04 runs
+    # OOM-killed the machine when workers grew to 200-300GB RSS).
+    with ctx.Pool(n_workers, initializer=_init_worker, initargs=(ccd,), maxtasksperchild=25) as pool:
+        for result in pool.imap_unordered(_process_single_structure, args_list, chunksize=8):
             n_done += 1
             if result is not None:
                 metadata[result.pdb_id] = result
