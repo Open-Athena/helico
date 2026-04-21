@@ -113,7 +113,7 @@ TRAIN_ARGS = {
     gpu=GPU,
     timeout=24 * 3600,
     volumes={DATA_ROOT: data_volume, CKPT_ROOT: ckpt_volume},
-    secrets=[modal.Secret.from_name("wandb-api-key")],
+    secrets=[modal.Secret.from_name("wandb-credentials")],
     ephemeral_disk=600 * 1024,
 )
 def train_remote(args: dict) -> dict:
