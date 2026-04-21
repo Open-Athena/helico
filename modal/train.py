@@ -121,9 +121,11 @@ def train_remote(args: dict) -> dict:
     import subprocess
     import shlex
 
-    # Install helico first (editable).
+    # Install helico first (editable). wandb goes into the venv too so
+    # rank-0 logging works — the image-level wandb lives in a different
+    # Python that helico-train doesn't use.
     subprocess.run(
-        "cd /root/helico && uv venv --python 3.11 && uv pip install -e '.[bench]'",
+        "cd /root/helico && uv venv --python 3.11 && uv pip install -e . wandb",
         check=True, shell=True,
     )
 
