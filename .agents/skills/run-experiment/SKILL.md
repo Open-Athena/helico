@@ -1,105 +1,100 @@
 ---
 name: run-experiment
-description: Dispatch an experiment's notebook end-to-end. Use when the user comments `@claude run` or similar in an experiment-labeled issue.
+description: Execute an experiment's notebook end-to-end and report results back to its GitHub issue. Use when the user points you at an experiment issue ("run #7", "run exp4", etc.).
 ---
 
 # run-experiment
 
-Run an experiment's notebook on Modal, post results back to the issue.
+Execute an experiment's notebook on Modal, then post results back to the
+issue. Runs in whatever environment Claude is currently in (local laptop,
+CI runner, etc.) — no assumption of being in GitHub Actions.
 
 ## Prerequisites
 
 - The issue is labeled `experiment` and has an associated
-  `experiments/exp<N>_<slug>/README.md` notebook on the branch in its
-  frontmatter (`helico_experiment.branch`). If not, ask the researcher
-  to create the notebook first (pointing them at `experiments/TEMPLATE.md`).
-- `.github/experiments.yaml` exists and contains `cost_gate_usd`.
-- Modal auth: `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` env vars available.
-- HF auth: `HF_TOKEN` env var for `helico-publish` to work (optional in
-  dry-run).
+  `experiments/exp<N>_<slug>/README.md` notebook. If not, use
+  `scripts/pm/scaffold_experiment.py --issue <N>` to create the skeleton,
+  edit the body from the issue text, then run.
+- Modal auth is set up on this machine (`modal token new` has been run).
+- HF auth: `HF_TOKEN` env var (or `hf auth login`) for `helico-publish`.
+- `.github/experiments.yaml` defines the cost gate.
 
 ## Workflow
 
-1. **Identify the notebook.** From the issue, derive `experiments/exp<N>_<slug>/`.
+1. **Identify the notebook.** From the issue number, locate
+   `experiments/exp<N>_<slug>/`. Read its frontmatter for the branch.
    If the branch in frontmatter is not `main`, `git checkout <branch>`.
 
-2. **Post a single 🤖 status comment** using `gh issue comment --edit-last`
-   pattern. Initial content:
-   ```
-   🤖 Starting experiment run. Parsing spec and estimating cost.
-   ```
-
-3. **Dry run + cost gate.**
+2. **Dry run + cost gate.**
    ```bash
    HELICO_DRY_RUN=1 uv run python scripts/pm/run_experiment.py \
        experiments/exp<N>_<slug>/
    ```
-   Read the `[helico.experiment] ensure_*` lines in the output — they print
-   per-step cost estimates. Sum them or call
-   `helico.experiment.dry_run_total_usd()` from a small script to get the
-   total. Compare to `.github/experiments.yaml` → `cost_gate_usd`.
+   Read the `[helico.experiment] ensure_* — dry-run (~$X)` lines. Sum
+   them; compare against `cost_gate_usd` in `.github/experiments.yaml`.
 
-4. **Gate decision.**
-   - Under gate: update the status comment with the estimate and launch.
-   - Over gate: update the status comment:
-     ```
-     🤖 Cost estimate $X exceeds gate $Y. Reply `@claude approve` to proceed.
-     ```
-     Stop. Do not run.
+3. **Gate decision.**
+   - Under gate → tell the user the estimate and proceed.
+   - Over gate → stop and ask the user for explicit approval in chat
+     before spending. Don't proceed without a clear "yes".
 
-5. **Approval path.** If the user replies `@claude approve`, set
-   `HELICO_COST_APPROVED=1` in the environment and launch. Treat this
-   variable as the approval token — it's how we tell the next invocation
-   the gate has been lifted.
-
-6. **Run.**
+4. **Run.**
    ```bash
    uv run python scripts/pm/run_experiment.py experiments/exp<N>_<slug>/
    ```
-   This blocks until Modal completes. Stream logs if possible.
+   This blocks until Modal completes. If wall clock exceeds what the
+   user is willing to wait, use `run_in_background` on the tool call
+   and report when done.
 
-7. **Publish.** After a successful run:
-   - Read `experiments/exp<N>_<slug>/.cache/benches/<name>/summary.csv`
-     and `.meta.json` to get headline numbers.
-   - If auto-publish wasn't already done in the notebook
-     (`publish=True`), run:
-     ```bash
-     uv run helico-publish bench --experiment exp<N>_<slug> --name <name>
-     ```
-
-8. **Commit committed artifacts.** The notebook writes small CSVs under
-   `experiments/exp<N>_<slug>/data/` and plots under `plots/`. Commit
-   those on the experiment's branch (create a PR back to `main` if the
-   notebook's branch is not `main`).
-
-9. **Post results comment.** Update the status comment with headline
-   numbers, HF link, and a one-paragraph interpretation:
+5. **Publish.** After a successful run (unless the notebook already used
+   `ensure_bench_run(..., publish=True)`):
+   ```bash
+   uv run helico-publish bench --experiment exp<N>_<slug> --name <step-name>
    ```
-   🤖 Bench complete ($actual_cost actual). Headline:
+
+6. **Commit committed artifacts** (CSVs under `data/`, PNGs under `plots/`)
+   to the experiment's branch. Open a PR back to `main` if the branch is
+   not `main`.
+
+7. **Post results to the issue.** Use `gh issue comment <N>` with a
+   headline-numbers + links body. Prefix with 🤖 so the convention is
+   consistent. Example:
+   ```
+   🤖 Bench complete (~$actual_cost).
+
+   Headline:
    - monomer_protein.mean_lddt = 0.734
    - interface_protein_protein.mean_lddt = 0.487
-   - ...
-   See [HF bucket](<url>) for full artifacts.
+   (full table in the notebook)
+
+   HF: <bucket url>
+   Notebook: experiments/exp<N>_<slug>/README.md
    ```
 
 ## Rules
 
-- **Never bypass the cost gate.** Splitting a run into smaller named
-  steps to avoid the gate is explicitly disallowed — the gate exists to
-  catch runaway spend.
-- **Never destroy prior artifacts.** If `.cache/benches/<name>/` exists
-  already, the library's idempotency layer returns cached results — do
-  not delete to force a rerun. If the researcher wants a rerun, either
-  add `force=True` to the specific call or bump the step name.
-- **One 🤖 comment per run.** Use `gh issue comment --edit-last` for
-  progress updates. Don't post a fresh comment per step.
-- **Respect the branch.** If the notebook's frontmatter says `branch:
-  exp/N-slug`, operate on that branch. Don't commit to `main` implicitly.
+- **Never bypass the cost gate** by splitting a run into smaller named
+  steps. The gate exists to catch runaway spend; route around it only
+  with explicit user approval.
+- **Never destroy prior artifacts**. If `.cache/benches/<name>/` exists,
+  the library returns cached results — don't delete to force a rerun.
+  If the researcher wants a rerun, either add `force=True` to the
+  specific call or bump the step name.
+- **One agent comment per run**. If you posted a status while dispatching,
+  edit it with `gh issue comment --edit-last <N>`. Don't spam multiple
+  updates.
+- **Respect the branch**. If the frontmatter says `branch: exp/N-slug`,
+  operate on that branch. Don't commit to `main` implicitly.
 
 ## Failure modes
 
-- Modal auth missing → surface clearly, ask user to set secrets.
-- Cost estimate fails → don't run blind; post the error.
-- GH Actions 6h limit exceeded → post a comment suggesting either
-  `max_targets=100` for a subset run, or that the researcher execute
-  locally where the time limit doesn't apply.
+- Modal auth missing → surface clearly, ask the user to run `modal token new`.
+- `cuDNN Frontend error` during inference → usually a cuequivariance
+  version drift. Check pyproject.toml pins and modal/bench.py's image
+  spec. See commits 4d23f5e, ec58b03 for history.
+- Numpy `ModuleNotFoundError: No module named 'numpy._core.numeric'` →
+  numpy version skew between local and Modal; both must be >=2.0. See
+  commits 6f8e152, 0d521d3.
+- Notebook execution fails mid-way → the `ensure_*` cache still has
+  partial artifacts. Inspect `.cache/benches/<name>/` and `meta.json` to
+  decide whether to rerun with `force=True` or bump the step name.

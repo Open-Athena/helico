@@ -6,24 +6,26 @@ description: Post a results-analysis comment to an experiment issue after a comp
 # analyze-results
 
 After a bench or training run finishes, produce a short analysis comment
-on the issue: headline numbers, comparison against the stated baselines
-in the notebook's frontmatter, and a one-paragraph interpretation.
+on the issue: headline numbers, comparison against baselines, and a
+one-paragraph interpretation.
 
 ## Inputs
 
 - `experiments/exp<N>_<slug>/.cache/benches/<name>/summary.csv` (or
   `.cache/trainings/<name>/meta.json`)
-- `experiments/exp<N>_<slug>/README.md` frontmatter (`helico_experiment.baselines`)
+- `experiments/exp<N>_<slug>/README.md` frontmatter — `helico_experiment.baselines`
+  names prior runs to compare against
 - The issue body's "Success criteria" section
 
 ## Workflow
 
-1. Read `summary.csv` and pull the numbers named in the issue's Success
-   criteria.
+1. Read `summary.csv` and pull the metrics named in the issue's Success
+   criteria section.
 2. For each baseline listed in the frontmatter, try to load
-   `experiments/exp<N_baseline>_<slug_baseline>/data/summary.csv` (or
-   `.cache/`). Compute deltas per category.
-3. Render a comment:
+   `experiments/exp<N_baseline>_<slug>/data/summary.csv` (these are the
+   committed summaries, not the `.cache/` ones). Compute deltas per
+   category.
+3. Render a comment along these lines:
 
    ```
    🤖 Results posted.
@@ -39,27 +41,26 @@ in the notebook's frontmatter, and a one-paragraph interpretation.
    **Artifacts**
    - HF bucket: <url>
    - Notebook: experiments/exp<N>_<slug>/README.md
-   - WandB: <url>  ← if available
+   - WandB: <url>  (if available)
 
    See the notebook for plots and discussion.
    ```
 
-4. If any success criteria fail, flag them with `- [ ]` prefix and
-   mention in the interpretation paragraph.
+4. Post via `gh issue comment <N> --body "..."` (or
+   `--edit-last` if a 🤖 comment already exists for this run).
 
 ## Rules
 
-- **One comment.** Edit the existing 🤖 comment rather than posting a new
-  one (use `gh issue comment --edit-last`).
+- **One comment per run.** Edit the existing 🤖 comment rather than
+  posting a new one.
 - **No speculation.** Report the numbers and whether criteria were met.
-  Interpretation beyond "criteria met/not met" belongs in the notebook's
-  Conclusion section, which the researcher writes.
-- **No re-dispatching.** This skill only reads existing artifacts. If
-  you need to rerun something, invoke the `run-experiment` skill
-  separately.
+  Interpretation beyond "criteria met / not met" belongs in the
+  notebook's Conclusion section, which the researcher writes.
+- **No re-dispatching.** This skill only reads existing artifacts. If a
+  rerun is needed, invoke `run-experiment` separately.
 
 ## When baseline is missing
 
-If a named baseline can't be loaded (no summary.csv in its experiment
-dir), note this and skip the delta for that baseline. Don't fail the
-analysis — still post the absolute numbers.
+If a named baseline's `data/summary.csv` can't be loaded, note it and
+skip the delta for that baseline. Don't fail — still post the absolute
+numbers.

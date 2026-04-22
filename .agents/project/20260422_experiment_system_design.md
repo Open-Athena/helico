@@ -167,44 +167,40 @@ Gate enforcement happens at two points:
   `HELICO_DRY_RUN=1`, sums costs, aborts and posts for approval if above
   threshold. On approval, reruns without dry-run.
 
-## Agent runtime (Wave 3)
+## Agent runtime
 
-Primary: **GitHub Actions + `anthropics/claude-code-action`**, ACL-gated
-to OWNER/MEMBER/COLLABORATOR. Agent comments start with 🤖; agent-opened
-PRs and issues carry the `agent-generated` label; progress updates via
-`gh issue comment --edit-last`.
+**Current mode: manual / local.** The user files a GitHub issue, then
+points a Claude session (running on their machine) at it. The agent
+reads the issue, scaffolds the notebook, runs it on Modal, and posts
+results back via `gh issue comment`. No CI workflow dispatches the
+agent. The skills under `.agents/skills/` document the procedure so
+any Claude session follows the same playbook:
 
-**Workflow**: `.github/workflows/experiment-agent.yml` fires on
-`@claude` mentions in experiment-labeled issues (and on `issues.labeled`
-when `experiment` is added). Elevated perms (contents/issues/PRs write)
-versus the read-only `claude.yml`. Loads skills from `.agents/skills/`:
-
-- `run-experiment` — dispatch notebook → cost gate → Modal → publish
+- `run-experiment` — dispatch notebook → cost gate → Modal → publish → comment
 - `estimate-cost` — HELICO_DRY_RUN + gate comparison
 - `analyze-results` — post headline numbers + baseline deltas
 
-**Required secrets** (repo Settings → Secrets and variables → Actions):
+Scaffolding is automated via `scripts/pm/scaffold_experiment.py --issue <N>`
+which reads the issue body and creates `experiments/exp<N>_<slug>/README.md`
+from `experiments/TEMPLATE.md`.
 
-- `CLAUDE_CODE_OAUTH_TOKEN` — already set, used by existing `claude.yml`
-- `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` — `modal token new` locally and copy
-- `HF_TOKEN` — huggingface.co/settings/tokens; needed for helico-publish
+**Future mode: CI-triggered agent.** The scaffolding for this is still
+mostly in place — `.agents/skills/` reads as procedure-centric docs, and
+the existing `claude.yml` workflow (ACL-gated to OWNER/MEMBER/COLLABORATOR
+as of commit <pending>) handles general `@claude` mentions. To turn on
+full automation for experiment execution, add a workflow that reads
+these skills, supply repo secrets (`MODAL_TOKEN_ID`,
+`MODAL_TOKEN_SECRET`, `HF_TOKEN`) and a Modal-side `helico-github-pat`
+secret (fine-grained GH PAT with contents/issues/PRs write). A working
+draft of such a workflow was previously committed as
+`experiment-agent.yml` — removed for now to avoid drift while the
+design solidifies; git log has the reference.
 
-Plus one **Modal-side secret**, `helico-github-pat`, containing
-`GITHUB_TOKEN` set to a fine-grained GH PAT with contents/issues/PRs
-write on this repo. Used by Modal-detach + callback pattern (below).
-
-**Long-running constraint.** GH Actions jobs cap at 6h; full FoldBench
-bench is 3-7h and training can be 12h+. Two strategies coexist:
-
-- **In-Action blocking** (current MVP): `experiment-agent.yml` runs the
-  notebook end-to-end in the Action runner, blocking on Modal. Works
-  for anything under 6h (e.g. bench with `max_targets=100`, short
-  training runs). Simple, no additional infra.
-- **Modal-detach + callback** (for longer runs, TBD): Action parses
-  spec, gates on cost, dispatches a Modal function that runs the
-  notebook inside Modal and uses `helico-github-pat` to post the
-  results comment when done. Action exits immediately. A short
-  polling cron workflow is the safety net for abandoned Modal jobs.
+**Long-running constraint** (relevant when automation returns): GH
+Actions jobs cap at 6h; full FoldBench bench is 3-7h, training 12h+.
+The Modal-detach + callback pattern (helico-github-pat secret) is the
+right answer for anything over 6h; in-Action blocking works for
+shorter runs.
 
 ## Checkpoint publishing
 
