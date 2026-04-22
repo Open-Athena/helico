@@ -33,7 +33,7 @@ image = (
         "numpy",
         "scipy",
         "pyyaml>=6.0",
-        "torch>=2.7",
+        "torch>=2.10,<2.11",  # see gh#3
         "huggingface_hub>=0.20",
         "tqdm",
     )

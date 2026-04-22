@@ -14,7 +14,7 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("wget", "curl", "git")
     .pip_install(
-        "torch>=2.7",
+        "torch>=2.10,<2.11",  # see gh#3
         "cuequivariance-torch>=0.8",
         "cuequivariance-ops-torch-cu12>=0.8",
         "biopython>=1.80",

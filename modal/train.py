@@ -48,7 +48,10 @@ train_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("wget", "curl", "git")
     .pip_install(
-        "torch>=2.7",
+        # Pin torch<2.11: torch 2.11 ships cuDNN 13 wheels whose flash-attn
+        # kernel is missing for n_tokens>=128 in eval+no_grad mode (gh#3).
+        # 2.10 ships cuDNN 9.x which handles those shapes correctly.
+        "torch>=2.10,<2.11",
         "cuequivariance-torch>=0.8",
         "cuequivariance-ops-torch-cu12>=0.8",
         "biopython>=1.80",
