@@ -106,9 +106,15 @@ def kabsch_align(
     P = (pred - pred_c) * weight
     G = (gt - gt_c) * weight
 
-    # Cross-covariance and SVD per-batch.
+    # Cross-covariance and SVD per-batch. Run SVD on CPU even when inputs
+    # are on GPU: H is only (B, 3, 3) so the round-trip cost is trivial,
+    # and torch.linalg.svd on GPU has been seen to fail under bf16 autocast
+    # contexts with empty CUDA error strings ("rmsd failed: " in the logs).
     H = torch.bmm(P.transpose(1, 2), G)  # (B, 3, 3)
-    U, _, Vt = torch.linalg.svd(H)
+    H_cpu = H.detach().cpu()
+    U_cpu, _, Vt_cpu = torch.linalg.svd(H_cpu)
+    U = U_cpu.to(H.device)
+    Vt = Vt_cpu.to(H.device)
     # Reflection correction: ensure right-handed rotation.
     det = torch.linalg.det(torch.bmm(Vt.transpose(1, 2), U.transpose(1, 2)))  # (B,)
     sign = torch.ones(B, 3, device=pred.device, dtype=pred.dtype)

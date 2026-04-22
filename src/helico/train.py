@@ -282,8 +282,24 @@ def _run_validation(
     device: torch.device,
     dtype: torch.dtype,
 ) -> dict[str, float]:
-    """Run up to config.val_samples val batches. Returns mean metrics."""
+    """Run up to config.val_samples val batches. Returns mean metrics.
+
+    Uses an SDPA backend context that allows fallback to math attention —
+    cuDNN flash-attn rejects some val structure shapes with "No valid
+    execution plans built", which crashed the very first val sweep.
+    """
     base_model.eval()
+    # Allow MATH fallback when flash/efficient SDPA backends reject a shape.
+    try:
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+        sdpa_ctx = sdpa_kernel([
+            SDPBackend.FLASH_ATTENTION,
+            SDPBackend.EFFICIENT_ATTENTION,
+            SDPBackend.MATH,
+        ])
+    except ImportError:
+        from contextlib import nullcontext
+        sdpa_ctx = nullcontext()
     try:
         loader = torch.utils.data.DataLoader(
             val_dataset,
@@ -303,7 +319,7 @@ def _run_validation(
             if i >= config.val_samples:
                 break
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-            with torch.amp.autocast("cuda", dtype=dtype):
+            with torch.amp.autocast("cuda", dtype=dtype), sdpa_ctx:
                 outputs = base_model(batch)
             dl = float(outputs["diffusion_loss"].item())
             sums["diffusion_loss"] += dl; counts["diffusion_loss"] += 1
