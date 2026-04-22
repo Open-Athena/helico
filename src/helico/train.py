@@ -292,14 +292,20 @@ def _run_validation(
     execution plans built", which crashed the very first val sweep.
     """
     base_model.eval()
-    # cuDNN flash-attn rejects some val structure shapes with
-    # "No valid execution plans built". The torch.nn.attention.sdpa_kernel
-    # context manager apparently doesn't propagate through cuequivariance's
-    # internal SDPA call, so we disable cuDNN SDPA at the backend level for
-    # the duration of the val sweep. PyTorch then dispatches to FlashAttn2
-    # / efficient-attention / math.
-    cudnn_sdp_was_enabled = torch.backends.cuda.cudnn_sdp_enabled()
-    torch.backends.cuda.enable_cudnn_sdp(False)
+    # cuequivariance hardcodes its SDPA backend list to
+    # [CUDNN_ATTENTION, FLASH_ATTENTION, EFFICIENT_ATTENTION] with
+    # set_priority=True and *omits MATH*. When all three reject a val
+    # structure's shape, the call raises with no fallback. Patch
+    # torch.nn.attention.sdpa_kernel to silently append MATH for the
+    # duration of the val sweep — slow but always works.
+    import torch.nn.attention as _tna
+    _orig_sdpa_kernel = _tna.sdpa_kernel
+    def _patched_sdpa_kernel(backends, set_priority=False):
+        backends = list(backends)
+        if _tna.SDPBackend.MATH not in backends:
+            backends.append(_tna.SDPBackend.MATH)
+        return _orig_sdpa_kernel(backends, set_priority=set_priority)
+    _tna.sdpa_kernel = _patched_sdpa_kernel
     try:
         loader = torch.utils.data.DataLoader(
             val_dataset,
@@ -342,7 +348,7 @@ def _run_validation(
         return {f"val/{k}": sums[k] / counts[k] for k in sums if counts[k] > 0}
     finally:
         base_model.train()
-        torch.backends.cuda.enable_cudnn_sdp(cudnn_sdp_was_enabled)
+        _tna.sdpa_kernel = _orig_sdpa_kernel
 
 
 def train(
