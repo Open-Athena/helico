@@ -106,20 +106,19 @@ def kabsch_align(
     P = (pred - pred_c) * weight
     G = (gt - gt_c) * weight
 
-    # Cross-covariance and SVD per-batch. Run SVD on CPU even when inputs
-    # are on GPU: H is only (B, 3, 3) so the round-trip cost is trivial,
-    # and torch.linalg.svd on GPU has been seen to fail under bf16 autocast
-    # contexts with empty CUDA error strings ("rmsd failed: " in the logs).
+    # Cross-covariance per-batch (fine on GPU).
     H = torch.bmm(P.transpose(1, 2), G)  # (B, 3, 3)
+    # Run all the linear algebra on CPU. H is only (B, 3, 3) so the round
+    # trip cost is trivial, and torch.linalg.{svd,det} on GPU triggers
+    # PyTorch's CUDA kernel JIT, which has been failing with NVRTC version
+    # mismatch errors on Modal images (libnvrtc-builtins.so.13.0 missing).
     H_cpu = H.detach().cpu()
     U_cpu, _, Vt_cpu = torch.linalg.svd(H_cpu)
-    U = U_cpu.to(H.device)
-    Vt = Vt_cpu.to(H.device)
-    # Reflection correction: ensure right-handed rotation.
-    det = torch.linalg.det(torch.bmm(Vt.transpose(1, 2), U.transpose(1, 2)))  # (B,)
-    sign = torch.ones(B, 3, device=pred.device, dtype=pred.dtype)
-    sign[:, -1] = det.sign()
-    R = torch.bmm(Vt.transpose(1, 2) * sign.unsqueeze(1), U.transpose(1, 2))  # (B, 3, 3)
+    det_cpu = torch.linalg.det(torch.bmm(Vt_cpu.transpose(1, 2), U_cpu.transpose(1, 2)))
+    sign_cpu = torch.ones(B, 3, dtype=H_cpu.dtype)
+    sign_cpu[:, -1] = det_cpu.sign()
+    R_cpu = torch.bmm(Vt_cpu.transpose(1, 2) * sign_cpu.unsqueeze(1), U_cpu.transpose(1, 2))
+    R = R_cpu.to(pred.device, dtype=pred.dtype)
 
     aligned = torch.bmm(pred - pred_c, R.transpose(1, 2)) + gt_c
     return aligned

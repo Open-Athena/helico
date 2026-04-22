@@ -292,14 +292,14 @@ def _run_validation(
     execution plans built", which crashed the very first val sweep.
     """
     base_model.eval()
-    # Allow MATH fallback when flash/efficient SDPA backends reject a shape.
+    # Force MATH SDPA backend for val: cuDNN flash-attn rejects some val
+    # structure shapes with "No valid execution plans built", and the
+    # context manager doesn't help when FLASH itself is the failing backend
+    # (it raises rather than falling through). MATH is slower but always
+    # works — fine for the bounded val_samples sweep.
     try:
         from torch.nn.attention import SDPBackend, sdpa_kernel
-        sdpa_ctx = sdpa_kernel([
-            SDPBackend.FLASH_ATTENTION,
-            SDPBackend.EFFICIENT_ATTENTION,
-            SDPBackend.MATH,
-        ])
+        sdpa_ctx = sdpa_kernel([SDPBackend.MATH])
     except ImportError:
         from contextlib import nullcontext
         sdpa_ctx = nullcontext()
