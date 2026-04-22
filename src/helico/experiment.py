@@ -353,10 +353,25 @@ def ensure_bench_run(
 
     _log_start("ensure_bench_run", name, "launching", est_cost)
 
-    # Fresh run: clear stale dir, dispatch, record meta, sync to volume.
-    if cache_dir.exists():
+    # If we have cached predictions from a prior run that didn't reach
+    # the meta.json/summary.csv finish line (e.g. crashed in scoring),
+    # preserve them and pass --resume so modal/bench.py picks them up
+    # instead of re-predicting.
+    have_predictions = (
+        cache_dir.exists()
+        and (cache_dir / "predictions").is_dir()
+        and any((cache_dir / "predictions").iterdir())
+    )
+    if cache_dir.exists() and not have_predictions:
         shutil.rmtree(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
+    if have_predictions:
+        n_cached_preds = sum(1 for _ in (cache_dir / "predictions").iterdir())
+        print(
+            f"[helico.experiment] ensure_bench_run({name!r}) — resuming from "
+            f"{n_cached_preds} cached predictions",
+            flush=True,
+        )
 
     env = os.environ.copy()
     env["HELICO_BENCH_WORKERS"] = str(workers)
@@ -371,6 +386,8 @@ def ensure_bench_run(
         "--output-dir", str(cache_dir.resolve()),
         "--checkpoint", checkpoint,
     ]
+    if have_predictions:
+        cmd.append("--resume")
     if categories:
         cmd += ["--categories", categories]
 

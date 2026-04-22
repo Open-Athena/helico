@@ -53,17 +53,24 @@ predictor_image = (
 )
 
 # Scorer image: CPU scoring (DockQ/tmtools). Lighter than the predictor —
-# no cuequivariance, no Protenix checkpoint. DockQ 2.1.3 ships a cython
-# extension whose sdist pins numpy<2, so we build it with --no-binary +
+# no Protenix checkpoint. DockQ 2.1.3 ships a cython extension whose
+# sdist pins numpy<2, so we build it with --no-binary +
 # --no-build-isolation against this env's numpy 2 (matches the local
-# pyproject [tool.uv] settings). helico.bench imports torch at top, so
-# we still install torch here even though we never run the model.
+# pyproject [tool.uv] settings).
+#
+# Why cuequivariance is here: helico.__init__ → helico.model imports
+# cuequivariance at module load, so any `from helico.bench import …`
+# call in Scorer.setup transitively needs it. Cuequivariance's CUDA
+# libs load lazily, so installing the wheels on a CPU container is
+# fine — they just never run.
 scorer_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("wget", "curl")
     .pip_install("cython", "setuptools>=68")
     .pip_install(
         "torch>=2.7",
+        "cuequivariance-torch>=0.8,<0.9",
+        "cuequivariance-ops-torch-cu12>=0.8,<0.9",
         "biopython>=1.80",
         "numpy>=2.0",
         "scipy",
