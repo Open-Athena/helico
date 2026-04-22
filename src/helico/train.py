@@ -36,7 +36,7 @@ from helico.data import (
     tokenize_sequences,
     tokenize_structure,
 )
-from helico.model import Helico, HelicoConfig, diffusion_loss
+from helico.model import Helico, HelicoConfig, diffusion_loss, smooth_lddt_loss
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -72,6 +72,10 @@ class TrainConfig:
     checkpoint_dir: str = "checkpoints"
     save_every: int = 1000
     log_every: int = 10
+
+    # Validation (rank 0 only; 0 disables)
+    val_every: int = 0
+    val_samples: int = 32
 
     # EMA
     ema_decay: float = 0.999
@@ -215,6 +219,53 @@ def load_checkpoint(
 # Training Loop
 # ============================================================================
 
+@torch.no_grad()
+def _run_validation(
+    base_model: Helico,
+    val_dataset: torch.utils.data.Dataset,
+    config: TrainConfig,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> dict[str, float]:
+    """Run up to config.val_samples val batches. Returns mean metrics."""
+    base_model.eval()
+    try:
+        loader = torch.utils.data.DataLoader(
+            val_dataset,
+            batch_size=config.batch_size,
+            shuffle=True,
+            num_workers=min(2, config.num_workers),
+            collate_fn=collate_fn,
+            pin_memory=True,
+            drop_last=True,
+        )
+        sums = {"diffusion_loss": 0.0, "distogram_loss": 0.0, "total_loss": 0.0, "lddt": 0.0}
+        counts = {k: 0 for k in sums}
+        for i, batch in enumerate(loader):
+            if i >= config.val_samples:
+                break
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            with torch.amp.autocast("cuda", dtype=dtype):
+                outputs = base_model(batch)
+            dl = float(outputs["diffusion_loss"].item())
+            sums["diffusion_loss"] += dl; counts["diffusion_loss"] += 1
+            total = dl
+            if "distogram_loss" in outputs:
+                dg = float(outputs["distogram_loss"].item())
+                sums["distogram_loss"] += dg; counts["distogram_loss"] += 1
+                total = total + 0.1 * dg
+            sums["total_loss"] += total; counts["total_loss"] += 1
+            if "x_denoised" in outputs:
+                lddt = 1.0 - float(smooth_lddt_loss(
+                    outputs["x_denoised"].float(), batch["atom_coords"].float(),
+                    batch.get("atom_mask"),
+                ).item())
+                sums["lddt"] += lddt; counts["lddt"] += 1
+        return {f"val/{k}": sums[k] / max(1, counts[k]) for k in sums if counts[k] > 0}
+    finally:
+        base_model.train()
+
+
 def train(
     model: Helico,
     train_data: list[TokenizedStructure] | None = None,
@@ -223,6 +274,7 @@ def train(
     msa_features: dict[str, MSAFeatures] | None = None,
     resume_path: str | None = None,
     dataset: torch.utils.data.Dataset | None = None,
+    val_dataset: torch.utils.data.Dataset | None = None,
 ):
     """Main training loop.
 
@@ -306,8 +358,18 @@ def train(
     step = start_step
     epoch = 0
     running_loss = 0.0
+    running_diff = 0.0
+    running_dist = 0.0
+    running_lddt = 0.0
+    running_grad_norm = 0.0
+    n_loss_samples = 0
+    n_dist_samples = 0
+    n_lddt_samples = 0
+    n_grad_samples = 0
     tokens_processed = 0
     t_start = time.time()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats(device)
 
     while step < config.max_steps:
         if sampler is not None:
@@ -333,10 +395,12 @@ def train(
             # Forward pass with mixed precision
             with torch.amp.autocast("cuda", dtype=dtype):
                 outputs = model(batch)
-                loss = outputs["diffusion_loss"]
+                diff_loss = outputs["diffusion_loss"]
+                loss = diff_loss
 
-                if "distogram_loss" in outputs:
-                    loss = loss + 0.1 * outputs["distogram_loss"]
+                dist_loss = outputs.get("distogram_loss")
+                if dist_loss is not None:
+                    loss = loss + 0.1 * dist_loss
 
                 loss = loss / config.grad_accum_steps
 
@@ -345,34 +409,91 @@ def train(
 
             # Gradient accumulation
             if (step + 1) % config.grad_accum_steps == 0:
-                if config.grad_clip > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
+                # clip_grad_norm_ returns the total pre-clip norm.
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip) \
+                    if config.grad_clip > 0 else None
                 optimizer.step()
                 optimizer.zero_grad()
                 ema.update(base_model)
+                if grad_norm is not None:
+                    running_grad_norm += float(grad_norm)
+                    n_grad_samples += 1
 
-            # Logging
+            # Logging accumulators
             running_loss += loss.item() * config.grad_accum_steps
+            running_diff += float(diff_loss.detach())
+            n_loss_samples += 1
+            if dist_loss is not None:
+                running_dist += float(dist_loss.detach())
+                n_dist_samples += 1
+            # Training LDDT: cheap side metric on the denoised coords.
+            if "x_denoised" in outputs:
+                with torch.no_grad():
+                    lddt_val = 1.0 - smooth_lddt_loss(
+                        outputs["x_denoised"].float(),
+                        batch["atom_coords"].float(),
+                        batch.get("atom_mask"),
+                    ).item()
+                running_lddt += float(lddt_val)
+                n_lddt_samples += 1
             tokens_processed += batch["n_tokens"].sum().item()
 
             if step % config.log_every == 0 and rank == 0:
                 elapsed = time.time() - t_start
-                avg_loss = running_loss / max(1, config.log_every)
+                avg_loss = running_loss / max(1, n_loss_samples)
+                avg_diff = running_diff / max(1, n_loss_samples)
+                avg_dist = running_dist / n_dist_samples if n_dist_samples else None
+                avg_lddt = running_lddt / n_lddt_samples if n_lddt_samples else None
+                avg_grad = running_grad_norm / n_grad_samples if n_grad_samples else None
                 throughput = tokens_processed / max(1e-6, elapsed)
+                peak_gb = (torch.cuda.max_memory_allocated(device) / 1e9
+                           if torch.cuda.is_available() else 0.0)
                 logger.info(
-                    f"Step {step} | Loss: {avg_loss:.4f} | LR: {current_lr:.2e} | "
-                    f"Stage: {stage['name']} | Tokens/s: {throughput:.0f}"
+                    f"Step {step} | Loss: {avg_loss:.4f} | Diff: {avg_diff:.4f}"
+                    + (f" | Dist: {avg_dist:.4f}" if avg_dist is not None else "")
+                    + (f" | LDDT: {avg_lddt:.3f}" if avg_lddt is not None else "")
+                    + (f" | GradNorm: {avg_grad:.3f}" if avg_grad is not None else "")
+                    + f" | LR: {current_lr:.2e} | GPU: {peak_gb:.1f}G | Tokens/s: {throughput:.0f}"
                 )
                 if wandb_run is not None:
-                    wandb_run.log({
+                    log_payload = {
                         "loss": avg_loss,
+                        "loss/diffusion": avg_diff,
                         "lr": current_lr,
                         "tokens_per_sec": throughput,
                         "stage": stage["name"],
-                    }, step=step)
+                        "gpu/peak_mem_gb": peak_gb,
+                    }
+                    if avg_dist is not None:
+                        log_payload["loss/distogram"] = avg_dist
+                    if avg_lddt is not None:
+                        log_payload["train/lddt"] = avg_lddt
+                    if avg_grad is not None:
+                        log_payload["grad_norm"] = avg_grad
+                    wandb_run.log(log_payload, step=step)
                 running_loss = 0.0
+                running_diff = 0.0
+                running_dist = 0.0
+                running_lddt = 0.0
+                running_grad_norm = 0.0
+                n_loss_samples = 0
+                n_dist_samples = 0
+                n_lddt_samples = 0
+                n_grad_samples = 0
                 tokens_processed = 0
                 t_start = time.time()
+                if torch.cuda.is_available():
+                    torch.cuda.reset_peak_memory_stats(device)
+
+            # Validation (rank 0 only, at val_every cadence)
+            if (config.val_every > 0 and step > 0 and step % config.val_every == 0
+                    and rank == 0 and val_dataset is not None):
+                logger.info(f"[val] step {step}: running {config.val_samples} val batches...")
+                val_metrics = _run_validation(base_model, val_dataset, config, device, dtype)
+                msg = " | ".join(f"{k}={v:.4f}" for k, v in val_metrics.items())
+                logger.info(f"[val] step {step} | {msg}")
+                if wandb_run is not None:
+                    wandb_run.log(val_metrics, step=step)
 
             # Checkpointing
             if step % config.save_every == 0 and step > 0 and rank == 0:
@@ -513,6 +634,8 @@ def main():
     parser.add_argument("--num-workers", type=int, default=4, help="DataLoader workers per GPU")
     parser.add_argument("--save-every", type=int, default=1000, help="Checkpoint every N steps")
     parser.add_argument("--log-every", type=int, default=10, help="Log every N steps")
+    parser.add_argument("--val-every", type=int, default=0, help="Run validation every N steps (0 disables)")
+    parser.add_argument("--val-samples", type=int, default=32, help="Val batches per validation pass")
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints", help="Checkpoint directory")
     parser.add_argument("--distributed", action="store_true", help="Use DDP")
     parser.add_argument("--synthetic", action="store_true", help="Use synthetic data for testing")
@@ -541,6 +664,8 @@ def main():
         num_workers=args.num_workers,
         save_every=args.save_every,
         log_every=args.log_every,
+        val_every=args.val_every,
+        val_samples=args.val_samples,
         checkpoint_dir=args.checkpoint_dir,
         distributed=args.distributed,
     )
@@ -596,9 +721,21 @@ def main():
         )
         logger.info(f"Training dataset: {len(train_dataset)} structures (release_date < {cutoff})")
 
+        val_dataset = None
+        if train_config.val_every > 0:
+            val_dataset = LazyHelicoDataset(
+                manifest=manifest,
+                processed_dir=processed_dir,
+                crop_size=train_config.crop_size,
+                msa_tar_indices=msa_tar_indices,
+                msa_dir=msa_dir,
+                filter_fn=lambda m: bool(m.release_date) and m.release_date >= cutoff,
+            )
+            logger.info(f"Validation dataset: {len(val_dataset)} structures (release_date >= {cutoff})")
+
         logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         train(model, config=train_config, model_config=model_config,
-              resume_path=args.resume, dataset=train_dataset)
+              resume_path=args.resume, dataset=train_dataset, val_dataset=val_dataset)
 
 
 def infer_main():

@@ -10,6 +10,8 @@ Configure via env vars before `modal run`:
     HELICO_TRAIN_WARMUP=200
     HELICO_TRAIN_SAVE_EVERY=250
     HELICO_TRAIN_LOG_EVERY=10
+    HELICO_TRAIN_VAL_EVERY=0           # 0 disables; e.g. 500 runs val every 500 steps
+    HELICO_TRAIN_VAL_SAMPLES=32
     HELICO_TRAIN_RESUME=               # /ckpts/<run>/step_<N>.pt to resume
     HELICO_TRAIN_PROTENIX_INIT=1       # warm-start from Protenix v1 weights
     HELICO_TRAIN_VAL_DATE=2022-01-01   # train/val date cutoff (release date)
@@ -101,6 +103,8 @@ TRAIN_ARGS = {
     "warmup_steps": _env_int("HELICO_TRAIN_WARMUP", 200),
     "save_every": _env_int("HELICO_TRAIN_SAVE_EVERY", 250),
     "log_every": _env_int("HELICO_TRAIN_LOG_EVERY", 10),
+    "val_every": _env_int("HELICO_TRAIN_VAL_EVERY", 0),
+    "val_samples": _env_int("HELICO_TRAIN_VAL_SAMPLES", 32),
     "resume_from": os.environ.get("HELICO_TRAIN_RESUME", ""),
     "protenix_init": os.environ.get("HELICO_TRAIN_PROTENIX_INIT", "1") == "1",
     "val_date_cutoff": os.environ.get("HELICO_TRAIN_VAL_DATE", "2022-01-01"),
@@ -174,6 +178,8 @@ def train_remote(args: dict) -> dict:
         "--warmup-steps", str(args["warmup_steps"]),
         "--save-every", str(args["save_every"]),
         "--log-every", str(args["log_every"]),
+        "--val-every", str(args["val_every"]),
+        "--val-samples", str(args["val_samples"]),
         "--checkpoint-dir", str(run_ckpt_dir),
         "--val-date-cutoff", args["val_date_cutoff"],
     ]
