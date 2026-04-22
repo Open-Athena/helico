@@ -48,6 +48,7 @@ helico-infer = "helico.train:infer_main"
 helico-preprocess = "helico.data:preprocess_main"
 helico-bench = "helico.bench:main"
 helico-download = "helico.data:download_main"
+helico-publish = "helico.hf_publish:main"
 
 [build-system]
 requires = ["hatchling"]
