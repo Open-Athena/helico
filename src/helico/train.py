@@ -318,12 +318,21 @@ def _run_validation(
                 with torch.amp.autocast("cuda", dtype=dtype):
                     outputs = base_model(batch)
             except RuntimeError as e:
-                # cuDNN flash-attn rejects some val structure shapes. Rather
-                # than killing the sweep, skip the offending sample. (Train
-                # forwards don't hit this in practice.)
+                # cuDNN flash-attn rejects some val structure shapes
+                # (gh#2). Recover the CUDA context (the failure leaves it
+                # in a state that segfaults on the next op) and abort the
+                # rest of this val sweep — better partial results than a
+                # crashed training process.
                 n_skipped += 1
-                logger.warning(f"[val] sample {i} forward failed, skipping: {e}")
-                continue
+                logger.warning(
+                    f"[val] sample {i} forward failed, aborting val sweep: {e}"
+                )
+                try:
+                    torch.cuda.synchronize(device)
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                break
             dl = float(outputs["diffusion_loss"].item())
             sums["diffusion_loss"] += dl; counts["diffusion_loss"] += 1
             total = dl
