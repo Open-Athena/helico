@@ -32,6 +32,7 @@ experiments = [
     "jupyter",
     "pandas",
     "matplotlib",
+    "wandb",
 ]
 
 [project.scripts]
