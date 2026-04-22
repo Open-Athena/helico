@@ -216,42 +216,70 @@ if {"val/n_attempted", "val/n_skipped"}.issubset(history.columns):
           f"{int(vsamp['val/n_skipped'].sum())}")
 ```
 
-## Final-checkpoint FoldBench (TODO — blocked)
+## Final-checkpoint FoldBench vs. exp4 baseline
 
-The natural follow-on is to run `helico-bench` on the final fine-tuned
-checkpoint (`/ckpts/v1-finetune-01/final.pt` on the `helico-checkpoints`
-Modal Volume) and compare against the exp4 Protenix-v1 baseline. This is
-currently blocked on two things:
+Bench the final fine-tuned checkpoint (`/ckpts/v1-finetune-01/final.pt`
+on the `helico-checkpoints` Volume) and diff the per-category
+mean LDDT / mean DockQ against the exp4 Protenix-v1 baseline.
 
-1. **Training still running.** The fine-tune was launched at 2026-04-22
-   and is expected to finish around 2026-04-23 at the ~5 s/step rate.
-   `final.pt` appears on the volume when step 10,000 completes.
-
-2. **`ensure_bench_run` only accepts `checkpoint="protenix-v1"`** today
-   (`src/helico/experiment.py:317-320`). Supporting a custom checkpoint
-   path requires `modal/bench.py` to take `--checkpoint <path>`, which
-   is filed as its own followup.
-
-When both land, the cell below should just work:
+`ensure_bench_run` is idempotent — once cached locally or on the
+`helico-experiments` Volume, re-runs are free. While training is still
+in progress `final.pt` doesn't exist yet, so the cell guards on it.
 
 ```python
-# TODO (gated on training-finished + ensure_bench_run upgrade):
-#
-# from helico.experiment import ensure_bench_run
-# bench_ft = ensure_bench_run(
-#     "v1-finetune-01-final",
-#     checkpoint="/ckpts/v1-finetune-01/final.pt",
-#     workers=8, gpu="H100", n_samples=5, n_cycles=10,
-#     max_tokens=2048, cutoff_date="2024-01-01",
-#     est_wall_hours=0.75,
-# )
-#
-# Load exp4's summary for side-by-side comparison:
-# from helico.experiment import _experiment_dir
-# baseline = pd.read_csv(_experiment_dir("exp4_baseline_protenix_v1") / "data" / "summary.csv", index_col=0)
-# delta = bench_ft.summary[["mean_lddt", "mean_dockq"]] - baseline[["mean_lddt", "mean_dockq"]]
-# delta.to_csv(DATA / "delta_vs_exp4.csv")
-# delta
+FINAL_CKPT = "/ckpts/v1-finetune-01/final.pt"
+
+training_done = (int(history["_step"].max()) >= 10_000
+                 if "_step" in history else False)
+print(f"training_done = {training_done}")
+
+bench_ft = None
+if training_done:
+    from helico.experiment import ensure_bench_run
+    bench_ft = ensure_bench_run(
+        "v1-finetune-01-final",
+        checkpoint=FINAL_CKPT,
+        workers=8, gpu="H100", n_samples=5, n_cycles=10,
+        max_tokens=2048, cutoff_date="2024-01-01",
+        est_wall_hours=0.75,
+    )
+    bench_ft.summary.to_csv(DATA / "bench_ft_summary.csv")
+    print(f"bench cached: {bench_ft.cached}")
+    bench_ft.summary
+else:
+    print("training still in flight; skipping bench until final.pt exists")
+```
+
+```python
+if bench_ft is not None:
+    from helico.experiment import _experiment_dir
+    baseline_csv = _experiment_dir("exp4_baseline_protenix_v1") / "data" / "summary.csv"
+    if baseline_csv.exists():
+        baseline = pd.read_csv(baseline_csv, index_col=0)
+        # Align by category; subtract fine-tune − protenix-v1.
+        cols = ["mean_lddt", "mean_dockq"]
+        delta = (bench_ft.summary[cols].astype(float)
+                 - baseline[cols].astype(float))
+        delta.to_csv(DATA / "delta_vs_exp4.csv")
+        print("Δ (fine-tune − protenix-v1):")
+        print(delta)
+    else:
+        print(f"exp4 baseline summary not found at {baseline_csv}; run exp4 first.")
+```
+
+```python
+if bench_ft is not None and baseline_csv.exists():
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    order = delta["mean_lddt"].sort_values().index
+    ax.barh(order, delta.loc[order, "mean_lddt"],
+            color=["#c44e52" if v < 0 else "#2b8a3e"
+                   for v in delta.loc[order, "mean_lddt"]])
+    ax.axvline(0, color="k", alpha=0.5, lw=1)
+    ax.set_xlabel("Δ mean LDDT (fine-tune − Protenix v1)")
+    ax.set_title("FoldBench — fine-tuning delta vs. exp4 baseline")
+    fig.tight_layout()
+    fig.savefig(PLOTS / "delta_vs_exp4_lddt.png", dpi=150)
+    plt.show()
 ```
 
 ## Conclusion

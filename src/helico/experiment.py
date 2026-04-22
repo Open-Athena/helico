@@ -314,9 +314,12 @@ def ensure_bench_run(
     """Run FoldBench idempotently. Returns cached result if `name` has run before.
 
     Caching is keyed by `(experiment_slug, name)` only. To force a rerun,
-    pass `force=True` or bump `name`. Currently only `checkpoint="protenix-v1"`
-    is supported (bench of a custom checkpoint requires modal/bench.py to
-    accept a --checkpoint arg; file an issue when you need it).
+    pass `force=True` or bump `name`.
+
+    `checkpoint` is either `"protenix-v1"` (the baked-in Protenix checkpoint)
+    or a path on the `helico-checkpoints` Volume, e.g.
+    `"/ckpts/v1-finetune-01/final.pt"`. The path must exist on the Volume
+    at the time the bench runs.
 
     On cache miss: invokes `modal run modal/bench.py` via subprocess, then
     syncs results to the `helico-experiments` volume at
@@ -347,13 +350,6 @@ def ensure_bench_run(
             _volume_pull(EXPERIMENTS_VOLUME, volume_path, cache_dir.parent)
             return _load_bench_run(name, slug, cache_dir, volume_path, cached=True)
 
-    if checkpoint != "protenix-v1":
-        raise NotImplementedError(
-            f"Only checkpoint='protenix-v1' is supported so far (got {checkpoint!r}). "
-            "Custom-checkpoint bench requires modal/bench.py to accept a --checkpoint "
-            "argument; that's planned for the first training experiment."
-        )
-
     _log_start("ensure_bench_run", name, "launching", est_cost)
 
     # Fresh run: clear stale dir, dispatch, record meta, sync to volume.
@@ -372,6 +368,7 @@ def ensure_bench_run(
         "--n-cycles", str(n_cycles),
         "--cutoff-date", cutoff_date,
         "--output-dir", str(cache_dir.resolve()),
+        "--checkpoint", checkpoint,
     ]
     if categories:
         cmd += ["--categories", categories]

@@ -58,10 +58,21 @@ app = modal.App("helico-bench", image=bench_image)
 data_volume = modal.Volume.from_name("helico-bench-data", create_if_missing=True)
 DATA_CACHE = "/cache/helico-data"
 
+# Read-only mount of the training checkpoints volume so we can bench
+# Helico checkpoints at paths like /ckpts/<run>/final.pt.
+ckpt_volume = modal.Volume.from_name("helico-checkpoints", create_if_missing=True)
+CKPT_MOUNT = "/ckpts"
+
 
 @app.cls(gpu=GPU_TYPE, timeout=600, max_containers=N_WORKERS,
-         volumes={DATA_CACHE: data_volume})
+         volumes={DATA_CACHE: data_volume, CKPT_MOUNT: ckpt_volume})
 class Predictor:
+    # "" / "protenix-v1" → the Protenix v1 checkpoint baked into the image.
+    # Anything else is interpreted as a path on the helico-checkpoints
+    # Volume (e.g. /ckpts/v1-finetune-01/final.pt) and loaded in the
+    # Helico checkpoint format written by train.py.
+    checkpoint_path: str = modal.parameter(default="")
+
     @modal.enter()
     def setup(self):
         import os
@@ -111,16 +122,46 @@ class Predictor:
                 raise RuntimeError(f"data chunk {i} failed after 5 attempts")
         data_volume.commit()
 
-        # Load model — infer config from checkpoint shapes (handles v1 and v2)
-        ckpt = torch.load(PROTENIX_CKPT_PATH, map_location="cpu", weights_only=False)
-        ptx_sd = ckpt["model"]
-        ptx_sd = OrderedDict(
-            (k.removeprefix("module."), v) for k, v in ptx_sd.items()
-        )
-        config = infer_protenix_config(ptx_sd)
-        print(f"Inferred Protenix config: d_pair={config.d_pair}, d_msa={config.d_msa}")
-        self.model = Helico(config)
-        load_protenix_state_dict(ptx_sd, self.model)
+        # Load model. Two formats:
+        #   Protenix checkpoint: {"model": state_dict} — infer config from
+        #     shapes, then map Protenix keys onto Helico via
+        #     load_protenix_state_dict.
+        #   Helico checkpoint: {"step": N, "model_state_dict": sd,
+        #     "config": TrainConfig-dict, ...} — load directly after
+        #     constructing Helico with matching n_pairformer_blocks etc.
+        ckpt_path = self.checkpoint_path or "protenix-v1"
+        if ckpt_path in ("", "protenix-v1"):
+            print(f"Loading Protenix v1 checkpoint: {PROTENIX_CKPT_PATH}")
+            ckpt = torch.load(PROTENIX_CKPT_PATH, map_location="cpu", weights_only=False)
+            ptx_sd = ckpt["model"]
+            ptx_sd = OrderedDict(
+                (k.removeprefix("module."), v) for k, v in ptx_sd.items()
+            )
+            config = infer_protenix_config(ptx_sd)
+            print(f"Inferred Protenix config: d_pair={config.d_pair}, d_msa={config.d_msa}")
+            self.model = Helico(config)
+            load_protenix_state_dict(ptx_sd, self.model)
+        else:
+            from helico.model import HelicoConfig
+            print(f"Loading Helico checkpoint: {ckpt_path}")
+            state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            if "model_state_dict" not in state:
+                raise RuntimeError(
+                    f"checkpoint {ckpt_path} is not a Helico checkpoint "
+                    f"(missing 'model_state_dict'; keys={list(state.keys())[:5]})"
+                )
+            # Pull the two shape-defining HelicoConfig fields from the
+            # saved TrainConfig dict; fall back to defaults if absent.
+            saved_cfg = state.get("config") or {}
+            config = HelicoConfig(
+                n_pairformer_blocks=saved_cfg.get("n_pairformer_blocks", 48),
+                n_diffusion_token_blocks=saved_cfg.get("n_diffusion_token_blocks", 24),
+            )
+            print(f"Helico config: n_pairformer_blocks={config.n_pairformer_blocks}, "
+                  f"n_diffusion_token_blocks={config.n_diffusion_token_blocks}, "
+                  f"step={state.get('step', '?')}")
+            self.model = Helico(config)
+            self.model.load_state_dict(state["model_state_dict"])
 
         # Load CCD
         self.ccd = parse_ccd()
@@ -216,6 +257,7 @@ def run_bench(
     n_cycles: int = 10,
     cutoff_date: str = "2024-01-01",
     max_targets: int = 0,
+    checkpoint: str = "protenix-v1",
 ):
     import logging
     import pickle
@@ -337,7 +379,11 @@ def run_bench(
     prediction_results.update(cached_results)
 
     if to_predict:
-        predictor = Predictor()
+        # "protenix-v1" and "" both signal the baked-in Protenix checkpoint.
+        # Anything else is a path on the helico-checkpoints Volume.
+        ckpt_param = "" if checkpoint == "protenix-v1" else checkpoint
+        predictor = Predictor(checkpoint_path=ckpt_param)
+        logger.info(f"Using checkpoint: {checkpoint}")
         results_iter = predictor.predict.map(
             [pdb_id for pdb_id, _ in to_predict],
             [category for _, category in to_predict],
