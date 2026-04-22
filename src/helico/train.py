@@ -643,7 +643,17 @@ def main():
     # Real data args
     parser.add_argument("--manifest", type=str, default=None, help="Path to manifest.json")
     parser.add_argument("--processed-dir", type=str, default=None, help="Path to processed data directory")
-    parser.add_argument("--val-date-cutoff", type=str, default="2022-01-01", help="Date cutoff for train/val split")
+    # Date-based train/val split. Defaults match AF3 / Protenix v1 / OF3-preview2
+    # so metrics are directly comparable: train on release_date < 2021-09-30,
+    # validate on the AF3 "Low-Homology Recent PDB" window 2022-05-01..2023-01-12.
+    # Structures released in the 2021-09-30..2022-05-01 gap are excluded from
+    # both splits (AF3 design to cut train/test leakage).
+    parser.add_argument("--train-cutoff", type=str, default="2021-09-30",
+                        help="Train on release_date < this date")
+    parser.add_argument("--val-cutoff-start", type=str, default="2022-05-01",
+                        help="Val set lower bound (inclusive)")
+    parser.add_argument("--val-cutoff-end", type=str, default="2023-01-12",
+                        help="Val set upper bound (inclusive)")
     parser.add_argument("--msa-dir", type=str, default=None, help="Path to extracted MSA directory")
 
     args = parser.parse_args()
@@ -709,17 +719,19 @@ def main():
 
         msa_dir = Path(args.msa_dir) if args.msa_dir else None
 
-        # Create training dataset with date-based filter
-        cutoff = args.val_date_cutoff
+        # Create training dataset with date-based filter (AF3 convention).
+        train_cutoff = args.train_cutoff
+        val_start = args.val_cutoff_start
+        val_end = args.val_cutoff_end
         train_dataset = LazyHelicoDataset(
             manifest=manifest,
             processed_dir=processed_dir,
             crop_size=train_config.crop_size,
             msa_tar_indices=msa_tar_indices,
             msa_dir=msa_dir,
-            filter_fn=lambda m: m.release_date < cutoff if m.release_date else True,
+            filter_fn=lambda m: m.release_date < train_cutoff if m.release_date else True,
         )
-        logger.info(f"Training dataset: {len(train_dataset)} structures (release_date < {cutoff})")
+        logger.info(f"Training dataset: {len(train_dataset)} structures (release_date < {train_cutoff})")
 
         val_dataset = None
         if train_config.val_every > 0:
@@ -729,9 +741,10 @@ def main():
                 crop_size=train_config.crop_size,
                 msa_tar_indices=msa_tar_indices,
                 msa_dir=msa_dir,
-                filter_fn=lambda m: bool(m.release_date) and m.release_date >= cutoff,
+                filter_fn=lambda m: bool(m.release_date) and val_start <= m.release_date <= val_end,
             )
-            logger.info(f"Validation dataset: {len(val_dataset)} structures (release_date >= {cutoff})")
+            logger.info(f"Validation dataset: {len(val_dataset)} structures "
+                        f"({val_start} ≤ release_date ≤ {val_end})")
 
         logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
         train(model, config=train_config, model_config=model_config,

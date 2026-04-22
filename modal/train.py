@@ -14,7 +14,9 @@ Configure via env vars before `modal run`:
     HELICO_TRAIN_VAL_SAMPLES=32
     HELICO_TRAIN_RESUME=               # /ckpts/<run>/step_<N>.pt to resume
     HELICO_TRAIN_PROTENIX_INIT=1       # warm-start from Protenix v1 weights
-    HELICO_TRAIN_VAL_DATE=2022-01-01   # train/val date cutoff (release date)
+    HELICO_TRAIN_CUTOFF=2021-09-30     # train = release_date < this (AF3/Protenix/OF3 shared cutoff)
+    HELICO_VAL_START=2022-05-01        # val window lower bound (AF3 Recent PDB)
+    HELICO_VAL_END=2023-01-12          # val window upper bound (AF3 Recent PDB)
     HELICO_TRAIN_WANDB_PROJECT=helico
 
 Example (proof run, 1×H100, 500 steps):
@@ -107,7 +109,9 @@ TRAIN_ARGS = {
     "val_samples": _env_int("HELICO_TRAIN_VAL_SAMPLES", 32),
     "resume_from": os.environ.get("HELICO_TRAIN_RESUME", ""),
     "protenix_init": os.environ.get("HELICO_TRAIN_PROTENIX_INIT", "1") == "1",
-    "val_date_cutoff": os.environ.get("HELICO_TRAIN_VAL_DATE", "2022-01-01"),
+    "train_cutoff": os.environ.get("HELICO_TRAIN_CUTOFF", "2021-09-30"),
+    "val_cutoff_start": os.environ.get("HELICO_VAL_START", "2022-05-01"),
+    "val_cutoff_end": os.environ.get("HELICO_VAL_END", "2023-01-12"),
     "wandb_project": WANDB_PROJECT,
     "gpu": GPU,
 }
@@ -181,7 +185,9 @@ def train_remote(args: dict) -> dict:
         "--val-every", str(args["val_every"]),
         "--val-samples", str(args["val_samples"]),
         "--checkpoint-dir", str(run_ckpt_dir),
-        "--val-date-cutoff", args["val_date_cutoff"],
+        "--train-cutoff", args["train_cutoff"],
+        "--val-cutoff-start", args["val_cutoff_start"],
+        "--val-cutoff-end", args["val_cutoff_end"],
     ]
     if msa_dir.exists():
         base_cli += ["--msa-dir", str(msa_dir)]
