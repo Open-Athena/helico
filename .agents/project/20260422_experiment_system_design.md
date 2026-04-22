@@ -167,21 +167,44 @@ Gate enforcement happens at two points:
   `HELICO_DRY_RUN=1`, sums costs, aborts and posts for approval if above
   threshold. On approval, reruns without dry-run.
 
-## Agent runtime (Wave 3+)
+## Agent runtime (Wave 3)
 
 Primary: **GitHub Actions + `anthropics/claude-code-action`**, ACL-gated
-to OWNER/COLLABORATOR. Agent comments start with 🤖; agent-opened PRs
-and issues carry the `agent-generated` label; progress updates via
+to OWNER/MEMBER/COLLABORATOR. Agent comments start with 🤖; agent-opened
+PRs and issues carry the `agent-generated` label; progress updates via
 `gh issue comment --edit-last`.
 
-**Long-running constraint.** GH Actions jobs cap at 6h; Modal training
-can exceed 12h. Pattern:
-- Agent workflow executes the notebook with `HELICO_DRY_RUN=1`, gates,
-  then dispatches a Modal job that executes the notebook end-to-end on
-  a Modal function (no 6h limit). The Modal function, on completion,
-  calls `gh issue comment` + opens a PR with updated plots/HTML.
-- A short polling workflow (cron every 15 min) is the safety net for
-  abandoned Modal jobs.
+**Workflow**: `.github/workflows/experiment-agent.yml` fires on
+`@claude` mentions in experiment-labeled issues (and on `issues.labeled`
+when `experiment` is added). Elevated perms (contents/issues/PRs write)
+versus the read-only `claude.yml`. Loads skills from `.agents/skills/`:
+
+- `run-experiment` — dispatch notebook → cost gate → Modal → publish
+- `estimate-cost` — HELICO_DRY_RUN + gate comparison
+- `analyze-results` — post headline numbers + baseline deltas
+
+**Required secrets** (repo Settings → Secrets and variables → Actions):
+
+- `CLAUDE_CODE_OAUTH_TOKEN` — already set, used by existing `claude.yml`
+- `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` — `modal token new` locally and copy
+- `HF_TOKEN` — huggingface.co/settings/tokens; needed for helico-publish
+
+Plus one **Modal-side secret**, `helico-github-pat`, containing
+`GITHUB_TOKEN` set to a fine-grained GH PAT with contents/issues/PRs
+write on this repo. Used by Modal-detach + callback pattern (below).
+
+**Long-running constraint.** GH Actions jobs cap at 6h; full FoldBench
+bench is 3-7h and training can be 12h+. Two strategies coexist:
+
+- **In-Action blocking** (current MVP): `experiment-agent.yml` runs the
+  notebook end-to-end in the Action runner, blocking on Modal. Works
+  for anything under 6h (e.g. bench with `max_targets=100`, short
+  training runs). Simple, no additional infra.
+- **Modal-detach + callback** (for longer runs, TBD): Action parses
+  spec, gates on cost, dispatches a Modal function that runs the
+  notebook inside Modal and uses `helico-github-pat` to post the
+  results comment when done. Action exits immediately. A short
+  polling cron workflow is the safety net for abandoned Modal jobs.
 
 ## Checkpoint publishing
 

@@ -1,0 +1,91 @@
+name: Experiment agent
+
+# Fires on @claude mentions inside issues labeled `experiment`. Elevated
+# permissions (contents:write, issues:write, pull-requests:write) so the
+# agent can create branches, push commits, open PRs, and edit its own
+# status comments. ACL-gated to OWNER/COLLABORATOR to match Marin's
+# pattern — outside contributors fall through without triggering.
+#
+# This workflow is for running/analyzing experiments. The general-purpose
+# `claude.yml` stays read-only for chat/review.
+
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [opened, labeled]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+  actions: read
+
+jobs:
+  experiment-agent:
+    # ACL + label + @claude mention. We can't filter on label at the
+    # workflow level directly, so it's part of the `if`.
+    if: |
+      (github.event.sender.type == 'User') &&
+      contains(fromJson('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.sender.association) &&
+      (
+        (github.event_name == 'issue_comment'
+          && contains(github.event.comment.body, '@claude')
+          && contains(toJson(github.event.issue.labels.*.name), 'experiment'))
+        || (github.event_name == 'issues'
+          && contains(toJson(github.event.issue.labels.*.name), 'experiment')
+          && github.event.action == 'labeled'
+          && github.event.label.name == 'experiment')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # Just under GH's 360 cap; leaves headroom.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history so the agent can checkout any branch
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: Install Modal CLI
+        run: pip install modal
+      - name: Install helico (experiments extras)
+        run: uv pip install --system -e ".[experiments,docs]"
+      - name: Run experiment agent
+        uses: anthropics/claude-code-action@v1
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: |
+            --allowed-tools Bash(git:*,gh:*,uv:*,python:*,modal:*,helico-publish:*,jupytext:*,jupyter:*),Read,Write,Edit,Glob,Grep
+            --max-turns 150
+          prompt: |
+            You're responding to an @claude mention on an experiment
+            issue. Consult `.agents/skills/run-experiment/SKILL.md`,
+            `.agents/skills/estimate-cost/SKILL.md`, and
+            `.agents/skills/analyze-results/SKILL.md` for the playbooks.
+
+            Read `experiments/AGENTS.md` for the hard rules before doing
+            anything destructive (never bypass the cost gate, never
+            mutate existing step names, one 🤖 comment per run edited
+            via `gh issue comment --edit-last`, etc.).
+
+            The issue's labels and comment text tell you what to do:
+            - `@claude run` or similar → dispatch the experiment
+              (run-experiment skill)
+            - `@claude approve` → resume a run that was gated on cost;
+              set HELICO_COST_APPROVED=1 and re-launch
+            - `@claude results` or mention after a run completes → post
+              an analysis comment (analyze-results skill)
+            - just `@claude` with a question → answer based on the
+              notebook and prior comments; don't launch anything
+
+            If the notebook doesn't exist yet, tell the researcher to
+            copy `experiments/TEMPLATE.md` to
+            `experiments/exp<N>_<slug>/README.md`. Don't create it on
+            their behalf.
