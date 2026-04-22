@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Also read [`AGENTS.md`](AGENTS.md)** — hard rules for any AI agent working in this repo (e.g. no monkey-patching).
+
 ## Project Overview
 
 Helico is an AlphaFold3 clone built from scratch in PyTorch for experimentation.

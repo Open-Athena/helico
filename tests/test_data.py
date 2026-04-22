@@ -604,10 +604,12 @@ class TestDataset:
         batch = collate_fn([dataset[0], dataset[1]])
 
         assert batch["token_types"].shape[0] == 2  # batch size
-        # Padded to max tokens in batch
+        # Padded to at least max tokens in batch (rounded up to a multiple
+        # for cuDNN flash-attn compatibility — see collate_fn docstring).
         max_tok = max(20, 30)
-        assert batch["token_types"].shape[1] == max_tok
-        assert batch["token_mask"].shape == (2, max_tok)
+        n_padded = batch["token_types"].shape[1]
+        assert n_padded >= max_tok
+        assert batch["token_mask"].shape == (2, n_padded)
 
     def test_synthetic_batch(self):
         """Synthetic batch for model testing should have correct shapes."""
