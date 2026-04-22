@@ -45,12 +45,13 @@ app = modal.App("helico-ci", image=image)
 def run_tests():
     import subprocess
     subprocess.run("cd /root/helico && uv venv --python 3.11", check=True, shell=True)
-    # Pre-seed the fresh venv with DockQ's no-isolation build deps
-    # (setuptools + cython). Without this, uv tries to build DockQ before
-    # installing them from the [bench] extras, and the build hook fails with
-    # ModuleNotFoundError: setuptools. See gh CI failure on commit 0d521d3.
+    # Pre-seed the fresh venv with DockQ's no-isolation build deps. The
+    # setup.py imports numpy at build time (numpy.get_include() for the
+    # cython extension), and uv builds DockQ before installing the rest of
+    # the project's deps under [bench]. Order matters: numpy first so the
+    # cython extension links against numpy 2 ABI.
     subprocess.run(
-        "cd /root/helico && uv pip install 'setuptools>=68' cython",
+        "cd /root/helico && uv pip install 'setuptools>=68' 'numpy>=2.0' cython",
         check=True, shell=True,
     )
     subprocess.run("cd /root/helico && uv pip install -e '.[dev,bench]'", check=True, shell=True)
