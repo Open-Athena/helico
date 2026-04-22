@@ -242,13 +242,22 @@ def _eval_quality_metrics(outputs: dict, batch: dict) -> dict[str, float]:
         return out
     pred = pred.float()
     gt = gt.float()
+    if not torch.isfinite(pred).all():
+        # Coords contain NaN/inf — Kabsch SVD will choke. Skip; caller
+        # logs other metrics (loss) that already capture the badness.
+        logger.warning("eval_metrics: pred coords contain NaN/inf, skipping quality metrics")
+        return out
     atom_mask = batch.get("atom_mask")
-    try:
-        out["lddt_hard"] = float(hard_lddt(pred, gt, atom_mask).mean().item())
-        out["rmsd"] = float(rmsd_after_kabsch(pred, gt, atom_mask).mean().item())
-        out["gdt_ts"] = float(gdt_ts_metric(pred, gt, atom_mask).mean().item())
-    except Exception as e:  # SVD / cdist can fail on degenerate inputs
-        logger.debug(f"quality metrics failed: {e}")
+    # Per-metric try/except so one failure doesn't silently drop the others.
+    for name, fn in (
+        ("lddt_hard", lambda: hard_lddt(pred, gt, atom_mask).mean().item()),
+        ("rmsd", lambda: rmsd_after_kabsch(pred, gt, atom_mask).mean().item()),
+        ("gdt_ts", lambda: gdt_ts_metric(pred, gt, atom_mask).mean().item()),
+    ):
+        try:
+            out[name] = float(fn())
+        except Exception as e:
+            logger.warning(f"eval_metrics: {name} failed: {e}")
 
     plddt_logits = outputs.get("plddt_logits")
     if (plddt_logits is not None and "atom_to_token" in batch
@@ -261,7 +270,7 @@ def _eval_quality_metrics(outputs: dict, batch: dict) -> dict[str, float]:
             )
             out["plddt"] = float(mean_plddt(per_atom, am).mean().item())
         except Exception as e:
-            logger.debug(f"plddt metric failed: {e}")
+            logger.warning(f"eval_metrics: plddt failed: {e}")
     return out
 
 
