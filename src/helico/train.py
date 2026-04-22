@@ -292,17 +292,14 @@ def _run_validation(
     execution plans built", which crashed the very first val sweep.
     """
     base_model.eval()
-    # Force MATH SDPA backend for val: cuDNN flash-attn rejects some val
-    # structure shapes with "No valid execution plans built", and the
-    # context manager doesn't help when FLASH itself is the failing backend
-    # (it raises rather than falling through). MATH is slower but always
-    # works — fine for the bounded val_samples sweep.
-    try:
-        from torch.nn.attention import SDPBackend, sdpa_kernel
-        sdpa_ctx = sdpa_kernel([SDPBackend.MATH])
-    except ImportError:
-        from contextlib import nullcontext
-        sdpa_ctx = nullcontext()
+    # cuDNN flash-attn rejects some val structure shapes with
+    # "No valid execution plans built". The torch.nn.attention.sdpa_kernel
+    # context manager apparently doesn't propagate through cuequivariance's
+    # internal SDPA call, so we disable cuDNN SDPA at the backend level for
+    # the duration of the val sweep. PyTorch then dispatches to FlashAttn2
+    # / efficient-attention / math.
+    cudnn_sdp_was_enabled = torch.backends.cuda.cudnn_sdp_enabled()
+    torch.backends.cuda.enable_cudnn_sdp(False)
     try:
         loader = torch.utils.data.DataLoader(
             val_dataset,
@@ -322,7 +319,7 @@ def _run_validation(
             if i >= config.val_samples:
                 break
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-            with torch.amp.autocast("cuda", dtype=dtype), sdpa_ctx:
+            with torch.amp.autocast("cuda", dtype=dtype):
                 outputs = base_model(batch)
             dl = float(outputs["diffusion_loss"].item())
             sums["diffusion_loss"] += dl; counts["diffusion_loss"] += 1
@@ -345,6 +342,7 @@ def _run_validation(
         return {f"val/{k}": sums[k] / counts[k] for k in sums if counts[k] > 0}
     finally:
         base_model.train()
+        torch.backends.cuda.enable_cudnn_sdp(cudnn_sdp_was_enabled)
 
 
 def train(
