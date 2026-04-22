@@ -148,6 +148,7 @@ def upload_remote(
     tar_chunk_gb: int,
     dry_run: bool,
     skip_latest_update: bool,
+    git_sha: str = "unknown",
 ) -> dict:
     """Pack the processed/ tree into snapshot files and upload to HF."""
     from huggingface_hub import HfApi
@@ -190,9 +191,10 @@ def upload_remote(
             shutil.copy2(src, snap_workspace / fname)
             print(f"  copied {fname} ({src.stat().st_size / 1e6:.1f} MB)", flush=True)
 
-    # 3. SOURCE.json
+    # 3. SOURCE.json (git_sha captured at the local entrypoint and passed in,
+    # since the Modal container has no .git dir of its own).
     source_json = _build_source_json(
-        snapshot_id, source_type, processed_dir, structures_dir, n_structures, _git_sha(),
+        snapshot_id, source_type, processed_dir, structures_dir, n_structures, git_sha,
     )
     with open(snap_workspace / "SOURCE.json", "w") as f:
         json.dump(source_json, f, indent=2)
@@ -299,6 +301,13 @@ def main(dry_run: bool = False):
     tar_chunk_gb = int(os.environ.get("HELICO_TAR_CHUNK_GB", "25"))
     skip_latest = os.environ.get("HELICO_SKIP_LATEST_UPDATE") == "1"
     dry_run = dry_run or os.environ.get("HELICO_DRY_RUN") == "1"
+    # Capture git sha locally — the Modal container has no .git dir.
+    try:
+        git_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(ROOT), text=True,
+        ).strip()
+    except Exception:
+        git_sha = "unknown"
 
     print(f"Snapshot id: {snapshot_id}")
     print(f"Source type: {source_type}")
@@ -306,7 +315,8 @@ def main(dry_run: bool = False):
     print(f"Tar chunk:   {tar_chunk_gb} GB")
     print(f"Dry run:     {dry_run}")
     print(f"Skip latest: {skip_latest}")
+    print(f"Git sha:     {git_sha}")
     result = upload_remote.remote(
-        snapshot_id, source_type, repo, tar_chunk_gb, dry_run, skip_latest,
+        snapshot_id, source_type, repo, tar_chunk_gb, dry_run, skip_latest, git_sha,
     )
     print(result)

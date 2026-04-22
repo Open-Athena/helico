@@ -243,12 +243,15 @@ def _eval_quality_metrics(outputs: dict, batch: dict) -> dict[str, float]:
     pred = pred.float()
     gt = gt.float()
     if not torch.isfinite(pred).all():
-        # Coords contain NaN/inf — Kabsch SVD will choke. Skip; caller
-        # logs other metrics (loss) that already capture the badness.
         logger.warning("eval_metrics: pred coords contain NaN/inf, skipping quality metrics")
         return out
     atom_mask = batch.get("atom_mask")
     # Per-metric try/except so one failure doesn't silently drop the others.
+    # Synchronize first so any pending CUDA errors surface here, not at .item()
+    # inside one of the metric calls. Use repr(e) — empty str(e) hid the cause
+    # in our smoketests.
+    if pred.is_cuda:
+        torch.cuda.synchronize(pred.device)
     for name, fn in (
         ("lddt_hard", lambda: hard_lddt(pred, gt, atom_mask).mean().item()),
         ("rmsd", lambda: rmsd_after_kabsch(pred, gt, atom_mask).mean().item()),
@@ -257,7 +260,7 @@ def _eval_quality_metrics(outputs: dict, batch: dict) -> dict[str, float]:
         try:
             out[name] = float(fn())
         except Exception as e:
-            logger.warning(f"eval_metrics: {name} failed: {e}")
+            logger.warning(f"eval_metrics: {name} failed: {type(e).__name__}: {e!r}")
 
     plddt_logits = outputs.get("plddt_logits")
     if (plddt_logits is not None and "atom_to_token" in batch
