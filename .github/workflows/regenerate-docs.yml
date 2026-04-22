@@ -1,0 +1,53 @@
+name: Regenerate docs indexes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "experiments/**/README.md"
+      - "experiments/**/data/summary.csv"
+      - "scripts/pm/itemize_experiments.py"
+      - "scripts/pm/plot_bench.py"
+  issues:
+    types: [opened, closed, reopened, labeled, unlabeled, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: read
+
+concurrency:
+  group: regenerate-docs
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    # Avoid commit loops: skip when the last pusher was the bot.
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install pyyaml
+      - name: Regenerate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/pm/itemize_experiments.py
+          python scripts/pm/plot_bench.py
+      - name: Commit if changed
+        run: |
+          if git diff --quiet docs/experiments/index.md docs/benchmarks.md; then
+            echo "No changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/experiments/index.md docs/benchmarks.md
+          git commit -m "chore: regenerate docs indexes"
+          git push
