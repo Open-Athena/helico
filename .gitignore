@@ -1,6 +1,10 @@
 checkpoints
 workbench
 
+# Helico experiment artifacts (see experiments/AGENTS.md)
+experiments/**/.cache/
+experiments/**/README.html
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

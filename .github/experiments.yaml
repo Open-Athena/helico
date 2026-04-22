@@ -1,0 +1,18 @@
+# Experiment-system configuration. Consumed by scripts/pm/estimate_cost.py
+# and (in Wave 3+) the experiment-run workflow.
+
+# Cost gate: above this, the agent pauses and requires an approve reply.
+cost_gate_usd: 100
+
+# HuggingFace destinations.
+hf_experiments_repo: buckets/timodonnell/helico-experiments
+hf_released_repo: timodonnell/helico
+
+# WandB project. All experiments log here; runs are named via spec.modal.run_name.
+wandb_project: helico
+
+# Default Modal volumes (referenced by workflow; documented here for humans).
+modal_volumes:
+  train_data: helico-train-data
+  checkpoints: helico-checkpoints
+  bench_data: helico-bench-data

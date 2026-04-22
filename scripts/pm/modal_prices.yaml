@@ -1,0 +1,24 @@
+# Modal GPU prices, USD per GPU-hour.
+# Source: https://modal.com/pricing (check before each round of experiments).
+# Updated: 2026-04-22.
+#
+# Used by scripts/pm/estimate_cost.py. If Modal changes pricing, edit this
+# file in a PR — the estimator has no other source of truth.
+
+gpus:
+  H100: 3.95
+  H200: 4.54
+  B200: 6.25
+  A100-40GB: 2.10
+  A100-80GB: 2.50
+  A100: 2.50       # alias (Helico specs typically write "A100")
+  L40S: 1.95
+  A10G: 1.10
+  L4: 0.80
+  T4: 0.59
+
+# Bench runs are roughly deterministic. Default estimated $ for a
+# full-FoldBench subset (~100 targets) at default settings. This is a
+# conservative over-estimate; the estimator uses this as the bench cost
+# floor if the spec doesn't specify otherwise.
+bench_flat_usd: 5.0

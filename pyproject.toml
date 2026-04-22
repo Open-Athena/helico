@@ -26,6 +26,13 @@ bench = [
     "DockQ",
     "tqdm",
 ]
+experiments = [
+    "jupytext>=1.15",
+    "nbconvert>=7",
+    "jupyter",
+    "pandas",
+    "matplotlib",
+]
 
 [project.scripts]
 helico-train = "helico.train:main"
