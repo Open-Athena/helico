@@ -540,6 +540,42 @@ class TestDiffusionModule:
         N_atoms = N_TOKENS * N_ATOMS_PER_TOKEN
         assert coords.shape == (BATCH_SIZE, N_atoms, 3)
 
+    def test_training_forward_multi_sample(self):
+        """n_samples > 1 should expand the diffusion batch to B * n_samples
+        (gh#6 — amortize the trunk across multiple denoising passes)."""
+        module = DiffusionModule(TEST_CONFIG).to(DEVICE)
+        inputs = self._make_diffusion_inputs()
+        N_atoms = N_TOKENS * N_ATOMS_PER_TOKEN
+        for n_samples in (1, 3, 4):
+            x_denoised, gt_coords, sigma = module.forward_training(
+                **inputs, n_samples=n_samples,
+            )
+            assert x_denoised.shape == (BATCH_SIZE * n_samples, N_atoms, 3), n_samples
+            assert gt_coords.shape == (BATCH_SIZE * n_samples, N_atoms, 3), n_samples
+            assert sigma.shape == (BATCH_SIZE * n_samples,), n_samples
+            # Each slot should have a *different* sigma when n_samples > 1.
+            if n_samples > 1:
+                assert sigma.unique().numel() == BATCH_SIZE * n_samples
+            # gt_coords is repeat_interleaved: gt[b*n_samples + i] == gt[b*n_samples]
+            if n_samples > 1:
+                for b in range(BATCH_SIZE):
+                    block = gt_coords[b * n_samples : (b + 1) * n_samples]
+                    assert torch.allclose(block, block[0:1].expand_as(block))
+
+    def test_training_loss_multi_sample_is_finite(self):
+        """Loss is finite and positive with n_samples > 1. Magnitude
+        isn't directly comparable to n_samples=1 because the EDM
+        1/sigma^2 weight has a heavy tail (small-sigma draws can
+        dominate a single sample's loss)."""
+        torch.manual_seed(0)
+        module = DiffusionModule(TEST_CONFIG).to(DEVICE)
+        inputs = self._make_diffusion_inputs()
+        x4, gt4, s4 = module.forward_training(**inputs, n_samples=4)
+        am4 = inputs["atom_mask"].repeat_interleave(4, dim=0)
+        loss4 = diffusion_loss(x4, gt4, s4, am4)
+        assert torch.isfinite(loss4).item()
+        assert loss4.item() > 0
+
 
 # ============================================================================
 # Loss Function Tests
@@ -835,6 +871,25 @@ class TestFullModel:
         assert out["diffusion_loss"].item() > 0
         assert "distogram_logits" in out
         assert "distogram_loss" in out
+
+    def test_forward_pass_multi_diffusion_sample(self):
+        """Setting n_diffusion_samples > 1 produces x_denoised of shape
+        (B*N_d, N_atoms, 3) and the loss remains a finite scalar (gh#6)."""
+        cfg = HelicoConfig(**{**TEST_CONFIG.__dict__, "n_diffusion_samples": 4})
+        model = Helico(cfg).to(DEVICE)
+        batch = _make_batch()
+        with torch.amp.autocast("cuda", dtype=DTYPE, enabled=DEVICE == "cuda"):
+            out = model(batch, compute_confidence=True, compute_affinity=False)
+
+        B, N_atoms = batch["atom_coords"].shape[:2]
+        assert out["x_denoised"].shape == (B * 4, N_atoms, 3)
+        assert out["sigma"].shape == (B * 4,)
+        assert out["diffusion_loss"].dim() == 0
+        assert torch.isfinite(out["diffusion_loss"]).item()
+        # Confidence head should still emit (B, ...) logits (uses only
+        # the first of the N_d denoising samples per batch entry).
+        if "plddt_logits" in out:
+            assert out["plddt_logits"].shape[0] == B
 
     def test_gradient_flow(self):
         """Verify gradients flow through the full model."""

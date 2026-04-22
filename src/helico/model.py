@@ -53,6 +53,10 @@ class HelicoConfig:
     n_diffusion_steps: int = 200  # inference sampling steps
     n_atom_queries: int = 32   # query window size for atom attention
     n_atom_keys: int = 128     # key window size for atom attention
+    # Training-only: number of diffusion noise samples per trunk forward.
+    # AF3 / Protenix amortize the expensive trunk over N denoising passes.
+    # gh#6. 1 = legacy behavior.
+    n_diffusion_samples: int = 8
 
     # Atom features
     n_elements: int = UNK_ELEM_IDX + 1  # 24
@@ -1752,31 +1756,59 @@ class DiffusionModule(nn.Module):
         s_inputs: torch.Tensor,
         relpe_feats: dict[str, torch.Tensor],
         ref_space_uid: torch.Tensor | None = None,
+        n_samples: int = 1,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Training forward: single denoising step with EDM preconditioning.
+        """Training forward: run ``n_samples`` denoising passes per batch entry,
+        reusing a single trunk forward (AF3 / Protenix amortization, gh#6).
+
+        All inputs whose leading dim matches ``gt_coords`` (i.e. the trunk
+        batch B) are repeat-interleaved to ``B * n_samples`` before the
+        denoising forward, so sample i of batch entry b lives at index
+        ``b * n_samples + i`` on every returned tensor.
 
         Returns:
-            x_denoised: (B, N_atoms, 3) predicted denoised coordinates
-            gt_coords: (B, N_atoms, 3) ground truth
-            sigma: (B,) noise level used
+            x_denoised: (B * n_samples, N_atoms, 3) predicted denoised coords
+            gt_coords:  (B * n_samples, N_atoms, 3) ground truth (repeated)
+            sigma:      (B * n_samples,) noise level used
         """
         B = gt_coords.shape[0]
+        N_d = max(1, int(n_samples))
         device = gt_coords.device
 
-        # Sample noise level (log-normal)
-        log_sigma = self.config.noise_log_mean + self.config.noise_log_std * torch.randn(B, device=device)
+        if N_d > 1:
+            gt_coords = gt_coords.repeat_interleave(N_d, dim=0)
+            ref_pos = ref_pos.repeat_interleave(N_d, dim=0)
+            ref_charge = ref_charge.repeat_interleave(N_d, dim=0)
+            ref_features = ref_features.repeat_interleave(N_d, dim=0)
+            atom_to_token = atom_to_token.repeat_interleave(N_d, dim=0)
+            atom_mask = atom_mask.repeat_interleave(N_d, dim=0)
+            s_trunk = s_trunk.repeat_interleave(N_d, dim=0)
+            z_trunk = z_trunk.repeat_interleave(N_d, dim=0)
+            s_inputs = s_inputs.repeat_interleave(N_d, dim=0)
+            relpe_feats = {
+                k: v.repeat_interleave(N_d, dim=0) if isinstance(v, torch.Tensor) else v
+                for k, v in relpe_feats.items()
+            }
+            if ref_space_uid is not None:
+                ref_space_uid = ref_space_uid.repeat_interleave(N_d, dim=0)
+
+        B_eff = B * N_d
+
+        # Sample noise level (log-normal) independently for each of B*N_d rows.
+        log_sigma = self.config.noise_log_mean + self.config.noise_log_std * torch.randn(B_eff, device=device)
         sigma = torch.exp(log_sigma) * self.config.sigma_data
 
-        # Add noise
+        # Add noise — fresh noise per row so N_d samples of the same batch
+        # entry see different (sigma, noise) pairs.
         noise = torch.randn_like(gt_coords)
-        sigma_expand = sigma.view(B, 1, 1)
+        sigma_expand = sigma.view(B_eff, 1, 1)
         x_noisy = gt_coords + sigma_expand * noise
 
         # EDM preconditioning
         c_in, c_skip, c_out = self._edm_precondition(sigma)
-        c_in = c_in.view(B, 1, 1)
-        c_skip = c_skip.view(B, 1, 1)
-        c_out = c_out.view(B, 1, 1)
+        c_in = c_in.view(B_eff, 1, 1)
+        c_skip = c_skip.view(B_eff, 1, 1)
+        c_out = c_out.view(B_eff, 1, 1)
 
         # Forward
         r_update = self._f_forward(
@@ -2710,7 +2742,9 @@ class Helico(nn.Module):
         results = {"single": s, "pair": z}
 
         # 4. Diffusion — s_inputs is already (B, N_tok, 449 = d_single + 65)
-
+        # n_diffusion_samples > 1 amortizes the expensive trunk over several
+        # denoising passes per batch entry (gh#6). Outputs are (B*N_d, ...).
+        n_d = max(1, int(getattr(self.config, "n_diffusion_samples", 1)))
         x_denoised, gt_coords, sigma = self.diffusion.forward_training(
             gt_coords=batch["atom_coords"],
             ref_pos=batch["ref_coords"],
@@ -2722,21 +2756,28 @@ class Helico(nn.Module):
             z_trunk=z,
             s_inputs=s_inputs,
             relpe_feats=relpe_feats,
+            n_samples=n_d,
         )
 
         results["x_denoised"] = x_denoised
         results["sigma"] = sigma
-        results["diffusion_loss"] = diffusion_loss(x_denoised, gt_coords, sigma, atom_mask)
+        # diffusion_loss averages over all B*N_d samples — atom_mask must
+        # match the expanded batch.
+        atom_mask_d = atom_mask.repeat_interleave(n_d, dim=0) if n_d > 1 else atom_mask
+        results["diffusion_loss"] = diffusion_loss(x_denoised, gt_coords, sigma, atom_mask_d)
 
         # 5. Distogram (from trunk pair)
         distogram_logits = self.distogram_head(z)
         results["distogram_logits"] = distogram_logits
 
-        # 6. Confidence head (uses pred_coords from diffusion)
+        # 6. Confidence head (uses pred_coords from diffusion). Use only
+        # the first denoising sample per batch entry — the head expects
+        # (B, N_atoms, 3), not (B*N_d, ...).
         if compute_confidence:
+            x_for_conf = x_denoised[::n_d] if n_d > 1 else x_denoised
             confidence = self.confidence_head(
                 s_trunk=s, z_trunk=z, s_inputs=s_inputs,
-                pred_coords=x_denoised.detach(),
+                pred_coords=x_for_conf.detach(),
                 atom_to_token=batch["atom_to_token"],
                 atom_mask=atom_mask,
                 mask=mask, pair_mask=pair_mask,

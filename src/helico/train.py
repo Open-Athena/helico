@@ -60,6 +60,8 @@ class TrainConfig:
     # Model
     n_pairformer_blocks: int = 48
     n_diffusion_token_blocks: int = 24
+    # Number of diffusion noise samples per trunk forward (gh#6).
+    n_diffusion_samples: int = 8
 
     # Optimizer
     lr: float = 1e-3
@@ -734,6 +736,8 @@ def main():
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
     parser.add_argument("--n-blocks", type=int, default=48, help="Number of Pairformer blocks")
     parser.add_argument("--n-diffusion-token-blocks", type=int, default=24, help="Number of diffusion token transformer blocks")
+    parser.add_argument("--n-diffusion-samples", type=int, default=8,
+                        help="Diffusion noise samples per trunk forward (gh#6). 1 = legacy.")
     parser.add_argument("--crop-size", type=int, default=384, help="Initial crop size")
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size per GPU")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
@@ -774,6 +778,7 @@ def main():
     train_config = TrainConfig(
         n_pairformer_blocks=args.n_blocks,
         n_diffusion_token_blocks=args.n_diffusion_token_blocks,
+        n_diffusion_samples=args.n_diffusion_samples,
         crop_size=args.crop_size,
         batch_size=args.batch_size,
         lr=args.lr,
@@ -795,6 +800,7 @@ def main():
     model_config = HelicoConfig(
         n_pairformer_blocks=args.n_blocks,
         n_diffusion_token_blocks=args.n_diffusion_token_blocks,
+        n_diffusion_samples=args.n_diffusion_samples,
     )
 
     model = Helico(model_config)
