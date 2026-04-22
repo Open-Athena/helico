@@ -21,18 +21,19 @@ GPU_TYPE = os.environ.get("HELICO_BENCH_GPU", "H100")
 bench_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("wget", "curl")
+    # DockQ/tmtools are scoring deps used only by the local entrypoint; the
+    # worker only runs Predictor.predict which needs model+data deps. Keeping
+    # DockQ off the image avoids a numpy<2 build-pin fight with its sdist.
     .pip_install(
         "torch>=2.7",
         "cuequivariance-torch>=0.8",
         "cuequivariance-ops-torch-cu12>=0.8",
         "biopython>=1.80",
-        "numpy<2.0",
+        "numpy>=2.0",
         "scipy",
         "pyyaml>=6.0",
         "huggingface_hub>=0.20",
         "requests",
-        "tmtools",
-        "DockQ",
         "tqdm",
     )
     # Protenix checkpoint baked into image (1.4 GB, cached by Modal)
@@ -82,8 +83,9 @@ class Predictor:
         os.environ["HELICO_DATA_DIR"] = DATA_CACHE
         os.makedirs(DATA_CACHE, exist_ok=True)
 
+        # Install helico without [bench] extras — worker doesn't run scoring.
         subprocess.run(
-            "cd /root/helico && uv venv --python 3.11 && uv pip install -e '.[bench]'",
+            "cd /root/helico && uv venv --python 3.11 && uv pip install -e .",
             check=True, shell=True,
         )
 

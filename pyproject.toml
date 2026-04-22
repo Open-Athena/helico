@@ -10,7 +10,7 @@ dependencies = [
     "cuequivariance-torch>=0.8",
     "cuequivariance-ops-torch-cu12>=0.8",
     "biopython>=1.80",
-    "numpy<2.0",
+    "numpy>=2.0",
     "scipy",
     "pyyaml>=6.0",
     "huggingface_hub>=0.20",
@@ -25,6 +25,10 @@ bench = [
     "tmtools",
     "DockQ",
     "tqdm",
+    # Build-time deps for DockQ's cython extension, since [tool.uv]
+    # disables build isolation for DockQ (see note below).
+    "cython",
+    "setuptools>=68",
 ]
 experiments = [
     "jupytext>=1.15",
@@ -48,6 +52,22 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/helico"]
+
+[tool.uv]
+# DockQ 2.1.3 declares `numpy<2.0` but actually imports and runs fine on
+# numpy>=2.0 (verified locally). The Helico data pipeline's CCD cache on
+# HF is pickled with numpy 2.x internals, so scoring code and Modal
+# workers MUST use numpy 2. Override DockQ's stale upper pin.
+override-dependencies = [
+    "numpy>=2.0",
+]
+# DockQ ships a cython extension that, if built via the sdist's declared
+# build-isolation env (which pins numpy<2), links against numpy 1 ABI and
+# fails to import under numpy 2. Force no-binary + no-build-isolation so
+# the build runs in our project's env (where numpy 2 is installed) and
+# links correctly.
+no-binary-package = ["dockq"]
+no-build-isolation-package = ["dockq"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
