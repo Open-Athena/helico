@@ -21,6 +21,12 @@ We aim for a low-abstraction codebase that is easy for agents to work with. Test
 
 We are just getting started. Our initial implementation closely follows [Protenix](https://github.com/bytedance/Protenix) and our model can load protenix weights. Before we do expensive training runs from scratch we are planning to iterate on modeling improvements starting from these weights.
 
+Current state:
+- Model, data pipeline, FoldBench benchmarking, and training loop all working
+- Training data preprocessed from the 2026-04 PDB snapshot (236,326 structures)
+- Modal infrastructure for preprocess (`modal/preprocess_on_modal.py`) and multi-GPU DDP training (`modal/train.py`)
+- Proof-of-pipeline run on 1×H100 succeeded end-to-end — see `TRAINING.md` for full training usage
+
 
 ## Setup
 
@@ -63,6 +69,25 @@ uv run pytest tests/test_model.py -v
 
 # Run data pipeline tests only
 uv run pytest tests/test_data.py -v
+```
+
+## Training
+
+See [`TRAINING.md`](TRAINING.md) for the full guide: data preparation (local
+or on Modal), single / multi-GPU / multi-node recipes, the default AF3-shared
+train/val date cutoffs, and the W&B metrics that are logged.
+
+Quick smoke test (synthetic data, ~30s):
+
+```bash
+helico-train --synthetic --n-blocks 2 --n-diffusion-token-blocks 2 --max-steps 100
+```
+
+Proof run on Modal (1×H100, 500 steps, warm-start from Protenix v1):
+
+```bash
+HELICO_TRAIN_GPU=H100:1 HELICO_TRAIN_MAX_STEPS=500 HELICO_TRAIN_CROP=256 \
+    HELICO_TRAIN_RUN_NAME=proof-v1 modal run modal/train.py
 ```
 
 ## Inference

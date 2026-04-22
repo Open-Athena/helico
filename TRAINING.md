@@ -22,10 +22,16 @@ Processed data in `<data-dir>/processed/` (hosted on HuggingFace):
 | File | Size | Description |
 |------|------|-------------|
 | `ccd_cache.pkl` | 112 MB | Pickled CCD (parsed from components.cif) |
-| `structures/` | ~233K `.pkl` files | Pickled TokenizedStructures across 1,085 subdirectories |
-| `manifest.json` | 1.5 GB | Metadata for all 233,215 processed structures |
+| `structures/` | ~236K `.pkl` files | Pickled TokenizedStructures across ~1,000 subdirectories |
+| `manifest.json` | 1.9 GB | Metadata for all 236,326 processed structures |
 | `rcsb_raw_msa_index.pkl` | 15 MB | Tar index for rcsb_raw_msa.tar (151,403 entries) |
 | `openfold_raw_msa_index.pkl` | 11 MB | Tar index for openfold_raw_msa.tar (268,778 entries) |
+
+> **Note**: `token_bonds` in each structure pickle is stored as a sparse edge
+> list (`list[tuple[int,int]]`) and densified to `(N_tok, N_tok)` at training
+> time in `TokenizedStructure.to_features()`. The previous dense-tensor format
+> blew up preprocess workers to 200+ GB RSS on ribosomes/capsids. The loader
+> still accepts legacy dense pickles for backward compat.
 
 Raw data (not hosted on HuggingFace — download from PDB/OpenFold directly, see `LOG.md`):
 
@@ -73,18 +79,39 @@ helico-preprocess all $RAW $PROCESSED
 ```
 
 The preprocessing pipeline:
-- Parses 248,942 mmCIF files, filters by resolution (≤9 Å), removes water/hydrogen
+- Parses ~252K mmCIF files, filters by resolution (≤9 Å), removes water/hydrogen
 - Tokenizes: 1 token/residue (protein), 1 token/nucleotide, 1 token/heavy atom (ligand)
 - Saves each structure as a pickle file for fast loading during training
-- Builds a manifest with metadata for all 233,215 passing structures
+- Builds a manifest with metadata for all passing structures (236,326 from the most recent run)
 - Indexes MSA tar archives for O(1) random access during training
 - Supports resumption — re-run safely without reprocessing existing structures
+
+Default worker count is capped at 16 with `maxtasksperchild=25` — each worker can briefly spike to several GB during large structures (ribosomes, capsids), so 16 workers on 64-CPU boxes keeps a safety margin.
 
 To upload processed data to HuggingFace after preprocessing:
 
 ```bash
 bash scripts/upload_to_hf.sh $PROCESSED
 ```
+
+### Preprocess on Modal (bypass local upstream)
+
+If your local upstream is slow or you don't want to keep ~300 GB of raw data around, `modal/preprocess_on_modal.py` downloads raw data directly onto a Modal Volume (S3 for the MSA tars, rsync for the mmCIF mirror) and runs preprocess there. Processed data lands on the `helico-train-data` Volume at `/processed/` and the training script picks it up without any upload step.
+
+```bash
+modal run modal/preprocess_on_modal.py
+
+# Re-run with different filters / worker count
+HELICO_MAX_RES=9.0 HELICO_N_WORKERS=32 modal run modal/preprocess_on_modal.py
+
+# Download only (skip preprocess)
+HELICO_SKIP_PREPROCESS=1 modal run modal/preprocess_on_modal.py
+
+# Preprocess only (skip download, re-use existing /raw)
+HELICO_SKIP_DOWNLOAD=1 modal run modal/preprocess_on_modal.py
+```
+
+Expected runtime end-to-end: ~3 h (S3/rsync at tens-of-MB/s + ~85 min preprocess on a 32-core container).
 
 ## Single-GPU Training
 
@@ -266,14 +293,104 @@ Data:
   --synthetic               Use synthetic data for testing
   --manifest PATH           Path to manifest.json (default: <data-dir>/processed/manifest.json)
   --processed-dir PATH      Path to processed data directory
-  --val-date-cutoff DATE    Date cutoff for train/val split (default: 2022-01-01)
   --msa-dir PATH            Path to extracted MSA directory
+
+Train/val split (defaults match AF3 / Protenix v1 / OF3-preview2 for direct comparison):
+  --train-cutoff DATE       Train on release_date < this date (default: 2021-09-30)
+  --val-cutoff-start DATE   Val window lower bound, inclusive (default: 2022-05-01)
+  --val-cutoff-end DATE     Val window upper bound, inclusive (default: 2023-01-12)
 
 Training:
   --max-steps N             Total training steps (default: 100000)
   --save-every N            Checkpoint interval (default: 1000)
   --log-every N             Logging interval (default: 10)
+  --val-every N             Run validation every N steps (0 disables; default: 0)
+  --val-samples N           Val batches per validation pass (default: 32)
   --checkpoint-dir PATH     Checkpoint directory (default: checkpoints/)
   --resume PATH             Resume from checkpoint
   --distributed             Enable DDP (required for multi-GPU)
 ```
+
+The default dates match the canonical AF3 "Low-Homology Recent PDB" split that
+Protenix and OpenFold3-preview2 both reuse. Structures released in the
+`2021-09-30 → 2022-05-01` gap are in neither split (AF3's leakage-prevention
+design). Using the same cutoffs makes our metrics directly comparable to
+their published numbers.
+
+## Training on Modal
+
+`modal/train.py` runs DDP training inside a Modal container with the
+`helico-train-data` Volume mounted and the `helico-checkpoints` Volume for
+durable checkpoint storage. All settings are exposed via env vars (no CLI
+flags on the Modal side):
+
+```bash
+# Proof run: 1×H100, 500 steps, crop 256
+HELICO_TRAIN_GPU=H100:1 \
+HELICO_TRAIN_MAX_STEPS=500 \
+HELICO_TRAIN_CROP=256 \
+HELICO_TRAIN_RUN_NAME=proof-v1 \
+  modal run modal/train.py
+
+# Full fine-tune from Protenix v1 weights: 8×H100
+HELICO_TRAIN_GPU=H100:8 \
+HELICO_TRAIN_MAX_STEPS=10000 \
+HELICO_TRAIN_CROP=384 \
+HELICO_TRAIN_RUN_NAME=v1-finetune-01 \
+HELICO_TRAIN_VAL_EVERY=500 \
+  modal run modal/train.py
+```
+
+Env vars (and defaults):
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `HELICO_TRAIN_GPU` | `H100:8` | Modal GPU string `TYPE:COUNT` |
+| `HELICO_TRAIN_RUN_NAME` | `helico-run` | W&B run name + checkpoint subdir |
+| `HELICO_TRAIN_MAX_STEPS` | `10000` | Hard step cap |
+| `HELICO_TRAIN_CROP` | `384` | Token crop size |
+| `HELICO_TRAIN_BATCH` | `1` | Per-GPU batch size |
+| `HELICO_TRAIN_LR` | `5e-5` | Fine-tune-friendly default |
+| `HELICO_TRAIN_WARMUP` | `200` | Linear warmup steps |
+| `HELICO_TRAIN_SAVE_EVERY` | `250` | Checkpoint cadence |
+| `HELICO_TRAIN_LOG_EVERY` | `10` | wandb log cadence |
+| `HELICO_TRAIN_VAL_EVERY` | `0` | 0 disables; e.g. `500` enables val sweeps |
+| `HELICO_TRAIN_VAL_SAMPLES` | `32` | Val batches per sweep |
+| `HELICO_TRAIN_RESUME` | — | `/ckpts/<run>/step_<N>.pt` to resume |
+| `HELICO_TRAIN_PROTENIX_INIT` | `1` | Warm-start from Protenix v1 weights |
+| `HELICO_TRAIN_CUTOFF` | `2021-09-30` | Train date upper bound |
+| `HELICO_VAL_START` | `2022-05-01` | Val window lower bound |
+| `HELICO_VAL_END` | `2023-01-12` | Val window upper bound |
+| `HELICO_TRAIN_WANDB_PROJECT` | `helico` | W&B project |
+
+Checkpoints are written to `/ckpts/<run_name>/` on the `helico-checkpoints`
+Volume; `protenix_v1_seed.pt` is created on first run when warm-starting.
+
+## W&B Logging
+
+W&B is enabled automatically on Modal runs (the `wandb-credentials` secret
+provides `WANDB_API_KEY`). Local runs opt in with `HELICO_WANDB_ENABLE=1`
+and the same `WANDB_PROJECT` / `WANDB_RUN_NAME` env vars.
+
+Metrics logged every `log_every` steps (rank 0 only):
+
+| Key | Description |
+|-----|-------------|
+| `loss` | Total loss — `diffusion_loss + 0.1 * distogram_loss` |
+| `loss/diffusion` | Diffusion MSE loss |
+| `loss/distogram` | Distogram cross-entropy (when confidence head is active) |
+| `train/lddt` | Smooth-LDDT on denoised vs ground-truth atom coords |
+| `grad_norm` | Pre-clip total gradient norm |
+| `gpu/peak_mem_gb` | Peak GPU memory in the log window |
+| `lr`, `tokens_per_sec`, `stage` | Schedule / throughput |
+
+Validation metrics (when `val_every > 0`, logged at that cadence):
+
+| Key | Description |
+|-----|-------------|
+| `val/diffusion_loss` | Diffusion loss averaged over `val_samples` batches |
+| `val/distogram_loss` | Distogram loss averaged over `val_samples` batches |
+| `val/total_loss` | Weighted total matching the training loss |
+| `val/lddt` | Smooth-LDDT on the val split |
+
+Val is rank-0 only to avoid DDP gymnastics; other ranks skip the sweep.

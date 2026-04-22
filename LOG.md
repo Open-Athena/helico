@@ -36,48 +36,67 @@ rsync -rlpt -v -z --delete --port=33444 rsync.rcsb.org::ftp_data/structures/divi
 
 ## Processed Data
 
-Location: `/home/ubuntu/tim1/helico-data/processed/`
+Location: `/home/ubuntu/tim1/helico-data/processed/` (local path from earlier runs).
+Modal equivalent: `/cache/helico-data/processed/` on the `helico-train-data` Volume.
 
 | File | Size | Description |
 |------|------|-------------|
 | `ccd_cache.pkl` | 112 MB | Pickled CCD (parsed from components.cif) |
-| `structures/` | ~233K `.pkl` files | Pickled TokenizedStructures across 1,085 subdirectories |
-| `manifest.json` | 1.5 GB | Metadata for all 233,215 processed structures |
+| `structures/` | ~236K `.pkl` files | Pickled TokenizedStructures across ~1,000 subdirectories |
+| `manifest.json` | 1.9 GB | Metadata for all 236,326 processed structures |
 | `rcsb_raw_msa_index.pkl` | 15 MB | Tar index for rcsb_raw_msa.tar (151,403 entries) |
 | `openfold_raw_msa_index.pkl` | 11 MB | Tar index for openfold_raw_msa.tar (268,778 entries) |
 
 ## Preprocessing
 
-### Initial run (completed)
+### 2026-04 Modal run (current)
 
-Processed 248,942 mmCIF files -> 233,215 structures passed filters (resolution <= 9.0, at least one polymer chain). MSA tar indices built for both RCSB and OpenFold archives.
+Switched to running preprocess on Modal via `modal/preprocess_on_modal.py` after
+a local attempt at ~1.5 MB/s upstream would have taken 11 h to upload the
+results. Downloaded raw data directly on Modal (S3 + rsync at ~45 MB/s), ran
+preprocess with the new sparse-`token_bonds` format, committed the Volume.
+End-to-end ~3 h.
 
-### Re-run required: add chain sequences to manifest
+- 252,091 mmCIF files processed → 236,326 structures passed filters (resolution <= 9.0, at least one polymer chain)
+- ~3,000 structures more than the earlier 233,215 run due to a fresher rsync snapshot
+- MSA tar indices rebuilt at the same time
 
-The initial manifest lacks `chain_sequences`, which are needed for MSA lookup.
-RCSB MSA files are named by `sha256(chain_sequence + "\n")`, so the sequence
-must be stored in the manifest. Re-run with `--no-skip-existing` to regenerate
-pickles and manifest with sequences:
+### Earlier local run (obsolete)
 
-```bash
-helico-preprocess structures --no-skip-existing
-```
-
-Expected time: ~2-4 hours with 32+ cores. The MSA tar indices do not need to be rebuilt.
+Crashed the machine via OOM: workers accumulated 200+ GB RSS each because
+`token_bonds` was stored as a dense `(N_tok, N_tok)` tensor — 400 MB for
+ribosomes, multi-GB for capsids. Fix committed as `16c904d`, preprocess now
+stores the sparse edge list and workers stay under ~6 GB RSS.
 
 ## Preprocessing Statistics
 
-- 233,215 structures processed
-- Token count: min=2, median=553, max=587,457
-- Atom count: min=22, median=3,962, max=4,527,365
-- Resolution: min=0.00, median=2.10, max=9.00
-- Date range: 1976-05-19 to 2026-02-11
-- Methods: X-RAY 201,849 / EM 30,934 / E-CRYST 267 / NEUTRON 117 / FIBER 29
-- Entity types: protein 229,792 / ligand 194,967 / nucleotide 18,732
-- Train (release < 2022-01-01): 170,927
-- Val (release >= 2022-01-01): 62,288
+From the 2026-04 Modal run:
+
+- 236,326 structures processed from 252,091 mmCIF files
+- Train split (`release_date < 2021-09-30`, matches AF3/Protenix/OF3): 170,926 structures
+- Val split (`2022-05-01 ≤ release_date ≤ 2023-01-12`, AF3 Recent PDB window): counts logged at train start
 - MSA coverage: RCSB 151,403 chains / OpenFold 268,778 chains
 
 ## Training Commands
 
-(To be added when we start training runs.)
+### Proof run (1×H100, 500 steps, warm-start from Protenix v1)
+
+```bash
+HELICO_TRAIN_GPU=H100:1 HELICO_TRAIN_MAX_STEPS=500 HELICO_TRAIN_CROP=256 \
+    HELICO_TRAIN_RUN_NAME=proof-v1 modal run modal/train.py
+```
+
+Completed 2026-04-21 in ~22 min on H100:1 (commit `733a439`). Loss stayed
+bounded 0.4-0.9 with occasional spikes. Checkpoints written to
+`/ckpts/proof-v1/{step_250.pt, final.pt}` on `helico-checkpoints` Volume.
+W&B run: [proof-v1](https://wandb.ai/PrinceOA/helico/runs/l2k08dqo).
+
+### Full fine-tune (8×H100, validation every 500 steps)
+
+```bash
+HELICO_TRAIN_GPU=H100:8 HELICO_TRAIN_MAX_STEPS=10000 HELICO_TRAIN_CROP=384 \
+    HELICO_TRAIN_VAL_EVERY=500 HELICO_TRAIN_RUN_NAME=v1-finetune-01 \
+    modal run modal/train.py
+```
+
+See `TRAINING.md` for the full env-var / CLI reference.

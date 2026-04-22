@@ -19,8 +19,12 @@ tests/
   test_data.py   Integration tests for the data pipeline
   test_model.py  Integration tests for all model components
 modal/
-  ci.py          CI tests on Modal
-  bench.py       Parallel FoldBench benchmark on Modal
+  ci.py                    CI tests on Modal
+  bench.py                 Parallel FoldBench benchmark on Modal
+  train.py                 Multi-GPU DDP training on Modal
+  preprocess_on_modal.py   Raw-data download + preprocess on Modal
+  sync_train_data.py       Sync Protenix v1 bioassembly data into helico-train-data Volume
+  upload_processed.py      One-shot upload of a local processed/ tree into the Volume
 ```
 
 ## Build & Test Commands
