@@ -18,16 +18,15 @@ PROTENIX_CKPT_PATH = "/root/helico/checkpoints/" + PROTENIX_URL.rsplit("/", 1)[-
 N_WORKERS = int(os.environ.get("HELICO_BENCH_WORKERS", "4"))
 GPU_TYPE = os.environ.get("HELICO_BENCH_GPU", "H100")
 
-bench_image = (
+# Predictor image: GPU model inference. Ships with cuequivariance (pinned
+# to 0.8.x — 0.10 broke bench inference with cuDNN-frontend errors) and
+# the Protenix v1 checkpoint baked in. No DockQ/tmtools — scoring runs
+# on a separate (CPU) Scorer.
+predictor_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("wget", "curl")
-    # DockQ/tmtools are scoring deps used only by the local entrypoint; the
-    # worker only runs Predictor.predict which needs model+data deps. Keeping
-    # DockQ off the image avoids a numpy<2 build-pin fight with its sdist.
     .pip_install(
         "torch>=2.7",
-        # Pin cuequivariance to 0.8.x — 0.10 broke bench inference with
-        # "cuDNN Frontend error: No valid execution plans built".
         "cuequivariance-torch>=0.8,<0.9",
         "cuequivariance-ops-torch-cu12>=0.8,<0.9",
         "biopython>=1.80",
@@ -53,7 +52,37 @@ bench_image = (
     .add_local_file(str(ROOT / "README.md"), remote_path="/root/helico/README.md")
 )
 
-app = modal.App("helico-bench", image=bench_image)
+# Scorer image: CPU scoring (DockQ/tmtools). Lighter than the predictor —
+# no cuequivariance, no Protenix checkpoint. DockQ 2.1.3 ships a cython
+# extension whose sdist pins numpy<2, so we build it with --no-binary +
+# --no-build-isolation against this env's numpy 2 (matches the local
+# pyproject [tool.uv] settings). helico.bench imports torch at top, so
+# we still install torch here even though we never run the model.
+scorer_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("wget", "curl")
+    .pip_install("cython", "setuptools>=68")
+    .pip_install(
+        "torch>=2.7",
+        "biopython>=1.80",
+        "numpy>=2.0",
+        "scipy",
+        "pyyaml>=6.0",
+        "huggingface_hub>=0.20",
+        "requests",
+        "tmtools",
+        "tqdm",
+    )
+    .run_commands(
+        "pip install --no-binary DockQ --no-build-isolation 'DockQ>=2.1.3'"
+    )
+    .add_local_dir(str(ROOT / "src"), remote_path="/root/helico/src")
+    .add_local_file(str(ROOT / "pyproject.toml"), remote_path="/root/helico/pyproject.toml")
+    .add_local_file(str(ROOT / "README.md"), remote_path="/root/helico/README.md")
+)
+
+# Default image for the app is the predictor image; Scorer overrides.
+app = modal.App("helico-bench", image=predictor_image)
 
 # Shared Volume caches CCD + FoldBench data across workers and runs. First
 # worker to start populates it via snapshot_download (~2 GB); subsequent
@@ -67,7 +96,8 @@ ckpt_volume = modal.Volume.from_name("helico-checkpoints", create_if_missing=Tru
 CKPT_MOUNT = "/ckpts"
 
 
-@app.cls(gpu=GPU_TYPE, timeout=600, max_containers=N_WORKERS,
+@app.cls(image=predictor_image, gpu=GPU_TYPE, timeout=600,
+         max_containers=N_WORKERS,
          volumes={DATA_CACHE: data_volume, CKPT_MOUNT: ckpt_volume})
 class Predictor:
     # "" / "protenix-v1" → the Protenix v1 checkpoint baked into the image.
@@ -251,6 +281,95 @@ class Predictor:
             return {"pdb_id": pdb_id, "category": category, "status": "error"}
 
 
+@app.cls(image=scorer_image, cpu=2.0, memory=8192, timeout=900,
+         max_containers=N_WORKERS,
+         volumes={DATA_CACHE: data_volume})
+class Scorer:
+    """Scores a single (pdb_id, category) against the ground-truth mmCIF.
+
+    Runs on CPU; uses DockQ+tmtools from the scorer_image. Pickled
+    `tokenized` and raw arrays are passed from the local entrypoint so
+    the Scorer is stateless w.r.t. predictions.
+    """
+
+    @modal.enter()
+    def setup(self):
+        import os
+        import subprocess
+
+        os.environ["HELICO_DATA_DIR"] = DATA_CACHE
+        os.makedirs(DATA_CACHE, exist_ok=True)
+
+        # Install helico package — matches Predictor setup. .venv is created
+        # but the running python is the image's system python, which has
+        # helico accessible via sys.path below.
+        subprocess.run(
+            "cd /root/helico && uv venv --python 3.11 && uv pip install -e .",
+            check=True, shell=True,
+        )
+
+        import sys
+        sys.path.insert(0, "/root/helico/src")
+
+        from helico.bench import download_foldbench
+        self.foldbench_dir = download_foldbench()
+
+    @modal.method()
+    def score_target(
+        self,
+        pdb_id: str,
+        category: str,
+        tokenized_bytes: bytes,
+        pred_coords,
+        pdb_str: str,
+    ) -> dict:
+        """Score one (pdb_id, category) pair. Returns a row dict suitable
+        for write_category_csv."""
+        import logging
+        import pickle
+        from helico.data import parse_mmcif
+        from helico.bench import (
+            INTERFACE_CATEGORIES,
+            _find_gt_path,
+            match_atoms,
+            score_interface,
+            score_ligand_interface,
+            score_monomer,
+        )
+
+        logger = logging.getLogger(__name__)
+        gt_dir = self.foldbench_dir / "examples" / "ground_truths"
+
+        row: dict = {"pdb_id": pdb_id, "category": category, "status": "error"}
+        try:
+            tokenized = pickle.loads(tokenized_bytes)
+            gt_path = _find_gt_path(gt_dir, pdb_id)
+            gt_structure = parse_mmcif(gt_path, max_resolution=float("inf"))
+            assert gt_structure is not None
+            matched = match_atoms(tokenized, pred_coords, gt_structure)
+            if len(matched.pred_coords) == 0:
+                row["status"] = "no_match"
+                return row
+
+            is_interface = category in INTERFACE_CATEGORIES
+            is_ligand = category == "interface_protein_ligand"
+            if is_ligand:
+                scores = score_ligand_interface(matched)
+            elif is_interface:
+                scores = score_interface(pdb_str, gt_path, matched)
+            else:
+                scores = score_monomer(matched)
+
+            row["status"] = "ok"
+            row["n_matched_atoms"] = len(matched.pred_coords)
+            row.update(scores)
+            return row
+        except Exception as e:
+            logger.error(f"Scoring error on {pdb_id} ({category}): {e}")
+            row["error"] = str(e)
+            return row
+
+
 @app.local_entrypoint()
 def run_bench(
     n_samples: int = 5,
@@ -274,29 +393,26 @@ def run_bench(
     )
     logger = logging.getLogger(__name__)
 
+    # Scoring (match_atoms/score_*/parse_mmcif) moved to Scorer on Modal —
+    # local entrypoint no longer imports DockQ/tmtools. helico.bench still
+    # imports torch/biopython/numpy/scipy at top so those remain local deps.
     from helico.bench import (
         INTERFACE_CATEGORIES,
-        _find_gt_path,
         _pdb_code,
         download_foldbench,
         fetch_release_dates,
         load_targets,
-        match_atoms,
         print_summary,
-        score_interface,
-        score_ligand_interface,
-        score_monomer,
         write_category_csv,
         write_summary_csv,
     )
-    from helico.data import parse_mmcif
 
     logger.info(f"Using {N_WORKERS} {GPU_TYPE} workers (set HELICO_BENCH_WORKERS / HELICO_BENCH_GPU to change)")
 
-    # Download FoldBench locally (just target CSVs + ground truths for scoring)
+    # Download FoldBench locally — target CSVs only; ground truths live on
+    # the Modal volume and are resolved inside Scorer.
     foldbench_dir = download_foldbench()
     targets_dir = foldbench_dir / "targets"
-    gt_dir = foldbench_dir / "examples" / "ground_truths"
 
     all_targets = load_targets(targets_dir)
     if categories:
@@ -415,13 +531,52 @@ def run_bench(
 
             prediction_results[pdb_id] = result
 
-    # Score all predictions locally
-    logger.info("Scoring predictions...")
-    category_summaries = []
-
+    # Score on Modal via the Scorer class. Each (pdb_id, category) pair
+    # becomes one task; same pdb_id can appear in multiple categories and
+    # is scored independently against each.
+    score_tasks: list[tuple[str, str, bytes, "np.ndarray", str]] = []
     for category, targets in all_targets.items():
-        logger.info(f"\nScoring {category} ({len(targets)} targets)")
+        for target in targets:
+            pdb_id = target.pdb_id
+            pred = prediction_results.get(pdb_id)
+            if pred is None or pred.get("status") != "ok":
+                continue
+            score_tasks.append((
+                pdb_id,
+                category,
+                pickle.dumps(pred["tokenized"]),
+                pred["pred_coords"],
+                pred.get("pdb_str", ""),
+            ))
 
+    logger.info(f"Dispatching {len(score_tasks)} scoring tasks to Modal Scorer...")
+    scored_rows: dict[tuple[str, str], dict] = {}
+    if score_tasks:
+        scorer = Scorer()
+        scored_iter = scorer.score_target.map(
+            [t[0] for t in score_tasks],
+            [t[1] for t in score_tasks],
+            [t[2] for t in score_tasks],
+            [t[3] for t in score_tasks],
+            [t[4] for t in score_tasks],
+        )
+        for row in scored_iter:
+            scored_rows[(row["pdb_id"], row["category"])] = row
+            status = row.get("status")
+            if status == "ok":
+                summary_bits = " | ".join(
+                    f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}"
+                    for k, v in row.items()
+                    if k not in ("pdb_id", "category", "status", "n_matched_atoms")
+                )
+                logger.info(f"  scored {row['pdb_id']} ({row['category']}): {summary_bits}")
+            else:
+                logger.warning(f"  scoring {status} on {row['pdb_id']} ({row['category']})")
+
+    # Aggregate by category, inserting rows for targets we couldn't predict.
+    logger.info("Writing per-category CSVs and summary...")
+    category_summaries = []
+    for category, targets in all_targets.items():
         is_interface = category in INTERFACE_CATEGORIES
         is_ligand = category == "interface_protein_ligand"
 
@@ -431,66 +586,39 @@ def run_bench(
 
         for target in targets:
             pdb_id = target.pdb_id
-            result_row = {"pdb_id": pdb_id, "status": "failed"}
-
             pred = prediction_results.get(pdb_id)
             if pred is None or pred.get("status") != "ok":
-                result_row["status"] = pred["status"] if pred else "missing"
-                category_results.append(result_row)
+                category_results.append({
+                    "pdb_id": pdb_id,
+                    "status": pred["status"] if pred else "missing",
+                })
                 continue
 
-            try:
-                tokenized = pred["tokenized"]
-                pred_coords_np = pred["pred_coords"]
-                pred_pdb_str = pred.get("pdb_str", "")
+            row = scored_rows.get((pdb_id, category))
+            if row is None or row.get("status") != "ok":
+                category_results.append(row or {"pdb_id": pdb_id, "status": "score_missing"})
+                continue
 
-                gt_path = _find_gt_path(gt_dir, pdb_id)
-                gt_structure = parse_mmcif(gt_path, max_resolution=float("inf"))
-                assert gt_structure is not None
-
-                matched = match_atoms(tokenized, pred_coords_np, gt_structure)
-                assert len(matched.pred_coords) > 0, f"No atoms matched for {pdb_id}"
-
-                n_predicted += 1
-                if is_ligand:
-                    scores = score_ligand_interface(matched)
-                    success = (
-                        not np.isnan(scores.get("lrmsd", float("nan")))
-                        and scores["lrmsd"] < 2.0
-                        and not np.isnan(scores.get("lddt_pli", float("nan")))
-                        and scores["lddt_pli"] > 0.8
-                    )
-                elif is_interface:
-                    scores = score_interface(pred_pdb_str, gt_path, matched)
-                    success = scores.get("dockq", 0.0) >= 0.23
-                else:
-                    scores = score_monomer(matched)
-                    success = False
-
-                if success:
-                    n_success += 1
-
-                result_row["status"] = "ok"
-                result_row["n_matched_atoms"] = len(matched.pred_coords)
-                result_row.update(scores)
-                category_results.append(result_row)
-
-                logger.info(
-                    f"  {pdb_id}: "
-                    + " | ".join(
-                        f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}"
-                        for k, v in scores.items()
-                    )
+            n_predicted += 1
+            if is_ligand:
+                success = (
+                    not np.isnan(row.get("lrmsd", float("nan")))
+                    and row["lrmsd"] < 2.0
+                    and not np.isnan(row.get("lddt_pli", float("nan")))
+                    and row["lddt_pli"] > 0.8
                 )
-
-            except Exception as e:
-                logger.error(f"Scoring error on {pdb_id}: {e}")
-                result_row["status"] = "error"
-                category_results.append(result_row)
+            elif is_interface:
+                success = row.get("dockq", 0.0) >= 0.23
+            else:
+                success = False
+            if success:
+                n_success += 1
+            # Strip 'category' — write_category_csv infers from filename.
+            category_results.append({k: v for k, v in row.items() if k != "category"})
 
         write_category_csv(category_results, results_dir / f"{category}.csv")
 
-        ok_results = [r for r in category_results if r["status"] == "ok"]
+        ok_results = [r for r in category_results if r.get("status") == "ok"]
         mean_lddt = float(np.mean([r["lddt"] for r in ok_results])) if ok_results else 0.0
         mean_dockq = float("nan")
         if is_interface and not is_ligand and ok_results:
