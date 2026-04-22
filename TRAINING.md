@@ -412,3 +412,41 @@ Per-mol-type splits, intra/inter-chain LDDT, DockQ, and TM-score are
 chain/entity-type metadata that's not currently in the training batch.
 
 Val is rank-0 only to avoid DDP gymnastics; other ranks skip the sweep.
+
+## Re-benchmarking After Fine-Tuning
+
+The inline W&B metrics give a fast signal during training, but for
+publishable scores against AF3 / Protenix / OF3 we run the offline
+FoldBench scorer. We've been iterating against a small **~100-target
+subset** for fast turnaround, defined by the `helico-bench` defaults:
+
+- `--cutoff-date 2024-01-01` — keeps targets released after this date
+- `--max-tokens 2048` — drops anything larger
+- All 9 FoldBench categories included
+
+Net: ~11 targets per category (12 for `interface_antibody_antigen`),
+~100 total. Each historical run lives in a `bench_results_*` directory
+in the repo root (untracked); examples: `bench_results_v1_modres/`,
+`bench_results_v1_ptxmsa/`, `bench_results_v1_rna_frame/`. Each has
+`results/<category>.csv` (per-target metrics) and `summary.csv`
+(aggregate per-category mean LDDT / mean DockQ / success%).
+
+To rerun after a fine-tune so the numbers are directly comparable:
+
+```bash
+# Local (slower; ~30-60 min on a single H100)
+helico-bench \
+    --checkpoint /ckpts/<run>/final.pt \
+    --output-dir bench_results_<run> \
+    --foldbench-dir <FOLDBENCH_DIR>
+
+# Modal (fast; fans out across N workers)
+HELICO_BENCH_WORKERS=8 modal run modal/bench.py \
+    --checkpoint /ckpts/<run>/final.pt \
+    --output-dir bench_results_<run>
+```
+
+To compare two checkpoints, diff their `summary.csv` row-by-row or load
+both `results/<cat>.csv` and pair on `pdb_id`. The full FoldBench leaderboard
+(1,522 targets) is reachable by overriding `--cutoff-date 1900-01-01` —
+expect ~10× the runtime.
