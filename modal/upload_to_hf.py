@@ -24,6 +24,9 @@ Env vars:
     HELICO_SKIP_LATEST_UPDATE=1 — upload snapshot but don't repoint latest.json
     HELICO_DRY_RUN=1 — alias for --dry-run flag
 
+Requires Modal secret `helico-hf-modal` providing `HF_TOKEN` (write scope on
+the dataset).
+
 Layout produced on HF:
     processed/
         ccd_cache.pkl                  (shared across snapshots)
@@ -135,7 +138,7 @@ def _build_source_json(
     memory=64 * 1024,
     timeout=6 * 3600,
     volumes={DATA_ROOT: data_volume},
-    secrets=[modal.Secret.from_name("huggingface-token")],
+    secrets=[modal.Secret.from_name("helico-hf-modal")],
     ephemeral_disk=600 * 1024,
 )
 def upload_remote(
