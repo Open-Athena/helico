@@ -1,0 +1,52 @@
+site_name: Helico
+site_description: AlphaFold3 clone for experimentation — research log and benchmarks
+site_url: https://open-athena.github.io/helico/
+repo_url: https://github.com/Open-Athena/helico
+repo_name: Open-Athena/helico
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Experiments:
+      - Overview: experiments/index.md
+  - Benchmarks: benchmarks.md
+  - Releases: releases.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.emoji
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Open-Athena/helico
