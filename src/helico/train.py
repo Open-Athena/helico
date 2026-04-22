@@ -36,7 +36,16 @@ from helico.data import (
     tokenize_sequences,
     tokenize_structure,
 )
-from helico.model import Helico, HelicoConfig, diffusion_loss, smooth_lddt_loss
+from helico.model import (
+    Helico, HelicoConfig, _flatten_plddt, compute_plddt,
+    diffusion_loss, smooth_lddt_loss,
+)
+from helico.eval_metrics import (
+    gdt_ts as gdt_ts_metric,
+    hard_lddt,
+    mean_plddt,
+    rmsd_after_kabsch,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -220,6 +229,43 @@ def load_checkpoint(
 # ============================================================================
 
 @torch.no_grad()
+def _eval_quality_metrics(outputs: dict, batch: dict) -> dict[str, float]:
+    """Compute Tier-1 structural quality metrics from a forward pass.
+
+    Returns mean-over-batch values for: lddt_hard, rmsd, gdt_ts, plddt.
+    Each is a Python float, or omitted if its inputs aren't present.
+    """
+    out: dict[str, float] = {}
+    pred = outputs.get("x_denoised")
+    gt = batch.get("atom_coords")
+    if pred is None or gt is None:
+        return out
+    pred = pred.float()
+    gt = gt.float()
+    atom_mask = batch.get("atom_mask")
+    try:
+        out["lddt_hard"] = float(hard_lddt(pred, gt, atom_mask).mean().item())
+        out["rmsd"] = float(rmsd_after_kabsch(pred, gt, atom_mask).mean().item())
+        out["gdt_ts"] = float(gdt_ts_metric(pred, gt, atom_mask).mean().item())
+    except Exception as e:  # SVD / cdist can fail on degenerate inputs
+        logger.debug(f"quality metrics failed: {e}")
+
+    plddt_logits = outputs.get("plddt_logits")
+    if (plddt_logits is not None and "atom_to_token" in batch
+            and "atoms_per_token" in batch):
+        try:
+            plddt = compute_plddt(plddt_logits)
+            am = atom_mask if atom_mask is not None else torch.ones_like(batch["atom_to_token"]).float()
+            per_atom = _flatten_plddt(
+                plddt, batch["atom_to_token"], batch["atoms_per_token"], am.float(),
+            )
+            out["plddt"] = float(mean_plddt(per_atom, am).mean().item())
+        except Exception as e:
+            logger.debug(f"plddt metric failed: {e}")
+    return out
+
+
+@torch.no_grad()
 def _run_validation(
     base_model: Helico,
     val_dataset: torch.utils.data.Dataset,
@@ -239,8 +285,11 @@ def _run_validation(
             pin_memory=True,
             drop_last=True,
         )
-        sums = {"diffusion_loss": 0.0, "distogram_loss": 0.0, "total_loss": 0.0, "lddt": 0.0}
-        counts = {k: 0 for k in sums}
+        sums: dict[str, float] = {
+            "diffusion_loss": 0.0, "distogram_loss": 0.0, "total_loss": 0.0,
+            "lddt": 0.0, "lddt_hard": 0.0, "rmsd": 0.0, "gdt_ts": 0.0, "plddt": 0.0,
+        }
+        counts: dict[str, int] = {k: 0 for k in sums}
         for i, batch in enumerate(loader):
             if i >= config.val_samples:
                 break
@@ -261,7 +310,11 @@ def _run_validation(
                     batch.get("atom_mask"),
                 ).item())
                 sums["lddt"] += lddt; counts["lddt"] += 1
-        return {f"val/{k}": sums[k] / max(1, counts[k]) for k in sums if counts[k] > 0}
+            for k, v in _eval_quality_metrics(outputs, batch).items():
+                if k in sums:
+                    sums[k] += v
+                    counts[k] += 1
+        return {f"val/{k}": sums[k] / counts[k] for k in sums if counts[k] > 0}
     finally:
         base_model.train()
 
@@ -448,10 +501,17 @@ def train(
                 throughput = tokens_processed / max(1e-6, elapsed)
                 peak_gb = (torch.cuda.max_memory_allocated(device) / 1e9
                            if torch.cuda.is_available() else 0.0)
+                # Snapshot hard quality metrics on the most recent batch
+                # (cheap, run only on log steps).
+                quality = _eval_quality_metrics(outputs, batch)
                 logger.info(
                     f"Step {step} | Loss: {avg_loss:.4f} | Diff: {avg_diff:.4f}"
                     + (f" | Dist: {avg_dist:.4f}" if avg_dist is not None else "")
                     + (f" | LDDT: {avg_lddt:.3f}" if avg_lddt is not None else "")
+                    + (f" | LDDT_h: {quality['lddt_hard']:.3f}" if "lddt_hard" in quality else "")
+                    + (f" | RMSD: {quality['rmsd']:.2f}" if "rmsd" in quality else "")
+                    + (f" | GDT-TS: {quality['gdt_ts']:.3f}" if "gdt_ts" in quality else "")
+                    + (f" | pLDDT: {quality['plddt']:.1f}" if "plddt" in quality else "")
                     + (f" | GradNorm: {avg_grad:.3f}" if avg_grad is not None else "")
                     + f" | LR: {current_lr:.2e} | GPU: {peak_gb:.1f}G | Tokens/s: {throughput:.0f}"
                 )
@@ -470,6 +530,14 @@ def train(
                         log_payload["train/lddt"] = avg_lddt
                     if avg_grad is not None:
                         log_payload["grad_norm"] = avg_grad
+                    if "lddt_hard" in quality:
+                        log_payload["train/lddt_hard"] = quality["lddt_hard"]
+                    if "rmsd" in quality:
+                        log_payload["train/rmsd"] = quality["rmsd"]
+                    if "gdt_ts" in quality:
+                        log_payload["train/gdt_ts"] = quality["gdt_ts"]
+                    if "plddt" in quality:
+                        log_payload["train/plddt"] = quality["plddt"]
                     wandb_run.log(log_payload, step=step)
                 running_loss = 0.0
                 running_diff = 0.0

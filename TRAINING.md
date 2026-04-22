@@ -379,18 +379,36 @@ Metrics logged every `log_every` steps (rank 0 only):
 | `loss` | Total loss — `diffusion_loss + 0.1 * distogram_loss` |
 | `loss/diffusion` | Diffusion MSE loss |
 | `loss/distogram` | Distogram cross-entropy (when confidence head is active) |
-| `train/lddt` | Smooth-LDDT on denoised vs ground-truth atom coords |
+| `train/lddt` | Smooth-LDDT on denoised vs ground-truth atom coords (running mean over the log window) |
+| `train/lddt_hard` | Hard LDDT (exact, AF3 definition) — snapshot on most recent batch |
+| `train/rmsd` | RMSD (Å) after Kabsch superposition — snapshot |
+| `train/gdt_ts` | GDT-TS (1/2/4/8 Å thresholds, Kabsch-aligned) — snapshot |
+| `train/plddt` | Mean per-atom pLDDT from confidence head (0-100) — snapshot |
 | `grad_norm` | Pre-clip total gradient norm |
 | `gpu/peak_mem_gb` | Peak GPU memory in the log window |
 | `lr`, `tokens_per_sec`, `stage` | Schedule / throughput |
 
-Validation metrics (when `val_every > 0`, logged at that cadence):
+Validation metrics (when `val_every > 0`, logged at that cadence — averaged over `val_samples` batches):
 
 | Key | Description |
 |-----|-------------|
-| `val/diffusion_loss` | Diffusion loss averaged over `val_samples` batches |
-| `val/distogram_loss` | Distogram loss averaged over `val_samples` batches |
+| `val/diffusion_loss` | Diffusion loss |
+| `val/distogram_loss` | Distogram loss |
 | `val/total_loss` | Weighted total matching the training loss |
 | `val/lddt` | Smooth-LDDT on the val split |
+| `val/lddt_hard` | Hard LDDT (AF3 definition) — directly comparable to AF3/Protenix/OF3 reports |
+| `val/rmsd` | RMSD (Å) after Kabsch |
+| `val/gdt_ts` | GDT-TS (Kabsch-aligned, 1/2/4/8 Å) |
+| `val/plddt` | Mean per-atom pLDDT (0-100) |
+
+The hard-quality metrics (`lddt_hard`, `rmsd`, `gdt_ts`, `plddt`) live in
+`src/helico/eval_metrics.py` as torch-batched `(B, N, 3) → (B,)` ops. They
+match the offline numpy implementations in `bench.py` (verified by
+regression tests in `tests/test_eval_metrics.py`).
+
+Per-mol-type splits, intra/inter-chain LDDT, DockQ, and TM-score are
+**not** logged inline — those are run offline via `helico-bench` /
+`modal/bench.py` on saved predictions, and require per-atom
+chain/entity-type metadata that's not currently in the training batch.
 
 Val is rank-0 only to avoid DDP gymnastics; other ranks skip the sweep.
