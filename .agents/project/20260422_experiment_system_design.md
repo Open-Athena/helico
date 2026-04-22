@@ -36,10 +36,15 @@ machinery for our scale.
 1. Researcher opens issue with the Experiment template.
    Labels: `experiment`, priority.
 
-2. (Wave 4) Agent drafts experiments/exp<N>_<slug>/README.md in a branch
-   from the issue body and opens a PR. The researcher edits and merges.
-   Until Wave 4: the researcher creates the branch and README.md by hand,
-   using experiments/TEMPLATE.md.
+2. Experiment is scaffolded at experiments/exp<N>_<slug>/README.md,
+   either on `main` (baselines, characterizations, anything whose results
+   we want to reference going forward regardless of outcome) or on a
+   branch `exp/<N>-<slug>` (when the experiment requires speculative
+   code changes that may not ship). The `branch:` frontmatter field
+   tracks this choice.
+
+   Wave 1b: researcher creates the notebook by hand using
+   experiments/TEMPLATE.md. Wave 4: agent drafts from issue body.
 
 3. Researcher (or later, agent) runs the notebook. Each ensure_* call
    dispatches to Modal (blocking) or returns cached results. Plots are

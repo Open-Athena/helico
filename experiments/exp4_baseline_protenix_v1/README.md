@@ -11,13 +11,13 @@ jupyter:
 helico_experiment:
   issue: 4
   title: "Baseline performance on Protenix v1 checkpoint"
-  branch: exp/4-baseline-protenix-v1
+  branch: main
   baselines: []
 ---
 
 # Baseline performance on Protenix v1 checkpoint
 
-**Issue:** [#4](https://github.com/Open-Athena/helico/issues/4) · **Branch:** `exp/4-baseline-protenix-v1`
+**Issue:** [#4](https://github.com/Open-Athena/helico/issues/4) · **Branch:** `main`
 
 ## Question
 

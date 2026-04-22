@@ -10,11 +10,29 @@ Agent rules: `AGENTS.md` in this directory.
 ## Filing an experiment
 
 1. Open an issue using the **Experiment** template.
-2. Create a branch from `main`: `exp/<issue-number>-<slug>`.
+2. Decide where the experiment lives (see "On main vs. a branch" below).
 3. Copy `experiments/TEMPLATE.md` to `experiments/exp<N>_<slug>/README.md`.
 4. Fill in the frontmatter (issue, title, branch) and the body.
 5. Run the notebook locally to iterate.
 6. Push. (In Wave 2+, the site will auto-rebuild on merge to main.)
+
+## On main vs. a branch
+
+An experiment can live directly on `main`, or on a branch
+(`exp/<issue-number>-<slug>`). The choice is about whether the experiment's
+results are part of the permanent record regardless of outcome.
+
+- **Use main** for baselines, characterizations, and bug analyses — any
+  experiment whose results you'll want to reference later regardless of
+  whether a hypothesis holds up. The notebook itself is the permanent
+  record; no merge step needed.
+- **Use a branch** when the experiment requires speculative changes to
+  model or data code that may not ship. The branch gets merged if the
+  experiment lands, or stays abandoned if it doesn't.
+
+Set `branch:` in the notebook frontmatter accordingly. Don't forget to
+update it if you start on a branch and later decide to bring the work
+to main.
 
 ## Running a notebook
 

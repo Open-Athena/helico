@@ -14,8 +14,17 @@ procedure, and analysis. `<N>` is the GitHub issue number; `<slug>` is a
 2-5 word kebab-case descriptor.
 
 Code changes that implement new functionality (new model variants, new
-features) belong in `src/helico/` on the experiment's branch; the notebook
-*uses* that code via the normal imports.
+features) belong in `src/helico/`. An experiment's notebook *uses* that
+code via normal imports.
+
+## Main vs. branch
+
+Experiments can live on `main` or on a dedicated branch
+`exp/<N>-<slug>`. Default to main for baselines, characterizations, and
+bug analyses — any experiment whose results belong in the permanent
+record regardless of outcome. Use a branch when the experiment depends
+on speculative code that may not ship. The `branch:` field in the
+notebook's frontmatter records the choice and should be kept accurate.
 
 ## Hard rules
 
