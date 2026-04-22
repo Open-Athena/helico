@@ -187,6 +187,140 @@ def publish_bench_run(
     return f"https://huggingface.co/buckets/{bucket}/{experiment}-{name}"
 
 
+def _render_training_card(
+    *,
+    experiment: str,
+    name: str,
+    meta: dict,
+    issue: Optional[int],
+    wandb_url: Optional[str],
+) -> str:
+    lines: list[str] = []
+    lines.append(f"# {experiment} / {name}")
+    lines.append("")
+
+    header = []
+    if issue is not None:
+        header.append(f"**Issue:** [#{issue}](https://github.com/Open-Athena/helico/issues/{issue})")
+    git_sha = meta.get("git_sha")
+    if git_sha:
+        header.append(f"**Commit:** [`{git_sha[:8]}`](https://github.com/Open-Athena/helico/commit/{git_sha})")
+    if wandb_url:
+        header.append(f"**WandB:** [{wandb_url}]({wandb_url})")
+    run_name = meta.get("run_name")
+    if run_name:
+        header.append(f"**Run name:** `{run_name}`")
+    if header:
+        lines.append(" · ".join(header))
+        lines.append("")
+
+    lines.append("## Training configuration")
+    lines.append("")
+    lines.append("| field | value |")
+    lines.append("|---|---|")
+    for k in (
+        "gpu", "max_steps", "crop_size", "batch_size", "lr", "warmup_steps",
+        "val_every", "protenix_init", "train_cutoff", "val_cutoff_start",
+        "val_cutoff_end", "wandb_project",
+    ):
+        if k in meta:
+            lines.append(f"| `{k}` | `{meta[k]}` |")
+    if meta.get("est_cost_usd") is not None:
+        lines.append(f"| `est_cost_usd` | `${meta['est_cost_usd']:.2f}` |")
+    lines.append("")
+
+    lines.append("## Files")
+    lines.append("")
+    lines.append("- `final.pt` — final model checkpoint (loadable with `torch.load`)")
+    lines.append("- `meta.json` — full training metadata (hyperparameters, git sha, etc.)")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def _volume_get(volume: str, remote: str, local: Path) -> None:
+    """Download a file from a Modal volume to a local path."""
+    local.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["modal", "volume", "get", "--force", volume, remote, str(local)],
+        check=True,
+    )
+
+
+def publish_training_run(
+    *,
+    experiment: str,
+    name: str,
+    bucket: str = DEFAULT_BUCKET,
+    issue: Optional[int] = None,
+    wandb_url: Optional[str] = None,
+    dry_run: bool = False,
+) -> str:
+    """Upload a training run's final checkpoint + metadata to a HF Bucket.
+
+    Pulls final.pt from the helico-checkpoints Modal volume at
+    /ckpts/{experiment}-{name}/final.pt. Requires helico.experiment to
+    have recorded a local meta.json for the run.
+    """
+    exp_dir = REPO_ROOT / "experiments" / experiment
+    if not exp_dir.is_dir():
+        raise SystemExit(f"No such experiment directory: {exp_dir}")
+    local_cache = exp_dir / ".cache" / "trainings" / name
+    meta_path = local_cache / "meta.json"
+    if not meta_path.exists():
+        raise SystemExit(
+            f"No training meta at {meta_path} — has ensure_training_run "
+            f"been called for this (experiment, name) on this machine?"
+        )
+    meta = json.loads(meta_path.read_text())
+    if meta.get("dry_run"):
+        raise SystemExit(
+            f"Refusing to publish a dry-run placeholder at {meta_path}."
+        )
+
+    volume_path = meta.get("volume_path") or f"/ckpts/{experiment}-{name}"
+    remote_ckpt = f"{volume_path}/final.pt"
+
+    if issue is None:
+        issue = _infer_issue_from_frontmatter(exp_dir / "README.md")
+
+    model_card = _render_training_card(
+        experiment=experiment, name=name, meta=meta,
+        issue=issue, wandb_url=wandb_url,
+    )
+
+    with tempfile.TemporaryDirectory() as stage:
+        stage_dir = Path(stage)
+
+        # Copy meta.json
+        shutil.copy2(meta_path, stage_dir / "meta.json")
+        # Write model card
+        (stage_dir / "README.md").write_text(model_card)
+
+        # Pull checkpoint from Modal volume
+        ckpt_local = stage_dir / "final.pt"
+        if dry_run:
+            # Skip the multi-GB pull in dry run; just note it would happen
+            print(f"[dry-run] would fetch {remote_ckpt} from {volume_path[1:]} volume")
+            ckpt_local.touch()
+        else:
+            print(f"Pulling {remote_ckpt} from helico-checkpoints volume...")
+            _volume_get("helico-checkpoints", remote_ckpt, ckpt_local)
+
+        dest = f"{bucket}/{experiment}-{name}"
+        if dry_run:
+            print(f"[dry-run] would sync {stage_dir} to {dest}")
+            for p in sorted(stage_dir.rglob("*")):
+                if p.is_file():
+                    print(f"  {p.relative_to(stage_dir)} ({p.stat().st_size} bytes)")
+            return dest
+
+        print(f"Syncing {stage_dir} -> {dest}")
+        _run_hf_buckets_sync(stage_dir, dest)
+
+    return f"https://huggingface.co/buckets/{bucket}/{experiment}-{name}"
+
+
 def _infer_issue_from_frontmatter(readme_md: Path) -> Optional[int]:
     """Read the helico_experiment.issue field from a jupytext notebook's frontmatter."""
     if not readme_md.exists():
@@ -230,6 +364,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     bench_ap.add_argument("--dry-run", action="store_true",
                           help="Stage files locally but don't upload")
 
+    train_ap = sub.add_parser("training", help="Publish a training run to a HF Bucket")
+    train_ap.add_argument("--experiment", required=True,
+                          help="Experiment slug")
+    train_ap.add_argument("--name", required=True,
+                          help="Step name used in ensure_training_run")
+    train_ap.add_argument("--bucket", default=DEFAULT_BUCKET,
+                          help=f"HF bucket id (default: {DEFAULT_BUCKET})")
+    train_ap.add_argument("--issue", type=int, default=None)
+    train_ap.add_argument("--wandb-url", default=None)
+    train_ap.add_argument("--dry-run", action="store_true")
+
     args = ap.parse_args(argv)
     if args.command == "bench":
         url = publish_bench_run(
@@ -239,6 +384,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             issue=args.issue,
             wandb_url=args.wandb_url,
             include_plots=args.include_plots,
+            dry_run=args.dry_run,
+        )
+        print(f"Published: {url}")
+        return 0
+    if args.command == "training":
+        url = publish_training_run(
+            experiment=args.experiment,
+            name=args.name,
+            bucket=args.bucket,
+            issue=args.issue,
+            wandb_url=args.wandb_url,
             dry_run=args.dry_run,
         )
         print(f"Published: {url}")

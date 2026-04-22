@@ -310,6 +310,7 @@ def ensure_bench_run(
     categories: str = "",
     est_wall_hours: float = 0.5,
     force: bool = False,
+    publish: bool = False,
 ) -> BenchRun:
     """Run FoldBench idempotently. Returns cached result if `name` has run before.
 
@@ -402,7 +403,10 @@ def ensure_bench_run(
             EXPERIMENTS_VOLUME, e,
         )
 
-    return _load_bench_run(name, slug, cache_dir, volume_path, cached=False)
+    bench = _load_bench_run(name, slug, cache_dir, volume_path, cached=False)
+    if publish:
+        _maybe_publish_bench(bench)
+    return bench
 
 
 def _bench_complete_local(cache_dir: Path) -> bool:
@@ -468,33 +472,213 @@ def _load_bench_run(
 
 
 # --------------------------------------------------------------------------
-# ensure_training_run — stub until the first training experiment
+# ensure_training_run
 # --------------------------------------------------------------------------
+
+
+# Mapping from ensure_training_run kwargs to HELICO_TRAIN_* env vars. All
+# values are stringified before handing off to modal run (subprocess env
+# must be str -> str).
+_TRAIN_ENV_MAPPING = {
+    "max_steps": "HELICO_TRAIN_MAX_STEPS",
+    "crop_size": "HELICO_TRAIN_CROP",
+    "batch_size": "HELICO_TRAIN_BATCH",
+    "lr": "HELICO_TRAIN_LR",
+    "warmup_steps": "HELICO_TRAIN_WARMUP",
+    "save_every": "HELICO_TRAIN_SAVE_EVERY",
+    "log_every": "HELICO_TRAIN_LOG_EVERY",
+    "val_every": "HELICO_TRAIN_VAL_EVERY",
+    "val_samples": "HELICO_TRAIN_VAL_SAMPLES",
+    "n_diffusion_samples": "HELICO_TRAIN_N_DIFFUSION_SAMPLES",
+    "resume": "HELICO_TRAIN_RESUME",
+    "train_cutoff": "HELICO_TRAIN_CUTOFF",
+    "val_cutoff_start": "HELICO_VAL_START",
+    "val_cutoff_end": "HELICO_VAL_END",
+    "wandb_project": "HELICO_TRAIN_WANDB_PROJECT",
+}
+
+
+def _estimate_train_cost(gpu: str, est_wall_hours: float) -> float:
+    """gpu is `TYPE:COUNT`, e.g. `H100:8`."""
+    parts = gpu.split(":")
+    gpu_type = parts[0]
+    count = int(parts[1]) if len(parts) > 1 else 1
+    return estimate_cost(gpu=gpu_type, hours=est_wall_hours, count=count)
 
 
 def ensure_training_run(
     name: str,
-    spec: dict,
     *,
     gpu: str = "H100:8",
+    max_steps: int = 10000,
+    crop_size: int = 384,
+    batch_size: int = 1,
+    lr: float = 5e-5,
+    warmup_steps: int = 200,
+    save_every: int = 250,
+    log_every: int = 10,
+    val_every: int = 0,
+    val_samples: int = 32,
+    n_diffusion_samples: int = 8,
+    resume: Optional[str] = None,
+    protenix_init: bool = True,
+    train_cutoff: str = "2021-09-30",
+    val_cutoff_start: str = "2022-05-01",
+    val_cutoff_end: str = "2023-01-12",
+    wandb_project: str = "helico",
+    est_wall_hours: float = 12.0,
     force: bool = False,
+    publish: bool = False,
 ) -> TrainingRun:
-    """Train a model idempotently. NOT IMPLEMENTED in Wave 1b.
+    """Train a model idempotently.
 
-    Will subprocess `modal run modal/train.py` with HELICO_TRAIN_* env vars
-    mapped from `spec`, check /ckpts/<slug>-<name>/final.pt on the
-    helico-checkpoints volume for cache hits, and return a TrainingRun
-    with wandb URL + checkpoint path.
+    Cache is keyed by `(experiment_slug, name)`. Run name on Modal is
+    `{experiment_slug}-{name}`; the final checkpoint lands at
+    `/ckpts/<run_name>/final.pt` on the `helico-checkpoints` volume. A
+    cache hit here (or in the matching local `.cache/trainings/<name>/`)
+    short-circuits without launching Modal.
 
-    Wire-up plan is in
-    .agents/project/20260422_experiment_system_design.md. File an issue
-    when the first training experiment is needed; the scaffolding here
-    will be fleshed out then.
+    On fresh run: subprocesses `modal run modal/train.py` with HELICO_TRAIN_*
+    env vars mapped from the kwargs; blocks until completion (up to 24h
+    timeout on the Modal side). Records a meta.json locally after success.
+
+    Dry-run mode returns a sentinel without dispatching; cost estimate is
+    accumulated for the gate.
     """
-    raise NotImplementedError(
-        "ensure_training_run is a Wave 1b stub. The first intended experiment "
-        "is bench-only (Protenix v1 baseline). Training support will land "
-        "when the first training experiment is filed."
+    slug = _current_experiment()
+    run_name = f"{slug}-{name}"
+    volume_path = f"/ckpts/{run_name}"
+    local_cache = _cache_dir(slug) / "trainings" / name
+
+    est_cost = _estimate_train_cost(gpu=gpu, est_wall_hours=est_wall_hours)
+
+    if is_dry_run():
+        _log_start("ensure_training_run", name, "dry-run", est_cost)
+        _record_dry_run("training", name, est_cost)
+        scratch = _cache_dir(slug) / "dry-run-scratch" / "trainings" / name
+        scratch.mkdir(parents=True, exist_ok=True)
+        meta = {
+            "name": name, "experiment": slug, "dry_run": True,
+            "run_name": run_name, "volume_path": volume_path,
+            "est_cost_usd": est_cost,
+        }
+        (scratch / "meta.json").write_text(json.dumps(meta, indent=2))
+        return TrainingRun(
+            name=name, experiment=slug, cache_dir=scratch,
+            volume_path=volume_path, cached=False, meta=meta,
+        )
+
+    if not force:
+        if _training_complete_local(local_cache):
+            _log_start("ensure_training_run", name, "cached (local)")
+            return _load_training_run(name, slug, local_cache, volume_path, cached=True)
+        if _volume_path_exists(CHECKPOINTS_VOLUME, f"{volume_path}/final.pt"):
+            _log_start("ensure_training_run", name, "cached (volume); recording meta")
+            # Don't pull the checkpoint locally — it's multi-GB. Record a
+            # meta.json pointing at the volume path so future cache lookups
+            # succeed via the local fast path.
+            local_cache.mkdir(parents=True, exist_ok=True)
+            meta = {
+                "name": name, "experiment": slug,
+                "run_name": run_name, "volume_path": volume_path,
+                "cached_from_volume": True,
+            }
+            (local_cache / "meta.json").write_text(json.dumps(meta, indent=2))
+            return _load_training_run(name, slug, local_cache, volume_path, cached=True)
+
+    _log_start("ensure_training_run", name, "launching", est_cost)
+
+    local_cache.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env["HELICO_TRAIN_GPU"] = gpu
+    env["HELICO_TRAIN_RUN_NAME"] = run_name
+    env["HELICO_TRAIN_PROTENIX_INIT"] = "1" if protenix_init else "0"
+    # Map remaining kwargs
+    kwargs = {
+        "max_steps": max_steps, "crop_size": crop_size, "batch_size": batch_size,
+        "lr": lr, "warmup_steps": warmup_steps, "save_every": save_every,
+        "log_every": log_every, "val_every": val_every, "val_samples": val_samples,
+        "n_diffusion_samples": n_diffusion_samples, "resume": resume or "",
+        "train_cutoff": train_cutoff, "val_cutoff_start": val_cutoff_start,
+        "val_cutoff_end": val_cutoff_end, "wandb_project": wandb_project,
+    }
+    for k, v in kwargs.items():
+        env[_TRAIN_ENV_MAPPING[k]] = str(v)
+
+    subprocess.run(
+        ["modal", "run", "modal/train.py"],
+        check=True, env=env, cwd=str(REPO_ROOT),
+    )
+
+    meta = {
+        "name": name,
+        "experiment": slug,
+        "run_name": run_name,
+        "volume_path": volume_path,
+        "gpu": gpu,
+        "max_steps": max_steps,
+        "crop_size": crop_size,
+        "batch_size": batch_size,
+        "lr": lr,
+        "warmup_steps": warmup_steps,
+        "val_every": val_every,
+        "protenix_init": protenix_init,
+        "train_cutoff": train_cutoff,
+        "val_cutoff_start": val_cutoff_start,
+        "val_cutoff_end": val_cutoff_end,
+        "wandb_project": wandb_project,
+        "git_sha": _git_sha(),
+        "est_cost_usd": est_cost,
+    }
+    (local_cache / "meta.json").write_text(json.dumps(meta, indent=2))
+
+    run = _load_training_run(name, slug, local_cache, volume_path, cached=False)
+    if publish:
+        _maybe_publish_training(run)
+    return run
+
+
+def _training_complete_local(cache_dir: Path) -> bool:
+    return (cache_dir / "meta.json").exists()
+
+
+def _maybe_publish_bench(bench: BenchRun) -> None:
+    """Best-effort HF upload after a fresh bench run. Failures are logged
+    but don't raise — the bench artifacts are already on local disk and
+    the Modal volume; the researcher can always `helico-publish` manually."""
+    try:
+        from helico.hf_publish import publish_bench_run
+        url = publish_bench_run(
+            experiment=bench.experiment, name=bench.name,
+        )
+        print(f"[helico.experiment] published to {url}", flush=True)
+    except Exception as e:
+        logger.warning("Auto-publish of bench run failed: %s", e)
+
+
+def _maybe_publish_training(run: TrainingRun) -> None:
+    try:
+        from helico.hf_publish import publish_training_run
+        url = publish_training_run(
+            experiment=run.experiment, name=run.name,
+        )
+        print(f"[helico.experiment] published to {url}", flush=True)
+    except Exception as e:
+        logger.warning("Auto-publish of training run failed: %s", e)
+
+
+def _load_training_run(
+    name: str, slug: str, cache_dir: Path, volume_path: str, *, cached: bool,
+) -> TrainingRun:
+    meta: dict = {}
+    meta_path = cache_dir / "meta.json"
+    if meta_path.exists():
+        with open(meta_path) as f:
+            meta = json.load(f)
+    return TrainingRun(
+        name=name, experiment=slug, cache_dir=cache_dir,
+        volume_path=volume_path, cached=cached, meta=meta,
     )
 
 
