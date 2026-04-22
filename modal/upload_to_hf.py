@@ -201,60 +201,54 @@ def upload_remote(
     print(f"  wrote SOURCE.json ({n_structures} structures, git_sha={source_json['git_sha'][:8]})",
           flush=True)
 
-    # 4. Tar + split structures (large)
-    chunk_bytes = tar_chunk_gb * 1024 * 1024 * 1024
-    print(f"[2/4] tar | split structures/ → structures.tar.NN (chunk={tar_chunk_gb} GB)...",
-          flush=True)
+    # 4. Stage everything into a single tree that mirrors the HF repo layout.
+    # upload_large_folder (the right tool for 236K small files) doesn't
+    # support path_in_repo, so we build a staging dir that already has the
+    # target structure, using a symlink for the big structures/ dir so we
+    # don't copy 57 GB. upload_large_folder's recursive walk follows
+    # symlinks (Path.rglob default).
+    stage = Path("/tmp/hf-stage")
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage_snap = stage / HF_PROCESSED_PREFIX / snapshot_id
+    stage_snap.mkdir(parents=True)
+    for p in snap_workspace.iterdir():
+        shutil.copy2(p, stage_snap / p.name)
+    # Shared files at stage/processed/
+    for fname in _SHARED_FILES:
+        src = processed_dir / fname
+        if src.exists():
+            shutil.copy2(src, stage / HF_PROCESSED_PREFIX / fname)
+    # Symlink structures — upload reads through the link from the Volume.
+    (stage_snap / "structures").symlink_to(structures_dir)
+
+    struct_size = sum(p.stat().st_size for p in structures_dir.rglob("*.pkl"))
     n_pkls = sum(1 for _ in structures_dir.rglob("*.pkl"))
-    print(f"  packing {n_pkls} pickle files...", flush=True)
-    # Use shell pipe to avoid materializing tar in memory: tar -C ... -cf - structures | split -b 25G
-    cmd = (
-        f"tar -C '{processed_dir}' -cf - structures "
-        f"| split -b {chunk_bytes} -d -a 2 - '{snap_workspace}/structures.tar.'"
-    )
-    if dry_run:
-        print(f"  [dry-run] would run: {cmd}", flush=True)
-    else:
-        subprocess.run(cmd, shell=True, check=True)
-        parts = sorted(snap_workspace.glob("structures.tar.*"))
-        total = sum(p.stat().st_size for p in parts)
-        print(f"  → {len(parts)} parts, total {total / 1e9:.2f} GB", flush=True)
-
-    # 5. Audit
-    print(f"[3/4] Audit:", flush=True)
-    upload_plan = []
-    if not dry_run:
-        for p in sorted(snap_workspace.iterdir()):
-            sz = p.stat().st_size
-            upload_plan.append((p, f"{HF_PROCESSED_PREFIX}/{snapshot_id}/{p.name}", sz))
-            print(f"  {sz/1e9:7.2f} GB  →  {HF_PROCESSED_PREFIX}/{snapshot_id}/{p.name}", flush=True)
-        # Shared (uploaded only if missing on HF)
-        for fname in _SHARED_FILES:
-            src = processed_dir / fname
-            if src.exists():
-                upload_plan.append((src, f"{HF_PROCESSED_PREFIX}/{fname}", src.stat().st_size))
-                print(f"  {src.stat().st_size/1e9:7.2f} GB  →  {HF_PROCESSED_PREFIX}/{fname} (shared)",
-                      flush=True)
-        total = sum(sz for _, _, sz in upload_plan)
-        print(f"  Total upload: {total / 1e9:.2f} GB across {len(upload_plan)} files", flush=True)
+    print(f"[2/3] Staged tree at {stage}:", flush=True)
+    for p in sorted(stage.rglob("*")):
+        if p.is_symlink():
+            print(f"  {str(p.relative_to(stage)):60s}  → symlink → {os.readlink(p)}", flush=True)
+        elif p.is_file():
+            print(f"  {str(p.relative_to(stage)):60s}  {p.stat().st_size/1e6:7.1f} MB", flush=True)
+    print(f"  (structures via symlink: {n_pkls} files, {struct_size/1e9:.2f} GB)", flush=True)
 
     if dry_run:
-        print("[4/4] DRY RUN — nothing uploaded.", flush=True)
+        print("[3/3] DRY RUN — nothing uploaded.", flush=True)
         return {"status": "dry-run", "snapshot_id": snapshot_id, "n_structures": n_structures}
 
-    # 6. Upload
-    print(f"[4/4] Uploading to https://huggingface.co/datasets/{repo} ...", flush=True)
+    # 5. Upload via upload_large_folder — handles many small files via
+    # parallel multi-commit LFS with resumability.
+    print(f"[3/3] upload_large_folder → https://huggingface.co/datasets/{repo}", flush=True)
     api = HfApi()
     api.create_repo(repo_id=repo, repo_type="dataset", exist_ok=True)
-    for src, repo_path, sz in upload_plan:
-        print(f"  ↑ {repo_path} ({sz/1e9:.2f} GB)", flush=True)
-        api.upload_file(
-            path_or_fileobj=str(src),
-            path_in_repo=repo_path,
-            repo_id=repo,
-            repo_type="dataset",
-            commit_message=f"Upload {repo_path}",
-        )
+    api.upload_large_folder(
+        folder_path=str(stage),
+        repo_id=repo,
+        repo_type="dataset",
+        num_workers=32,
+        print_report=True,
+        print_report_every=60,
+    )
 
     # 7. Update latest.json (atomic via overwrite)
     if not skip_latest_update:
