@@ -223,52 +223,49 @@ on the `helico-checkpoints` Volume) and diff the per-category
 mean LDDT / mean DockQ against the exp4 Protenix-v1 baseline.
 
 `ensure_bench_run` is idempotent — once cached locally or on the
-`helico-experiments` Volume, re-runs are free. While training is still
-in progress `final.pt` doesn't exist yet, so the cell guards on it.
+`helico-experiments` Volume, re-runs are free.
+
+> **Note**: the run was stopped at step 3,250 (out of a planned 10,000)
+> after val metrics had clearly converged on the cuDNN-fixed val sweep.
+> `/ckpts/v1-finetune-01/final.pt` was set to `step_3250.pt` so the
+> usual `final.pt` reference resolves; raw `step_*.pt` checkpoints are
+> still on the volume for sweeps.
 
 ```python
 FINAL_CKPT = "/ckpts/v1-finetune-01/final.pt"
 
-training_done = (int(history["_step"].max()) >= 10_000
-                 if "_step" in history else False)
-print(f"training_done = {training_done}")
+from helico.experiment import ensure_bench_run
+bench_ft = ensure_bench_run(
+    "v1-finetune-01-final",
+    checkpoint=FINAL_CKPT,
+    workers=8, gpu="H100", n_samples=5, n_cycles=10,
+    max_tokens=2048, cutoff_date="2024-01-01",
+    est_wall_hours=0.75,
+)
+bench_ft.summary.to_csv(DATA / "bench_ft_summary.csv")
+print(f"bench cached: {bench_ft.cached}")
+bench_ft.summary
+```
 
-bench_ft = None
-if training_done:
-    from helico.experiment import ensure_bench_run
-    bench_ft = ensure_bench_run(
-        "v1-finetune-01-final",
-        checkpoint=FINAL_CKPT,
-        workers=8, gpu="H100", n_samples=5, n_cycles=10,
-        max_tokens=2048, cutoff_date="2024-01-01",
-        est_wall_hours=0.75,
-    )
-    bench_ft.summary.to_csv(DATA / "bench_ft_summary.csv")
-    print(f"bench cached: {bench_ft.cached}")
-    bench_ft.summary
+```python
+from helico.experiment import _experiment_dir
+baseline_csv = _experiment_dir("exp4_baseline_protenix_v1") / "data" / "summary.csv"
+if baseline_csv.exists():
+    baseline = pd.read_csv(baseline_csv, index_col=0)
+    # Align by category; subtract fine-tune − protenix-v1.
+    cols = ["mean_lddt", "mean_dockq"]
+    delta = (bench_ft.summary[cols].astype(float)
+             - baseline[cols].astype(float))
+    delta.to_csv(DATA / "delta_vs_exp4.csv")
+    print("Δ (fine-tune − protenix-v1):")
+    print(delta)
 else:
-    print("training still in flight; skipping bench until final.pt exists")
+    print(f"exp4 baseline summary not found at {baseline_csv}; run exp4 first.")
+    delta = None
 ```
 
 ```python
-if bench_ft is not None:
-    from helico.experiment import _experiment_dir
-    baseline_csv = _experiment_dir("exp4_baseline_protenix_v1") / "data" / "summary.csv"
-    if baseline_csv.exists():
-        baseline = pd.read_csv(baseline_csv, index_col=0)
-        # Align by category; subtract fine-tune − protenix-v1.
-        cols = ["mean_lddt", "mean_dockq"]
-        delta = (bench_ft.summary[cols].astype(float)
-                 - baseline[cols].astype(float))
-        delta.to_csv(DATA / "delta_vs_exp4.csv")
-        print("Δ (fine-tune − protenix-v1):")
-        print(delta)
-    else:
-        print(f"exp4 baseline summary not found at {baseline_csv}; run exp4 first.")
-```
-
-```python
-if bench_ft is not None and baseline_csv.exists():
+if delta is not None:
     fig, ax = plt.subplots(figsize=(9, 4.5))
     order = delta["mean_lddt"].sort_values().index
     ax.barh(order, delta.loc[order, "mean_lddt"],
