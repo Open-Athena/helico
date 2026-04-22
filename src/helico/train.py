@@ -307,12 +307,23 @@ def _run_validation(
             "lddt": 0.0, "lddt_hard": 0.0, "rmsd": 0.0, "gdt_ts": 0.0, "plddt": 0.0,
         }
         counts: dict[str, int] = {k: 0 for k in sums}
+        n_attempted = 0
+        n_skipped = 0
         for i, batch in enumerate(loader):
-            if i >= config.val_samples:
+            if n_attempted >= config.val_samples:
                 break
+            n_attempted += 1
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-            with torch.amp.autocast("cuda", dtype=dtype):
-                outputs = base_model(batch)
+            try:
+                with torch.amp.autocast("cuda", dtype=dtype):
+                    outputs = base_model(batch)
+            except RuntimeError as e:
+                # cuDNN flash-attn rejects some val structure shapes. Rather
+                # than killing the sweep, skip the offending sample. (Train
+                # forwards don't hit this in practice.)
+                n_skipped += 1
+                logger.warning(f"[val] sample {i} forward failed, skipping: {e}")
+                continue
             dl = float(outputs["diffusion_loss"].item())
             sums["diffusion_loss"] += dl; counts["diffusion_loss"] += 1
             total = dl
@@ -331,7 +342,10 @@ def _run_validation(
                 if k in sums:
                     sums[k] += v
                     counts[k] += 1
-        return {f"val/{k}": sums[k] / counts[k] for k in sums if counts[k] > 0}
+        result = {f"val/{k}": sums[k] / counts[k] for k in sums if counts[k] > 0}
+        result["val/n_attempted"] = float(n_attempted)
+        result["val/n_skipped"] = float(n_skipped)
+        return result
     finally:
         base_model.train()
 

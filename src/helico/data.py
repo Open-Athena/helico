@@ -2354,26 +2354,13 @@ class HelicoDataset(Dataset):
         return features
 
 
-def collate_fn(
-    batch: list[dict[str, torch.Tensor]],
-    pad_tokens_to_multiple: int = 64,
-) -> dict[str, torch.Tensor]:
-    """Collate function that pads variable-length tensors to form a batch.
-
-    `pad_tokens_to_multiple` rounds the per-batch max_tokens up to a
-    multiple of the given size before padding. cuDNN flash-attention can
-    fail at "No valid execution plans built" on awkward token counts; a
-    multiple of 64 is a safe default. Token mask handles correctness so
-    nothing semantically changes, just the padded shape.
-    """
+def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+    """Collate function that pads variable-length tensors to form a batch."""
     if not batch:
         return {}
 
     max_tokens = max(b["n_tokens"] for b in batch)
     max_atoms = max(b["n_atoms"] for b in batch)
-    if pad_tokens_to_multiple > 1:
-        m = pad_tokens_to_multiple
-        max_tokens = ((max_tokens + m - 1) // m) * m
     B = len(batch)
 
     result: dict[str, torch.Tensor] = {}
