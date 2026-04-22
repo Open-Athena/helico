@@ -1318,7 +1318,7 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'experiments'" },
     { name = "modal", marker = "extra == 'dev'" },
     { name = "nbconvert", marker = "extra == 'experiments'", specifier = ">=7" },
-    { name = "numpy" },
+    { name = "numpy", specifier = "<2.0" },
     { name = "pandas", marker = "extra == 'experiments'" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7" },
     { name = "pyyaml", specifier = ">=6.0" },

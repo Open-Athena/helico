@@ -26,7 +26,7 @@ bench_image = (
         "cuequivariance-torch>=0.8",
         "cuequivariance-ops-torch-cu12>=0.8",
         "biopython>=1.80",
-        "numpy",
+        "numpy<2.0",
         "scipy",
         "pyyaml>=6.0",
         "huggingface_hub>=0.20",
