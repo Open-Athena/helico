@@ -7,8 +7,11 @@ license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.10,<2.11",
-    "cuequivariance-torch>=0.8",
-    "cuequivariance-ops-torch-cu12>=0.8",
+    # Pin cuequivariance to 0.8.x — 0.10 broke bench inference with
+    # "cuDNN Frontend error: No valid execution plans built" on H100.
+    # The bench_results_v1_* runs from 2026-04-19/20 used 0.8.x.
+    "cuequivariance-torch>=0.8,<0.9",
+    "cuequivariance-ops-torch-cu12>=0.8,<0.9",
     "biopython>=1.80",
     "numpy>=2.0",
     "scipy",

@@ -26,8 +26,10 @@ bench_image = (
     # DockQ off the image avoids a numpy<2 build-pin fight with its sdist.
     .pip_install(
         "torch>=2.7",
-        "cuequivariance-torch>=0.8",
-        "cuequivariance-ops-torch-cu12>=0.8",
+        # Pin cuequivariance to 0.8.x — 0.10 broke bench inference with
+        # "cuDNN Frontend error: No valid execution plans built".
+        "cuequivariance-torch>=0.8,<0.9",
+        "cuequivariance-ops-torch-cu12>=0.8,<0.9",
         "biopython>=1.80",
         "numpy>=2.0",
         "scipy",

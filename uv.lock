@@ -1356,8 +1356,8 @@ experiments = [
 [package.metadata]
 requires-dist = [
     { name = "biopython", specifier = ">=1.80" },
-    { name = "cuequivariance-ops-torch-cu12", specifier = ">=0.8" },
-    { name = "cuequivariance-torch", specifier = ">=0.8" },
+    { name = "cuequivariance-ops-torch-cu12", specifier = ">=0.8,<0.9" },
+    { name = "cuequivariance-torch", specifier = ">=0.8,<0.9" },
     { name = "cython", marker = "extra == 'bench'" },
     { name = "dockq", marker = "extra == 'bench'" },
     { name = "huggingface-hub", specifier = ">=0.20" },
