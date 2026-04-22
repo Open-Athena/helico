@@ -408,8 +408,9 @@ _BENCH_CATEGORIES = [
 
 
 def _write_placeholder_bench(cache_dir: Path, *, name: str, slug: str, est_cost: float) -> None:
-    """Write a minimal, column-correct but empty bench output so dry-run
-    notebooks can execute through their analysis cells without crashing."""
+    """Write a minimal but non-empty bench output so dry-run notebooks can
+    execute through their analysis cells (groupbys, plots) without crashing.
+    Values are placeholders — the cost estimate is the only real output."""
     import csv
 
     results_dir = cache_dir / "results"
@@ -419,12 +420,21 @@ def _write_placeholder_bench(cache_dir: Path, *, name: str, slug: str, est_cost:
         w = csv.writer(f)
         w.writerow(["category", "n_total", "n_predicted", "success_pct", "mean_lddt", "mean_dockq"])
         for cat in _BENCH_CATEGORIES:
-            w.writerow([cat, 0, 0, "nan", 0.0, "nan"])
+            is_iface = cat.startswith("interface_")
+            w.writerow([cat, 3, 3, 0.0 if is_iface else "nan", 0.5,
+                        0.3 if is_iface and cat != "interface_protein_ligand" else "nan"])
 
+    # Three placeholder rows per category with plausible-looking values so
+    # downstream groupbys / violinplots / bar charts don't crash on all-NaN
+    # data. pdb_id starts with "PLACEHOLDER" so it's obvious on inspection.
     for cat in _BENCH_CATEGORIES:
+        is_iface = cat.startswith("interface_") and cat != "interface_protein_ligand"
         with open(results_dir / f"{cat}.csv", "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(["pdb_id", "status", "n_matched_atoms", "lddt", "dockq"])
+            for i, lddt in enumerate([0.4, 0.5, 0.6]):
+                dockq = round(0.2 + 0.1 * i, 1) if is_iface else "nan"
+                w.writerow([f"PLACEHOLDER-{i}", "ok", 100, lddt, dockq])
 
     with open(cache_dir / "meta.json", "w") as f:
         json.dump({

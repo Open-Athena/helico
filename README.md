@@ -1,4 +1,9 @@
 # Helico
+
+[![GPU Tests](https://github.com/Open-Athena/helico/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/Open-Athena/helico/actions/workflows/test.yml)
+[![W&B](https://img.shields.io/badge/W%26B-timodonnell%2Fhelico-FFBE00?logo=weightsandbiases&logoColor=white)](https://wandb.ai/timodonnell/helico)
+[![HF Dataset](https://img.shields.io/badge/🤗%20dataset-helico--data-yellow)](https://huggingface.co/datasets/timodonnell/helico-data)
+
 Our goal is to enable robust experimentation around modeling and data improvements for AlphaFold3-like architectures.
 
 ## Key ideas
