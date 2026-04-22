@@ -281,8 +281,41 @@ if delta is not None:
 
 ## Conclusion
 
-(Fill in after training finishes and the FoldBench follow-on runs.)
+**Mixed — fine-tune succeeded as a pipeline sanity check, but did not
+produce a strictly-better checkpoint than Protenix v1.**
 
-A short paragraph: did training converge? Did val metrics improve? Does
-the final checkpoint beat the Protenix-v1 baseline on FoldBench, and by
-how much per category?
+Pipeline: training worked end-to-end on 8×H100. Loss and val metrics
+trended in the right direction (val/lddt_hard 0.627 at step 500 →
+≥0.85 by step ≥2000), no divergence, no NaNs, val sweep never
+degenerated once the torch pin landed (gh#3).
+
+FoldBench vs. exp4 baseline (Δ mean LDDT, sorted):
+
+| category                    | Δ LDDT | Δ DockQ |
+|-----------------------------|:------:|:-------:|
+| interface_protein_rna       | +0.074 | +0.035  |
+| monomer_rna                 | +0.024 |  —      |
+| monomer_dna                 | +0.023 |  —      |
+| interface_protein_protein   | +0.016 | +0.044  |
+| interface_antibody_antigen  | +0.008 | +0.028  |
+| interface_protein_peptide   | -0.026 | +0.044  |
+| interface_protein_dna       | -0.079 | -0.018  |
+| interface_protein_ligand    | -0.082 |  —      |
+| monomer_protein             | -0.102 |  —      |
+
+The nucleic-acid and protein-protein interface categories all improved
+modestly; DockQ improved across most interfaces. But the fine-tune
+**regressed** monomer_protein (-0.102 LDDT, significant — this is the
+category Protenix v1 was strongest at) and protein-ligand (-0.082).
+Classic uniform-sampling-fine-tune failure mode: the model "forgot"
+parts of what v1 did well while learning a little about what v1 did
+poorly.
+
+The final checkpoint is **not** a drop-in replacement for Protenix v1,
+but the run validated the entire pipeline (preprocess → train → val →
+bench → publish) and surfaced the direction for next experiments:
+weighted sampling by category / by-token-count to avoid the
+monomer_protein regression.
+
+- Checkpoint: [`exp5_v1-finetune-01/final.pt`](https://huggingface.co/buckets/timodonnell/helico-experiments) on `timodonnell/helico-experiments`
+- Raw step checkpoints: `/ckpts/v1-finetune-01/step_{250..3250}.pt` on `helico-checkpoints` Modal Volume — useful if we want to bisect for "best" by val LDDT rather than "last"
