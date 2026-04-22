@@ -45,5 +45,13 @@ app = modal.App("helico-ci", image=image)
 def run_tests():
     import subprocess
     subprocess.run("cd /root/helico && uv venv --python 3.11", check=True, shell=True)
+    # Pre-seed the fresh venv with DockQ's no-isolation build deps
+    # (setuptools + cython). Without this, uv tries to build DockQ before
+    # installing them from the [bench] extras, and the build hook fails with
+    # ModuleNotFoundError: setuptools. See gh CI failure on commit 0d521d3.
+    subprocess.run(
+        "cd /root/helico && uv pip install 'setuptools>=68' cython",
+        check=True, shell=True,
+    )
     subprocess.run("cd /root/helico && uv pip install -e '.[dev,bench]'", check=True, shell=True)
     subprocess.run(["uv", "run", "pytest", "-v", "--tb=short"], check=True, cwd="/root/helico")
