@@ -47,18 +47,18 @@ What we expect to see, and why.
 from helico.experiment import (
     ensure_bench_run,
     estimate_cost,
+    experiment_dir,
     set_experiment,
 )
 
-# Uncomment and set explicitly if auto-detection from cwd doesn't work
-# (e.g. running the notebook from the repo root rather than its own dir).
+import matplotlib.pyplot as plt
+
+# Set the experiment slug explicitly — avoids cwd-autodetect surprises.
 # set_experiment("exp0_template")
 
-import matplotlib.pyplot as plt
-from pathlib import Path
-
-PLOTS = Path("plots")
-DATA = Path("data")
+# Absolute paths under the experiment dir — robust to kernel cwd.
+PLOTS = experiment_dir() / "plots"
+DATA = experiment_dir() / "data"
 PLOTS.mkdir(exist_ok=True)
 DATA.mkdir(exist_ok=True)
 ```

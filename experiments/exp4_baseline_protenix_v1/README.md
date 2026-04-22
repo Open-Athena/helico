@@ -40,18 +40,17 @@ measured.
 ## Setup
 
 ```python
-from helico.experiment import ensure_bench_run, set_experiment
-from pathlib import Path
+from helico.experiment import ensure_bench_run, experiment_dir, set_experiment
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-# Auto-detects from cwd when run from this directory; explicit for safety.
 set_experiment("exp4_baseline_protenix_v1")
 
-DATA = Path("data")
-PLOTS = Path("plots")
+# Absolute paths under the experiment dir — robust to kernel cwd.
+DATA = experiment_dir() / "data"
+PLOTS = experiment_dir() / "plots"
 DATA.mkdir(exist_ok=True)
 PLOTS.mkdir(exist_ok=True)
 

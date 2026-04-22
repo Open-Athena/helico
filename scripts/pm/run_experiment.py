@@ -83,8 +83,9 @@ def main(argv: list[str] | None = None) -> int:
         env=env,
     )
 
-    # Step 2: execute. Run from the experiment dir so relative paths
-    # ("plots/", "data/", set_experiment() autodetect) work.
+    # Step 2: execute. Notebooks build artifact paths via experiment_dir()
+    # (see the TEMPLATE), which resolves absolutely regardless of where
+    # the kernel's cwd is set.
     _run(
         ["uv", "run", "jupyter", "nbconvert",
          "--to", "notebook", "--execute",

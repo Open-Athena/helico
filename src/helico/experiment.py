@@ -117,6 +117,15 @@ def _cache_dir(slug: str) -> Path:
     return _experiment_dir(slug) / ".cache"
 
 
+def experiment_dir() -> Path:
+    """Absolute path to the current experiment's directory.
+
+    Use this in notebooks to build committed artifact paths (plots/, data/)
+    so they resolve the same way regardless of cwd (kernel, jupytext, CI).
+    """
+    return _experiment_dir(_current_experiment())
+
+
 # --------------------------------------------------------------------------
 # Cost estimation
 # --------------------------------------------------------------------------
@@ -314,7 +323,6 @@ def ensure_bench_run(
     `/experiments/<slug>/<name>/`.
     """
     slug = _current_experiment()
-    cache_dir = _cache_dir(slug) / "benches" / name
     volume_path = f"/experiments/{slug}/{name}"
 
     est_cost = _estimate_bench_cost(gpu=gpu, workers=workers, wall_hours=est_wall_hours)
@@ -322,8 +330,13 @@ def ensure_bench_run(
     if is_dry_run():
         _log_start("ensure_bench_run", name, "dry-run", est_cost)
         _record_dry_run("bench", name, est_cost)
-        _write_placeholder_bench(cache_dir, name=name, slug=slug, est_cost=est_cost)
-        return _load_bench_run(name, slug, cache_dir, volume_path, cached=False)
+        # Dry-run artifacts go to a separate scratch tree so they can never
+        # be mistaken for a real cache hit by a subsequent non-dry run.
+        scratch_dir = _cache_dir(slug) / "dry-run-scratch" / "benches" / name
+        _write_placeholder_bench(scratch_dir, name=name, slug=slug, est_cost=est_cost)
+        return _load_bench_run(name, slug, scratch_dir, volume_path, cached=False)
+
+    cache_dir = _cache_dir(slug) / "benches" / name
 
     if not force:
         if _bench_complete_local(cache_dir):
@@ -498,6 +511,7 @@ __all__ = [
     "ensure_bench_run",
     "ensure_training_run",
     "estimate_cost",
+    "experiment_dir",
     "set_experiment",
     "is_dry_run",
     "dry_run_records",
