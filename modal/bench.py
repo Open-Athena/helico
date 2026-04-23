@@ -103,7 +103,7 @@ ckpt_volume = modal.Volume.from_name("helico-checkpoints", create_if_missing=Tru
 CKPT_MOUNT = "/ckpts"
 
 
-@app.cls(image=predictor_image, gpu=GPU_TYPE, timeout=1800,
+@app.cls(image=predictor_image, gpu=GPU_TYPE, timeout=3600,
          max_containers=N_WORKERS,
          volumes={DATA_CACHE: data_volume, CKPT_MOUNT: ckpt_volume})
 class Predictor:

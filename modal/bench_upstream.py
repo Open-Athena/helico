@@ -1,24 +1,24 @@
-"""Run upstream (Bytedance) Protenix v1 on FoldBench targets for A/B vs Helico.
+"""Run upstream (Bytedance) Protenix v1.0.9 on FoldBench targets — A/B vs Helico.
 
-Direct answer to exp8's question: does upstream Protenix succeed on the
-specific targets where Helico fails (8q3j, 8v52)?
+Answers exp8's question: does upstream Protenix succeed on the specific
+targets where Helico fails (8q3j, 8v52)?
 
-Protocol: 5 seeds × 5 samples × 200 diffusion steps × 10 cycles — exactly
-the published FoldBench methodology (matches make_predictions.sh in
-FoldBench/algorithms/Protenix/).
+**Versioning decision**: we use Protenix **code v1.0.9** with the **v1.0.0
+model checkpoint** (`protenix_base_default_v1.0.0`). This is the same
+checkpoint Helico loads in exp4, so the A/B is apples-to-apples —
+differences are in featurization / inference pipeline, not weights.
 
-Protenix source is vendored from the FoldBench-bundled clone
-(~/.cache/helico/data/benchmarks/FoldBench/algorithms/Protenix/Protenix)
-which is version 0.3.2. The PyPI `protenix` package is 2.x with different
-conventions; we don't use it.
+(Protenix v0.3.2 bundled in FoldBench uses a different model v0.2.0
+checkpoint whose architecture predates v1.0.0's extra linear-layer
+biases. Using the bundled version would have introduced a weights
+mismatch.)
 
-Dependencies are isolated in a dedicated Modal image — Protenix pins
-torch==2.3.1 and numpy==1.26.3, incompatible with Helico's torch>=2.10
-and numpy>=2. Modal images are independent, so no conflict at runtime.
+Protocol: 5 seeds × 5 samples × 200 diffusion steps × 10 cycles —
+matches both the FoldBench published protocol and Helico's exp8.
 
 Usage:
     modal run modal/bench_upstream.py \\
-        --target-pdb-ids 8t59-assembly1,8q3j-assembly1,8v52-assembly1
+        --targets 8t59-assembly1,8q3j-assembly1,8v52-assembly1
 """
 
 from __future__ import annotations
@@ -31,58 +31,69 @@ import modal
 
 ROOT = Path(__file__).parent.parent
 
-# Vendored Protenix source lives in the user's FoldBench cache.
-# add_local_dir uploads this to the image at build time.
-PROTENIX_SRC_LOCAL = Path(os.path.expanduser(
-    "~/.cache/helico/data/benchmarks/FoldBench/algorithms/Protenix/Protenix"
-))
-
-PROTENIX_CKPT_URL = os.environ.get(
-    "HELICO_PROTENIX_URL",
-    "https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_default_v1.0.0.pt",
-)
-PROTENIX_CKPT_REMOTE = "/root/ckpts/" + PROTENIX_CKPT_URL.rsplit("/", 1)[-1]
+# We auto-download the v1.0.0 checkpoint via the Protenix CLI at first use.
+# The checkpoint lives at a known URL for cache-warming if needed.
+PROTENIX_MODEL_NAME = "protenix_base_default_v1.0.0"
 
 
 upstream_image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install("wget", "curl", "git", "build-essential")
-    # Protenix's pinned runtime deps (from its requirements.txt)
+    # Protenix 1.0.x JIT-compiles a fused `fast_layer_norm_cuda_v2`
+    # extension at import time via torch.utils.cpp_extension.load, which
+    # needs ninja + a CUDA toolkit with nvcc. The default debian_slim
+    # image has neither. Start from nvidia/cuda devel (has nvcc); pip
+    # installs torch 2.7.1 + cuequivariance on top.
+    modal.Image.from_registry(
+        "nvidia/cuda:12.6.3-devel-ubuntu22.04", add_python="3.11",
+    )
+    .apt_install("wget", "curl", "git", "build-essential", "ninja-build")
+    .pip_install("ninja")
+    # Let `pip install protenix==1.0.9` pull its full pinned dep set.
+    # Key deps: torch==2.7.1, numpy==2.4.1, biotite==1.4.0 (no
+    # PDBX_COVALENT_TYPES fight), cuequivariance-torch==0.8.0,
+    # biopython==1.85. Skip deepspeed==0.17.5 to save image-build time
+    # (~5-10 min on CUDA extension compile) — Protenix uses triton
+    # kernels otherwise and can run without ds4sci.
+    .pip_install("protenix==1.0.9", extra_options="--no-deps")
+    # Then install Protenix's deps except deepspeed.
     .pip_install(
-        "torch==2.3.1",
-        "numpy==1.26.3",
-        "biopython==1.83",
-        "biotite==1.1.0",
-        "modelcif==0.7",
-        "protobuf==3.20.2",
-        "PyYaml",
-        "scipy",
-        "ml_collections",
-        "tqdm",
-        "pandas",
-        "dm-tree",
-        "rdkit",
-        "scikit-learn",
-        "scikit-learn-extra",
-        "matplotlib==3.9.2",
+        "torch==2.7.1",
+        "torchvision==0.22.1",
+        "torchaudio==2.7.1",
+        "cuequivariance-ops-torch-cu12==0.8.0",
+        "cuequivariance-torch==0.8.0",
+        "scipy>=1.9.0",
+        "ml_collections==1.1.0",
+        "tqdm==4.67.1",
+        "pandas==2.3.1",
+        "PyYAML==6.0.2",
+        "matplotlib==3.10.5",
+        "ipywidgets==8.1.7",
+        "py3Dmol==2.5.2",
+        "rdkit==2025.9.3",
+        "biopython==1.85",
+        "biotite==1.4.0",
+        "modelcif==1.4",
+        "gemmi==0.6.7",
+        "pdbeccdutils==1.0.0",
+        "fair-esm==2.0.0",
+        "scikit-learn==1.7.1",
+        "scikit-learn-extra==0.3.0",
+        "pydantic>=2.0.0",
+        "triton==3.3.1",
+        "optree==0.17.0",
+        "protobuf==6.31.1",
+        "icecream==2.1.7",
+        "ipdb==0.13.13",
+        "numpy==2.4.1",
         "click",
         "huggingface_hub>=0.20",
-        # Skipping deepspeed for now — compiling its CUDA extensions on
-        # image build takes ~5-10min. We pass
-        # --use_deepspeed_evo_attention=False to Protenix's inference.
     )
-    # Protenix checkpoint baked into image (same URL as modal/bench.py).
+    # Pre-warm the Protenix model cache so the first inference doesn't
+    # spend time downloading. Protenix CLI caches to ~/.cache/protenix.
     .run_commands(
-        f"mkdir -p /root/ckpts && "
-        f"curl -fL --retry 5 --retry-delay 5 --retry-connrefused "
-        f"--connect-timeout 30 --max-time 900 "
-        f"-o {PROTENIX_CKPT_REMOTE} {PROTENIX_CKPT_URL} && "
-        f"ls -lh {PROTENIX_CKPT_REMOTE}"
+        "mkdir -p /root/.cache/protenix && "
+        "python -c 'from protenix.web_service.dependency_url import URL; print(URL)' || true"
     )
-    # Vendor Protenix source — 1.8MB, copy=True bakes into image layer
-    # so `pip install -e` below runs against a stable path.
-    .add_local_dir(str(PROTENIX_SRC_LOCAL), remote_path="/algo/Protenix", copy=True)
-    .run_commands("cd /algo/Protenix && pip install -e . --no-deps")
 )
 
 
@@ -103,15 +114,16 @@ class UpstreamPredictor:
         self,
         pdb_id: str,
         input_json_relpath: str,   # relative to DATA_CACHE
-        dump_relpath: str,         # relative to DATA_CACHE, under which seed_*/predictions/ appear
+        dump_relpath: str,         # relative to DATA_CACHE
         seeds_csv: str = "42,66,101,2024,8888",
-        n_samples_per_seed: int = 5,
-        n_steps: int = 200,
-        n_cycles: int = 10,
+        model_name: str = PROTENIX_MODEL_NAME,
     ) -> dict:
-        """Run Protenix inference for a single target. Reads input JSON
-        from the shared volume; writes CIFs + confidence JSONs under
-        `dump_relpath` on the volume.
+        """Run Protenix 1.0.9 inference. Uses the `protenix pred` CLI.
+
+        With `--use_default_params=true` (the default), Protenix picks its
+        recommended N_cycle / N_sample / N_step for the chosen model, which
+        for protenix_base_default_v1.0.0 matches the published protocol
+        (5 samples, 200 steps, 10 cycles).
         """
         import logging
         import subprocess
@@ -126,31 +138,22 @@ class UpstreamPredictor:
             return {"pdb_id": pdb_id, "status": "error",
                     "error": f"missing input json at {input_path}"}
 
-        # Protenix's inference.py imports relative to its own runner/, so we
-        # must run with cwd=/algo/Protenix and set PYTHONPATH accordingly.
-        env = os.environ.copy()
-        env["PYTHONPATH"] = "/algo/Protenix"
-        env["CUTLASS_PATH"] = "/dev/null"  # never used since ds attention disabled
-
+        # Per Protenix docs, the CLI auto-downloads the named model into
+        # ~/.cache/protenix on first use.
         cmd = [
-            "python", "runner/inference.py",
+            "protenix", "pred",
+            "-i", str(input_path),
+            "-o", str(dump_dir),
+            "-n", model_name,
             "--seeds", seeds_csv,
-            "--dump_dir", str(dump_dir),
-            "--input_json_path", str(input_path),
-            "--load_checkpoint_path", PROTENIX_CKPT_REMOTE,
-            f"--model.N_cycle={n_cycles}",
-            f"--sample_diffusion.N_sample={n_samples_per_seed}",
-            f"--sample_diffusion.N_step={n_steps}",
-            "--use_deepspeed_evo_attention=False",
+            "--use_msa", "true",
+            "--use_template", "false",
+            "--use_rna_msa", "false",
         ]
         logger.info(f"[{pdb_id}] running: {' '.join(cmd)}")
         try:
-            result = subprocess.run(
-                cmd, check=True, cwd="/algo/Protenix", env=env,
-                capture_output=False,
-            )
+            subprocess.run(cmd, check=True, capture_output=False)
             data_volume.commit()
-            # Enumerate what we produced
             produced = sorted(str(p.relative_to(dump_dir)) for p in dump_dir.rglob("*.cif"))
             return {
                 "pdb_id": pdb_id,
@@ -173,20 +176,16 @@ def run_triage(
     out_dir: str = str(ROOT / "experiments/exp8_ab_ag_triage/data/upstream"),
 ):
     """Stage inputs + MSAs locally, upload to volume, dispatch Protenix,
-    pull outputs back to `out_dir`. Does NOT score here — run
-    scripts/pm/score_upstream.py afterward (keeps scoring tooling outside
-    this image).
+    pull outputs back. Does NOT score here — run
+    scripts/pm/score_upstream.py afterward.
     """
-    import json
     import shutil
     import subprocess
     import sys
-    import tempfile
 
     sys.path.insert(0, str(ROOT / "src"))
     from helico.upstream_protenix import build_protenix_input
 
-    # Local paths
     foldbench_local = Path.home() / ".cache/helico/data/benchmarks/FoldBench"
     gt_dir_local = foldbench_local / "examples/ground_truths"
     msa_local = foldbench_local / "foldbench-msas"
@@ -201,32 +200,21 @@ def run_triage(
 
     target_list = [t.strip() for t in targets.split(",") if t.strip()]
 
-    # 1. Stage locally — build inputs.json + MSA dir per target
+    # 1. Stage locally — build inputs.json + per-sequence a3m files
     staged: list[dict] = []
     for pdb_id in target_list:
         print(f"\n=== staging {pdb_id} ===")
         stage = staging_root / pdb_id
         stage.mkdir()
+        # remote_base is where this stage dir will live on the volume
+        remote_base = f"/upstream_protenix/{pdb_id}"
         info = build_protenix_input(
             pdb_id=pdb_id,
             gt_cif_path=gt_dir_local / f"{pdb_id}.cif.gz",
             foldbench_msa_dir=msa_local,
             out_dir=stage,
+            remote_msa_prefix=f"{DATA_CACHE}{remote_base}/msa",
         )
-        # Rewrite paths in inputs.json local→remote
-        remote_base = f"/upstream_protenix/{pdb_id}"
-        data = json.loads((stage / "inputs.json").read_text())
-        for entry in data:
-            for seq in entry.get("sequences", []):
-                chain = seq.get("proteinChain")
-                if not chain:
-                    continue
-                msa = chain.get("msa") or {}
-                p = msa.get("precomputed_msa_dir")
-                if p and p.startswith(str(stage)):
-                    rel = Path(p).relative_to(stage)
-                    msa["precomputed_msa_dir"] = f"{DATA_CACHE}{remote_base}/{rel}"
-        (stage / "inputs.json").write_text(json.dumps(data, indent=2))
         staged.append({
             "pdb_id": pdb_id,
             "stage_local": stage,

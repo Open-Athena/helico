@@ -43,17 +43,30 @@ def build_protenix_input(
     gt_cif_path: Path,
     foldbench_msa_dir: Path,
     out_dir: Path,
+    remote_msa_prefix: str | None = None,
 ) -> dict[str, Any]:
-    """Construct the Protenix-format input JSON for a single FoldBench target.
+    """Construct a Protenix 1.0.x input JSON for a single FoldBench target.
+
+    Uses the new (post-v0.7.2) format: per-proteinChain `pairedMsaPath`
+    and `unpairedMsaPath` (absolute paths), replacing the deprecated
+    `msa.precomputed_msa_dir` dict format.
+
+    FoldBench ships a single .a3m per unique protein sequence (not split
+    into paired/unpaired). We gunzip it into out_dir/msa/<sha>.a3m and
+    point both paths at that one file — Protenix can handle the same
+    content in both roles. If heteromer pairing behavior differs between
+    the two, that's a known loss vs a proper paired MSA, but for our
+    ab-ag diagnostic it's close enough to see whether upstream's
+    featurization works at all on 8q3j / 8v52.
 
     Reads the ground-truth CIF to enumerate chains (we predict from
-    sequence + MSA; GT is only the prediction *target definition*, not
-    used for prediction). Groups chains by unique protein sequence.
-    Materializes a per-sequence MSA directory under `out_dir/msa/<sha>/`
-    containing `non_pairing.a3m` and `pairing.a3m`. Writes the JSON to
-    `out_dir/inputs.json`.
+    sequence + MSA; GT is only the target definition). Groups chains by
+    unique protein sequence.
 
-    Returns metadata about what was built (for logging).
+    If `remote_msa_prefix` is provided, the JSON contains that prefix in
+    the MSA paths instead of the local `out_dir/msa/` — use this when
+    staging locally but running on a remote worker that sees the files
+    at a different path.
     """
     out_dir = Path(out_dir)
     msa_root = out_dir / "msa"
@@ -65,7 +78,6 @@ def build_protenix_input(
     chains = structure_to_chains(gt_structure)
 
     # structure_to_chains returns list[dict] with keys: type, id, sequence.
-    # Group by unique protein sequence (preserving order of first appearance).
     protein_groups: dict[str, int] = {}
     non_protein: list[Any] = []
     for chain in chains:
@@ -85,54 +97,47 @@ def build_protenix_input(
             non_protein.append(chain)
 
     if non_protein:
-        # Warn — we don't currently handle ligand / DNA / RNA chains.
-        # For ab-ag targets this should always be empty.
         print(f"[upstream_protenix] {pdb_id}: {len(non_protein)} non-protein chains "
-              f"(types: {[type(c).__name__ for c in non_protein]}) — skipping")
+              f"— skipping for ab-ag diagnostic")
 
     sequences_json: list[dict] = []
     msa_built: list[tuple[str, Path]] = []
 
     for seq, count in protein_groups.items():
         sha = _seq_sha256(seq)
-        seq_msa_dir = msa_root / sha
-        seq_msa_dir.mkdir(parents=True, exist_ok=True)
+        dest_a3m_local = msa_root / f"{sha}.a3m"
 
-        # Copy FoldBench's a3m for this sequence into the Protenix-expected
-        # filenames. Protenix wants `non_pairing.a3m` always, plus
-        # `pairing.a3m` for heteromers (fails at assert if missing).
         src_a3m_gz = foldbench_msa_dir / f"{sha}.a3m.gz"
         if not src_a3m_gz.exists():
             raise RuntimeError(
-                f"{pdb_id}: no FoldBench a3m at {src_a3m_gz} for sequence sha {sha[:12]}... "
-                f"(len={len(seq)})"
+                f"{pdb_id}: no FoldBench a3m at {src_a3m_gz} for sequence "
+                f"sha {sha[:12]}... (len={len(seq)})"
             )
         with gzip.open(src_a3m_gz, "rb") as f:
             a3m_bytes = f.read()
-        (seq_msa_dir / "non_pairing.a3m").write_bytes(a3m_bytes)
-        (seq_msa_dir / "pairing.a3m").write_bytes(a3m_bytes)
-        msa_built.append((sha[:12], seq_msa_dir))
+        dest_a3m_local.write_bytes(a3m_bytes)
+        msa_built.append((sha[:12], dest_a3m_local))
+
+        if remote_msa_prefix is not None:
+            a3m_path_in_json = f"{remote_msa_prefix}/{sha}.a3m"
+        else:
+            a3m_path_in_json = str(dest_a3m_local)
 
         sequences_json.append({
             "proteinChain": {
                 "sequence": seq,
                 "count": count,
                 "modifications": [],
-                "msa": {
-                    # Protenix reads MSAs from this dir. Path is what
-                    # the REMOTE (Modal worker) will see — the caller is
-                    # responsible for staging via the shared volume at a
-                    # known location and passing that as the `msa_root`
-                    # seen from Modal's side. We write the dir here; the
-                    # caller rewrites paths in the JSON for remote use.
-                    "precomputed_msa_dir": str(seq_msa_dir),
-                    "pairing_db": "uniref100",
-                },
+                # Protenix 1.0.x new format. Both point at the same
+                # FoldBench a3m — see docstring on the trade-off.
+                "pairedMsaPath": a3m_path_in_json,
+                "unpairedMsaPath": a3m_path_in_json,
             }
         })
 
     input_json = [{
         "name": pdb_id,
+        "covalent_bonds": [],
         "sequences": sequences_json,
     }]
 
@@ -222,14 +227,22 @@ def score_upstream_outputs(
     rows: list[UpstreamSampleScore] = []
     for cif_path in cif_paths:
         # Derive seed + sample from filename: <pdb_id>_seed_<seed>_sample_<i>*.cif
+        # Protenix 1.0.x layout: <pdb>/seed_<N>/predictions/<pdb>_sample_<i>.cif
+        # Seed lives in the parent dir name; sample in the filename.
         name = cif_path.stem
         seed = -1
         sample = -1
         try:
-            if "_seed_" in name:
-                seed = int(name.split("_seed_")[1].split("_")[0])
+            # Parent chain: predictions/ → seed_<N>/ → pdb_id/
+            for parent in cif_path.parents:
+                if parent.name.startswith("seed_"):
+                    seed = int(parent.name.split("_", 1)[1])
+                    break
             if "_sample_" in name:
-                sample = int(name.split("_sample_")[1].split("_")[0])
+                sample = int(name.split("_sample_")[1].split("_")[0].split(".")[0])
+            # Fall back to legacy <pdb>_seed_<N>_sample_<i> format
+            if seed == -1 and "_seed_" in name:
+                seed = int(name.split("_seed_")[1].split("_")[0])
         except ValueError:
             pass
 
