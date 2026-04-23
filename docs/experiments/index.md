@@ -14,6 +14,7 @@ _`gh issue list --label experiment` + each notebook's frontmatter._
 
 | Issue | Title | Branch | Notebook |
 |---|---|---|---|
+| [#8](https://github.com/Open-Athena/helico/issues/8) | exp: triage antibody-antigen interface underperformance | `—` | _no notebook yet_ |
 | [#7](https://github.com/Open-Athena/helico/issues/7) | exp: direct A/B of Helico vs upstream Protenix v1 on same 679 targets | `—` | _no notebook yet_ |
 | [#4](https://github.com/Open-Athena/helico/issues/4) | Baseline performance on Protenix v1 checkpoint | `main` | [`exp4_baseline_protenix_v1`](https://github.com/Open-Athena/helico/blob/main/experiments/exp4_baseline_protenix_v1/README.md) |
 
