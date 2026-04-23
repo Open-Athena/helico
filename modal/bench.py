@@ -245,15 +245,21 @@ class Predictor:
             assert gt_structure is not None, f"Failed to parse ground truth: {gt_path}"
             chains = structure_to_chains(gt_structure)
 
-            # Multi-seed sampling: published FoldBench protocol uses 5 seeds x
-            # 5 samples = 25 predictions/target. One call per seed, seeds
+            # Multi-seed sampling: published FoldBench protocol uses 5 seeds
+            # × 5 samples = 25 predictions/target. One call per seed, seeds
             # start at 42 for reproducibility. Recycling re-runs per seed
             # (wasteful but simpler than refactoring Helico.predict to share
-            # trunk state across seeds); acceptable for diagnostic and small
-            # per-seed sample counts.
+            # trunk state across seeds).
+            #
+            # Memory discipline: extract each seed's outputs to CPU + numpy
+            # immediately and drop GPU tensors before the next seed runs.
+            # Otherwise the pae_logits / pde_logits (shape N_tok×N_tok×64)
+            # accumulate to ~1GB per seed on 2048-token targets and OOM the
+            # H100 80GB at n_seeds=5.
+            import gc
             import numpy as np
             seeds = list(range(42, 42 + n_seeds)) if n_seeds > 0 else [42]
-            per_seed_results = []  # list of (ranking_score, tokenized, results)
+            per_seed_compact = []  # (rs, all_coords_np, all_pdb_strs, top_coords_np, top_plddt_np, top_pdb_str)
 
             for seed in seeds:
                 torch.manual_seed(seed)
@@ -272,33 +278,49 @@ class Predictor:
                 if pred_result is None:
                     return {"pdb_id": pdb_id, "category": category, "status": "too_large"}
                 tok_i, res_i = pred_result
+
                 rs_i = float(res_i["ranking_score"][0].item())
-                per_seed_results.append((rs_i, tok_i, res_i))
+                all_coords_np_i = res_i["all_coords"][0].cpu().float().numpy()
+                # coords_to_pdb does its own cpu().numpy() so safe to call
+                all_pdb_strs_i = [
+                    coords_to_pdb(res_i["all_coords"][0, si],
+                                  res_i["plddt"][0], tok_i)
+                    for si in range(res_i["all_coords"].shape[1])
+                ]
+                top_coords_np_i = res_i["coords"][0].cpu().float().numpy()
+                top_plddt_np_i = res_i["plddt"][0].cpu().float().numpy()
+                top_pdb_str_i = coords_to_pdb(
+                    res_i["coords"][0], res_i["plddt"][0], tok_i,
+                )
 
-            # Pick the best overall sample by ranking_score across seeds.
-            best_rs, tokenized, results = max(per_seed_results, key=lambda t: t[0])
-            pred_coords_np = results["coords"][0].cpu().float().numpy()
-            plddt_np = results["plddt"][0].cpu().float().numpy()
-            pred_pdb_str = coords_to_pdb(
-                results["coords"][0], results["plddt"][0], tokenized,
-            )
+                per_seed_compact.append({
+                    "rs": rs_i,
+                    "tokenized": tok_i,
+                    "all_coords_np": all_coords_np_i,
+                    "all_pdb_strs": all_pdb_strs_i,
+                    "top_coords_np": top_coords_np_i,
+                    "top_plddt_np": top_plddt_np_i,
+                    "top_pdb_str": top_pdb_str_i,
+                })
+                # Free this seed's GPU state before running the next seed.
+                del res_i, pred_result
+                gc.collect()
+                torch.cuda.empty_cache()
 
-            # All samples across all seeds: concat along sample dimension.
-            # Per-sample pLDDT isn't exposed by Helico.predict (only the
-            # best sample's); for PDB B-factors on non-top samples we reuse
-            # that seed's best-sample pLDDT.
-            all_coords_list = [
-                r[2]["all_coords"][0].cpu().float().numpy() for r in per_seed_results
-            ]
-            all_coords_np = np.concatenate(all_coords_list, axis=0)  # (n_seeds*n_samples, N_atoms, 3)
+            # Pick the overall best sample by ranking_score across seeds.
+            best = max(per_seed_compact, key=lambda p: p["rs"])
+            tokenized = best["tokenized"]
+            pred_coords_np = best["top_coords_np"]
+            plddt_np = best["top_plddt_np"]
+            pred_pdb_str = best["top_pdb_str"]
+            best_rs = best["rs"]
+
+            all_coords_np = np.concatenate(
+                [p["all_coords_np"] for p in per_seed_compact], axis=0,
+            )  # (n_seeds*n_samples, N_atoms, 3)
             all_pdb_strs = []
-            for _, tok_i, res_i in per_seed_results:
-                for si in range(res_i["all_coords"].shape[1]):
-                    all_pdb_strs.append(
-                        coords_to_pdb(res_i["all_coords"][0, si],
-                                      res_i["plddt"][0], tok_i)
-                    )
-            torch.cuda.empty_cache()
+            for p in per_seed_compact:
+                all_pdb_strs.extend(p["all_pdb_strs"])
 
             return {
                 "pdb_id": pdb_id,
