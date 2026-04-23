@@ -308,6 +308,7 @@ def ensure_bench_run(
     n_cycles: int = 10,
     cutoff_date: str = "2024-01-01",
     categories: str = "",
+    target_pdb_ids: str = "",
     est_wall_hours: float = 0.5,
     force: bool = False,
     publish: bool = False,
@@ -390,6 +391,8 @@ def ensure_bench_run(
         cmd.append("--resume")
     if categories:
         cmd += ["--categories", categories]
+    if target_pdb_ids:
+        cmd += ["--target-pdb-ids", target_pdb_ids]
 
     subprocess.run(cmd, check=True, env=env, cwd=str(REPO_ROOT))
 

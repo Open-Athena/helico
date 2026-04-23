@@ -264,6 +264,16 @@ class Predictor:
             pred_pdb_str = coords_to_pdb(
                 results["coords"][0], results["plddt"][0], tokenized,
             )
+            # For oracle-best-of-N diagnostics (see exp8): also return all
+            # N samples, not just the top-ranked. The scoring path still
+            # uses sample 0; downstream analysis can score each entry of
+            # all_pdb_strs to compute max-over-N DockQ.
+            all_coords = results["coords"].cpu().float().numpy()
+            all_plddts = results["plddt"].cpu().float().numpy()
+            all_pdb_strs = [
+                coords_to_pdb(results["coords"][i], results["plddt"][i], tokenized)
+                for i in range(results["coords"].shape[0])
+            ]
             torch.cuda.empty_cache()
 
             return {
@@ -274,6 +284,9 @@ class Predictor:
                 "plddt": plddt_np,
                 "pdb_str": pred_pdb_str,
                 "tokenized": tokenized,
+                "all_coords": all_coords,
+                "all_plddts": all_plddts,
+                "all_pdb_strs": all_pdb_strs,
             }
 
         except RuntimeError as e:
@@ -388,6 +401,7 @@ def run_bench(
     cutoff_date: str = "2024-01-01",
     max_targets: int = 0,
     checkpoint: str = "protenix-v1",
+    target_pdb_ids: str = "",  # comma-separated pdb_ids to restrict to; empty = all
 ):
     import logging
     import pickle
@@ -425,6 +439,16 @@ def run_bench(
     if categories:
         cat_list = [c.strip() for c in categories.split(",")]
         all_targets = {k: v for k, v in all_targets.items() if k in cat_list}
+
+    # Restrict to an explicit list of pdb_ids (for triage / oracle runs)
+    if target_pdb_ids:
+        wanted = {p.strip() for p in target_pdb_ids.split(",") if p.strip()}
+        all_targets = {
+            k: [t for t in ts if t.pdb_id in wanted]
+            for k, ts in all_targets.items()
+        }
+        logger.info(f"Restricted to {sum(len(v) for v in all_targets.values())} targets "
+                    f"from --target-pdb-ids")
 
     # Filter targets by release date
     if cutoff_date:
@@ -528,13 +552,19 @@ def run_bench(
             # Cache successful predictions
             if result.get("status") == "ok":
                 pred_cache_path = predictions_dir / f"{pdb_id}.pkl"
+                cache_payload = {
+                    "tokenized": result["tokenized"],
+                    "pred_coords": result["pred_coords"],
+                    "plddt": result["plddt"],
+                    "pdb_str": result["pdb_str"],
+                }
+                # Persist per-sample arrays if the predictor returned them
+                # (for oracle-best-of-N diagnostics; see exp8).
+                for k in ("all_coords", "all_plddts", "all_pdb_strs"):
+                    if k in result:
+                        cache_payload[k] = result[k]
                 with open(pred_cache_path, "wb") as f:
-                    pickle.dump({
-                        "tokenized": result["tokenized"],
-                        "pred_coords": result["pred_coords"],
-                        "plddt": result["plddt"],
-                        "pdb_str": result["pdb_str"],
-                    }, f)
+                    pickle.dump(cache_payload, f)
 
             prediction_results[pdb_id] = result
 

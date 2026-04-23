@@ -265,6 +265,153 @@ fig.savefig(PLOTS / "structures_ca_trace.png", dpi=150)
 plt.show()
 ```
 
+## Oracle best-of-N diagnostic
+
+If the ranker is what's broken, then oracle-best-DockQ (max over all 25
+samples) should be much higher than ranked-DockQ (the single sample
+we actually output). We rerun the 3 triage targets with the updated
+`Predictor.predict` that saves all 25 samples, then score each sample
+locally and take the max.
+
+```python
+# This run uses the same n=25 config as ab-ag-n25, but with per-sample
+# arrays persisted in the prediction pickles. Cheap because it only
+# touches 3 targets.
+oracle = ensure_bench_run(
+    "ab-ag-n25-oracle",
+    checkpoint="protenix-v1",
+    categories="interface_antibody_antigen",
+    target_pdb_ids=",".join(TARGETS),
+    workers=8,
+    gpu="H100",
+    n_samples=25,
+    n_cycles=10,
+    max_tokens=2048,
+    cutoff_date="2024-01-01",
+    est_wall_hours=0.2,
+)
+print(f"cached: {oracle.cached}")
+```
+
+```python
+# Score each of the 25 samples locally using helico.bench scoring
+# functions. Reproduces match_atoms + score_interface on each sample's
+# pdb_str + pred_coords.
+import pickle
+from helico.bench import match_atoms, score_interface, _find_gt_path
+from helico.data import parse_mmcif
+
+foldbench_dir = (
+    REPO_ROOT / ".." / ".." / ".cache" / "helico" / "data"
+    / "benchmarks" / "FoldBench"
+).resolve()
+if not foldbench_dir.exists():
+    from helico.bench import download_foldbench
+    foldbench_dir = download_foldbench()
+gt_dir = foldbench_dir / "examples" / "ground_truths"
+
+rows = []
+for pdb_id in TARGETS:
+    pred_pkl = oracle.cache_dir / "predictions" / f"{pdb_id}.pkl"
+    if not pred_pkl.exists():
+        print(f"[skip] {pdb_id}: no per-sample pickle")
+        continue
+    with open(pred_pkl, "rb") as f:
+        pred = pickle.load(f)
+    if "all_coords" not in pred:
+        print(f"[skip] {pdb_id}: old-format pickle (rerun with updated Predictor)")
+        continue
+
+    gt_path = _find_gt_path(gt_dir, pdb_id)
+    gt_structure = parse_mmcif(gt_path, max_resolution=float("inf"))
+    n_samples_local = len(pred["all_pdb_strs"])
+    print(f"{pdb_id}: scoring {n_samples_local} samples")
+    for i in range(n_samples_local):
+        coords_i = pred["all_coords"][i]
+        pdb_str_i = pred["all_pdb_strs"][i]
+        try:
+            matched = match_atoms(pred["tokenized"], coords_i, gt_structure)
+            scores = score_interface(pdb_str_i, gt_path, matched)
+            rows.append({
+                "pdb_id": pdb_id,
+                "sample_idx": i,
+                "lddt": scores.get("lddt"),
+                "dockq": scores.get("dockq"),
+                "irmsd": scores.get("irmsd"),
+                "lrmsd": scores.get("lrmsd"),
+                "fnat": scores.get("fnat"),
+            })
+        except Exception as e:
+            rows.append({"pdb_id": pdb_id, "sample_idx": i, "error": str(e)})
+
+per_sample = pd.DataFrame(rows)
+per_sample.to_csv(DATA / "per_sample_scores.csv", index=False)
+per_sample
+```
+
+```python
+# Oracle vs ranked: per-target max DockQ over all samples, compared to
+# the DockQ of the top-ranked sample (sample 0 by convention of
+# predict_target's ranker). Falls through harmlessly in dry-run when
+# per_sample is empty.
+oracle_rows = []
+has_per_sample = not per_sample.empty and "pdb_id" in per_sample.columns
+for pdb_id in TARGETS if has_per_sample else []:
+    target_df = per_sample[per_sample["pdb_id"] == pdb_id].dropna(subset=["dockq"])
+    if target_df.empty:
+        continue
+    ranked = target_df[target_df["sample_idx"] == 0]
+    oracle_dockq = target_df["dockq"].max()
+    oracle_idx = int(target_df.loc[target_df["dockq"].idxmax(), "sample_idx"])
+    oracle_rows.append({
+        "pdb_id": pdb_id,
+        "ranked_dockq": float(ranked.iloc[0]["dockq"]) if not ranked.empty else None,
+        "oracle_dockq": float(oracle_dockq),
+        "oracle_sample_idx": oracle_idx,
+        "n_samples_scored": len(target_df),
+        "lift": (float(oracle_dockq) - float(ranked.iloc[0]["dockq"]))
+                 if not ranked.empty else None,
+    })
+oracle_compare = pd.DataFrame(oracle_rows)
+if not oracle_compare.empty:
+    oracle_compare = oracle_compare.set_index("pdb_id")
+    oracle_compare.to_csv(DATA / "oracle_vs_ranked.csv")
+oracle_compare
+```
+
+```python
+# Per-sample DockQ bar: shows the distribution inside each target and
+# where the ranked sample (index 0) sits.
+fig, axes = plt.subplots(len(TARGETS), 1, figsize=(9, 2 * len(TARGETS)),
+                         sharex=True)
+if len(TARGETS) == 1:
+    axes = [axes]
+for ax, pdb_id in zip(axes, TARGETS):
+    if not has_per_sample:
+        ax.text(0.5, 0.5, f"{pdb_id}: no per-sample data",
+                transform=ax.transAxes, ha="center")
+        continue
+    target_df = per_sample[per_sample["pdb_id"] == pdb_id].copy()
+    target_df = target_df.dropna(subset=["dockq"]).sort_values("sample_idx")
+    if target_df.empty:
+        ax.text(0.5, 0.5, f"{pdb_id}: no scored samples",
+                transform=ax.transAxes, ha="center")
+        continue
+    colors = ["#c44e52" if i == 0 else "#4c72b0"
+              for i in target_df["sample_idx"]]
+    ax.bar(target_df["sample_idx"], target_df["dockq"], color=colors)
+    ax.axhline(0.23, color="k", alpha=0.3, linestyle="--",
+               label="success threshold")
+    ax.set_title(f"{pdb_id}  —  ranked=red, other=blue", fontsize=9)
+    ax.set_ylabel("DockQ")
+    ax.set_ylim(0, max(1.0, target_df["dockq"].max() * 1.1))
+axes[-1].set_xlabel("sample index")
+axes[0].legend(loc="upper right", fontsize=8)
+fig.tight_layout()
+fig.savefig(PLOTS / "per_sample_dockq.png", dpi=150)
+plt.show()
+```
+
 ## Distogram outputs — TODO
 
 Saving distograms requires a small change to `Predictor.predict` in
