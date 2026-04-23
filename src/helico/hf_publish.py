@@ -103,13 +103,12 @@ def _render_model_card(
 
 
 def _run_hf_buckets_sync(src_dir: Path, dest: str) -> None:
-    """Shell out to `hf buckets sync`. Creates the bucket if missing."""
-    # Split bucket/namespace from path-within-bucket if `dest` has subpath.
-    bucket_id, _, _ = dest.partition("/")
-    # First three slashes: namespace/bucket/path... Buckets IDs are `{user}/{bucket}`.
-    # The dest arg to `hf buckets sync` is the bucket URI including subpath.
+    """Shell out to `hf buckets sync`. `dest` is a bucket URI suffix
+    (`<user>/<bucket>/<path>`); we prepend the `hf://buckets/` scheme
+    the CLI expects."""
+    uri = f"hf://buckets/{dest}"
     subprocess.run(
-        ["hf", "buckets", "sync", str(src_dir), dest],
+        ["hf", "buckets", "sync", str(src_dir), uri],
         check=True,
     )
 
@@ -122,6 +121,7 @@ def publish_bench_run(
     issue: Optional[int] = None,
     wandb_url: Optional[str] = None,
     include_plots: bool = True,
+    include_predictions: bool = False,
     dry_run: bool = False,
 ) -> str:
     """Upload a local bench run's artifacts to a HuggingFace Bucket.
@@ -156,8 +156,11 @@ def publish_bench_run(
     with tempfile.TemporaryDirectory() as stage:
         stage_dir = Path(stage)
 
-        # Copy bench artifacts
+        # Copy bench artifacts. predictions/ is ~0.5 MB × 679 targets ≈ 300 MB
+        # per run, and only useful for re-scoring; default to skipping.
         for item in cache_dir.iterdir():
+            if item.name == "predictions" and not include_predictions:
+                continue
             dst = stage_dir / item.name
             if item.is_dir():
                 shutil.copytree(item, dst)
@@ -315,7 +318,7 @@ def publish_training_run(
                     print(f"  {p.relative_to(stage_dir)} ({p.stat().st_size} bytes)")
             return dest
 
-        print(f"Syncing {stage_dir} -> {dest}")
+        print(f"Syncing {stage_dir} -> hf://buckets/{dest}")
         _run_hf_buckets_sync(stage_dir, dest)
 
     return f"https://huggingface.co/buckets/{bucket}/{experiment}-{name}"
@@ -361,6 +364,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                           help="Optional WandB run URL to embed in the card")
     bench_ap.add_argument("--no-plots", dest="include_plots", action="store_false",
                           help="Skip uploading experiment plots/ dir")
+    bench_ap.add_argument("--include-predictions", action="store_true",
+                          help="Include per-target prediction pickles (~300 MB). Off by default.")
     bench_ap.add_argument("--dry-run", action="store_true",
                           help="Stage files locally but don't upload")
 
@@ -384,6 +389,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             issue=args.issue,
             wandb_url=args.wandb_url,
             include_plots=args.include_plots,
+            include_predictions=args.include_predictions,
             dry_run=args.dry_run,
         )
         print(f"Published: {url}")
