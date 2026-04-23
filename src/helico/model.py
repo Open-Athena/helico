@@ -1440,9 +1440,13 @@ class _TemplatePairformerBlock(nn.Module):
 class TemplateEmbedder(nn.Module):
     """Template embedding: projection -> pair-only PairformerBlocks at d_template -> projection.
 
-    Currently returns 0 (matches Protenix — no template features in checkpoint config),
-    but parameters exist for weight transfer. Uses non-cuEq blocks because the Protenix
-    template architecture has hidden_dim=2*d_template (cuEq kernels require hidden=d).
+    Matches Protenix v1.0.9 Algorithm 16. Protenix v1.0.0's checkpoint has
+    n_blocks=2 and the embedder is *always* invoked with dummy template
+    features when use_template=False — it still contributes a
+    pairformer-transformed version of the trunk pair tensor each cycle.
+    Helico previously stubbed this to 0, which caused z to diverge from
+    Protenix by rel_L2 ~0.76 after recycling (confirmed by pipeline diff
+    on 8t59).
     """
 
     def __init__(self, config: HelicoConfig):
@@ -1469,8 +1473,71 @@ class TemplateEmbedder(nn.Module):
         self.linear_out = linear_no_bias(c.d_template, c.d_pair)  # 64->128
 
     def forward(self, batch: dict[str, torch.Tensor], z: torch.Tensor) -> torch.Tensor:
-        """Returns 0 — templates disabled (matching Protenix checkpoint config)."""
-        return 0
+        """Algorithm 16. Produces a residual to add to the trunk pair tensor.
+
+        Uses dummy (all-zero) template features when real template features
+        are absent in the batch — matching Protenix's inference behavior with
+        use_template=False.
+        """
+        if not self.pairformer_stack:
+            return 0
+
+        B, N_tok = z.shape[:2]
+        dtype = z.dtype
+        device = z.device
+        # Protenix's InferenceTemplateFeaturizer pads to max_templates=4
+        # even when use_template=False: slot 0 gets aatype=31 (gap), slots
+        # 1..3 are zero-padded (aatype=0). All other template features
+        # (distogram, unit_vector, masks, atom_positions) are zeros.
+        # Verified empirically from Protenix's 00_batch dump on 8t59/8v52.
+        num_templ = 4
+        aatype_per_slot = [31, 0, 0, 0]
+
+        asym_id = batch.get("chain_indices")
+        if asym_id is not None:
+            multichain_mask = (asym_id.unsqueeze(-1) == asym_id.unsqueeze(-2)).to(dtype)
+        else:
+            multichain_mask = torch.ones(B, N_tok, N_tok, dtype=dtype, device=device)
+
+        token_mask = batch.get("token_mask")
+        if token_mask is not None:
+            pair_mask = (token_mask.unsqueeze(-1) * token_mask.unsqueeze(-2)).to(dtype)
+        else:
+            pair_mask = torch.ones(B, N_tok, N_tok, dtype=dtype, device=device)
+
+        z_normed = self.z_norm(z)
+
+        # Template features that are masked-zeroed (multichain_mask * pair_mask)
+        # end up zero regardless of contents, so we just use zeros directly.
+        dgram = torch.zeros(B, N_tok, N_tok, 39, dtype=dtype, device=device)
+        pseudo_beta_mask_2d = torch.zeros(B, N_tok, N_tok, dtype=dtype, device=device)
+        unit_vector = torch.zeros(B, N_tok, N_tok, 3, dtype=dtype, device=device)
+        backbone_mask_2d = torch.zeros(B, N_tok, N_tok, dtype=dtype, device=device)
+
+        u_sum = None
+        for aa_val in aatype_per_slot:
+            aatype_long = torch.full((B, N_tok), aa_val, dtype=torch.long, device=device)
+            aatype_oh = F.one_hot(aatype_long, 32).to(dtype)  # (B, N_tok, 32)
+            # Protenix: aatype_j = expand_at_dim(aatype, dim=-3); aatype_i = expand_at_dim(aatype, dim=-2)
+            aatype_j = aatype_oh.unsqueeze(-3).expand(B, N_tok, N_tok, 32)
+            aatype_i = aatype_oh.unsqueeze(-2).expand(B, N_tok, N_tok, 32)
+            at = torch.cat([
+                dgram,
+                pseudo_beta_mask_2d.unsqueeze(-1),
+                aatype_j,
+                aatype_i,
+                unit_vector,
+                backbone_mask_2d.unsqueeze(-1),
+            ], dim=-1)  # (B, N, N, 108)
+            v = self.linear_z(z_normed) + self.linear_a(at)
+            for block in self.pairformer_stack:
+                _, v = block(None, v, mask=token_mask, pair_mask=pair_mask)
+            v = self.out_norm(v)
+            u_sum = v if u_sum is None else (u_sum + v)
+
+        u = u_sum / (1e-7 + num_templ)
+        u = self.linear_out(F.relu(u))
+        return u
 
 
 # ============================================================================
@@ -2393,6 +2460,7 @@ def _maybe_build_dumper(dump_dir: str | None):
                         arrs[f"{k}.{sk}"] = sv.detach().to(dtype=torch.float32, device="cpu").numpy()
         np.savez_compressed(out / f"{stage}.npz", **arrs)
 
+    _dump.dump_dir = out  # type: ignore[attr-defined]
     return _dump
 
 
@@ -2763,7 +2831,7 @@ class Helico(nn.Module):
 
         for cycle in range(n_cycles):
             z = z_init + self.linear_z_cycle(self.layernorm_z_cycle(z))
-            z = z + self.template_embedder(batch, z)  # returns 0 for now
+            z = z + self.template_embedder(batch, z)
             z = self.msa_module(
                 msa_raw, z, s_inputs, msa_mask, pair_mask,
                 msa_chunk_size=(None if self.training else 2048),
@@ -2929,16 +2997,39 @@ class Helico(nn.Module):
         actual_cycles = n_cycles if n_cycles is not None else self.config.n_cycles
         t_recycle_start = _sync_time()
         cycle_times = []
+        cycle_trace: list[dict] = []
+
+        def _tstats(t: torch.Tensor) -> dict:
+            return {
+                "shape": tuple(t.shape),
+                "mean": float(t.float().mean().item()),
+                "std": float(t.float().std().item()),
+                "min": float(t.float().min().item()),
+                "max": float(t.float().max().item()),
+            }
+
         for cycle in range(actual_cycles):
             t_c0 = _sync_time()
+            rec: dict = {}
             z = z_init + self.linear_z_cycle(self.layernorm_z_cycle(z))
+            if _dump is not None:
+                rec["msa_in"] = _tstats(z)
             z = z + self.template_embedder(batch, z)
             z = self.msa_module(
                 msa_raw, z, s_inputs, msa_mask, pair_mask,
                 msa_chunk_size=(None if self.training else 2048),
             )
+            if _dump is not None:
+                rec["msa_out"] = _tstats(z)
+                rec["pf_z_in"] = _tstats(z)
             s = s_init + self.linear_s(self.layernorm_s(s))
+            if _dump is not None:
+                rec["pf_s_in"] = _tstats(s)
             s, z = self.pairformer(s, z, mask=mask, pair_mask=pair_mask)
+            if _dump is not None:
+                rec["pf_s_out"] = _tstats(s)
+                rec["pf_z_out"] = _tstats(z)
+                cycle_trace.append(rec)
             cycle_times.append(_sync_time() - t_c0)
         t_recycle = _sync_time() - t_recycle_start
 
@@ -2946,6 +3037,10 @@ class Helico(nn.Module):
             # Dump final s/z only — intermediate cycles are ~64MB each;
             # final state is the signal the diffusion sees.
             _dump("02_post_recycle", {"s": s, "z": z})
+            import json as _json_mod
+            (_dump.dump_dir / "cycle_trace.json").write_text(
+                _json_mod.dumps(cycle_trace, indent=2)
+            )
 
         # Generate all samples in one batched call: expand (B, ...) → (B*n_samples, ...)
         def _expand(t):
