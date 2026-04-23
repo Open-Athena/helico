@@ -18,10 +18,64 @@ the site. README.md itself is never modified.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+
+# Cells that dispatch to Modal capture thousands of small stream outputs
+# from its Rich progress bars (each refresh writes a new event). Per-
+# output those are small (~10-20 KB) but in aggregate they dominate the
+# rendered HTML. We work per-cell: if a cell's stream outputs sum above
+# this threshold, collapse all of them into a single placeholder.
+STREAM_CELL_STRIP_BYTES = 200_000
+
+
+def _stream_text(out: dict) -> str:
+    t = out.get("text")
+    if isinstance(t, list):
+        return "".join(t)
+    return t or ""
+
+
+def _strip_large_stream_outputs(ipynb_path: Path) -> int:
+    """Edit the executed ipynb in place: cells whose stream outputs sum
+    above the threshold have those streams collapsed into a placeholder.
+    Non-stream outputs (plots, display_data, execute_result) pass through.
+    Returns total bytes saved.
+    """
+    with open(ipynb_path) as f:
+        nb = json.load(f)
+    saved = 0
+    for cell in nb.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        outputs = cell.get("outputs") or []
+        stream_size = sum(
+            len(_stream_text(o))
+            for o in outputs
+            if o.get("output_type") == "stream"
+        )
+        if stream_size <= STREAM_CELL_STRIP_BYTES:
+            continue
+        saved += stream_size
+        placeholder = {
+            "output_type": "stream",
+            "name": "stdout",
+            "text": [
+                f"[{stream_size:,} bytes of stream output stripped by "
+                f"run_experiment.py — mostly Modal progress bars. "
+                f"Re-run locally to see live logs.]\n"
+            ],
+        }
+        non_stream = [o for o in outputs if o.get("output_type") != "stream"]
+        cell["outputs"] = [placeholder] + non_stream
+    if saved:
+        with open(ipynb_path, "w") as f:
+            json.dump(nb, f)
+    return saved
 
 
 def _find_notebook(target: Path) -> Path:
@@ -95,6 +149,13 @@ def main(argv: list[str] | None = None) -> int:
         env=env,
         cwd=exp_dir,
     )
+
+    # Strip oversize stream outputs (Modal progress-bar spam) before HTML
+    # so the rendered artifact is small enough to host + download.
+    saved = _strip_large_stream_outputs(notebook_executed)
+    if saved:
+        print(f"[run_experiment] stripped {saved:,} bytes of stream output "
+              f"from {notebook_executed.name}")
 
     if args.no_html or os.environ.get("HELICO_DRY_RUN"):
         print(f"[run_experiment] executed {notebook_md.name}; HTML skipped.")
