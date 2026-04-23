@@ -304,6 +304,7 @@ def ensure_bench_run(
     workers: int = 8,
     gpu: str = "H100",
     n_samples: int = 5,
+    n_seeds: int = 1,
     max_tokens: int = 2048,
     n_cycles: int = 10,
     cutoff_date: str = "2024-01-01",
@@ -381,6 +382,7 @@ def ensure_bench_run(
     cmd = [
         "modal", "run", "modal/bench.py",
         "--n-samples", str(n_samples),
+        "--n-seeds", str(n_seeds),
         "--max-tokens", str(max_tokens),
         "--n-cycles", str(n_cycles),
         "--cutoff-date", cutoff_date,

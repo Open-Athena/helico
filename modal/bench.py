@@ -103,7 +103,7 @@ ckpt_volume = modal.Volume.from_name("helico-checkpoints", create_if_missing=Tru
 CKPT_MOUNT = "/ckpts"
 
 
-@app.cls(image=predictor_image, gpu=GPU_TYPE, timeout=600,
+@app.cls(image=predictor_image, gpu=GPU_TYPE, timeout=1800,
          max_containers=N_WORKERS,
          volumes={DATA_CACHE: data_volume, CKPT_MOUNT: ckpt_volume})
 class Predictor:
@@ -216,6 +216,7 @@ class Predictor:
         pdb_id: str,
         category: str,
         n_samples: int = 5,
+        n_seeds: int = 1,
         max_tokens: int = 2048,
         n_cycles: int = 10,
     ) -> dict | None:
@@ -244,41 +245,59 @@ class Predictor:
             assert gt_structure is not None, f"Failed to parse ground truth: {gt_path}"
             chains = structure_to_chains(gt_structure)
 
-            pred_result = predict_target(
-                self.model,
-                chains,
-                self.ccd,
-                target_name=pdb_id,
-                n_samples=n_samples,
-                max_tokens=max_tokens,
-                msa_dir=msa_dir,
-                n_cycles=n_cycles,
-            )
+            # Multi-seed sampling: published FoldBench protocol uses 5 seeds x
+            # 5 samples = 25 predictions/target. One call per seed, seeds
+            # start at 42 for reproducibility. Recycling re-runs per seed
+            # (wasteful but simpler than refactoring Helico.predict to share
+            # trunk state across seeds); acceptable for diagnostic and small
+            # per-seed sample counts.
+            import numpy as np
+            seeds = list(range(42, 42 + n_seeds)) if n_seeds > 0 else [42]
+            per_seed_results = []  # list of (ranking_score, tokenized, results)
 
-            if pred_result is None:
-                return {"pdb_id": pdb_id, "category": category, "status": "too_large"}
+            for seed in seeds:
+                torch.manual_seed(seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(seed)
+                pred_result = predict_target(
+                    self.model,
+                    chains,
+                    self.ccd,
+                    target_name=pdb_id,
+                    n_samples=n_samples,
+                    max_tokens=max_tokens,
+                    msa_dir=msa_dir,
+                    n_cycles=n_cycles,
+                )
+                if pred_result is None:
+                    return {"pdb_id": pdb_id, "category": category, "status": "too_large"}
+                tok_i, res_i = pred_result
+                rs_i = float(res_i["ranking_score"][0].item())
+                per_seed_results.append((rs_i, tok_i, res_i))
 
-            tokenized, results = pred_result
+            # Pick the best overall sample by ranking_score across seeds.
+            best_rs, tokenized, results = max(per_seed_results, key=lambda t: t[0])
             pred_coords_np = results["coords"][0].cpu().float().numpy()
             plddt_np = results["plddt"][0].cpu().float().numpy()
             pred_pdb_str = coords_to_pdb(
                 results["coords"][0], results["plddt"][0], tokenized,
             )
-            # For oracle-best-of-N diagnostics (see exp8): also surface
-            # all N diffusion samples, not just the ranker's top pick.
-            # The model already returns them as `all_coords`; per-sample
-            # pLDDTs aren't exposed separately (only the best sample's
-            # pLDDT is flattened and returned), so for per-sample PDB
-            # rendering we reuse the best-sample pLDDT in the B-factor
-            # column — fine for structural review; not per-sample
-            # confidence.
-            all_coords_np = results["all_coords"][0].cpu().float().numpy()
-            all_pdb_strs = [
-                coords_to_pdb(
-                    results["all_coords"][0, i], results["plddt"][0], tokenized,
-                )
-                for i in range(all_coords_np.shape[0])
+
+            # All samples across all seeds: concat along sample dimension.
+            # Per-sample pLDDT isn't exposed by Helico.predict (only the
+            # best sample's); for PDB B-factors on non-top samples we reuse
+            # that seed's best-sample pLDDT.
+            all_coords_list = [
+                r[2]["all_coords"][0].cpu().float().numpy() for r in per_seed_results
             ]
+            all_coords_np = np.concatenate(all_coords_list, axis=0)  # (n_seeds*n_samples, N_atoms, 3)
+            all_pdb_strs = []
+            for _, tok_i, res_i in per_seed_results:
+                for si in range(res_i["all_coords"].shape[1]):
+                    all_pdb_strs.append(
+                        coords_to_pdb(res_i["all_coords"][0, si],
+                                      res_i["plddt"][0], tok_i)
+                    )
             torch.cuda.empty_cache()
 
             return {
@@ -291,6 +310,9 @@ class Predictor:
                 "tokenized": tokenized,
                 "all_coords": all_coords_np,
                 "all_pdb_strs": all_pdb_strs,
+                "ranking_score": best_rs,
+                "seeds": seeds,
+                "n_samples_per_seed": n_samples,
             }
 
         except RuntimeError as e:
@@ -397,6 +419,7 @@ class Scorer:
 @app.local_entrypoint()
 def run_bench(
     n_samples: int = 5,
+    n_seeds: int = 1,
     categories: str = "",
     output_dir: str = "bench_results",
     resume: bool = False,
@@ -543,6 +566,7 @@ def run_bench(
             [pdb_id for pdb_id, _ in to_predict],
             [category for _, category in to_predict],
             [n_samples] * len(to_predict),
+            [n_seeds] * len(to_predict),
             [max_tokens] * len(to_predict),
             [n_cycles] * len(to_predict),
         )
