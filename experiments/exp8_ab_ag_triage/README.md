@@ -439,8 +439,68 @@ Blocked on #7 (upstream Protenix runner on Modal). Once landed:
 
 ## Conclusion
 
-**Hypothesis 1 (sampling) is refuted.** n=25 does not close the gap to
-upstream Protenix; on average it makes things worse.
+**Hypothesis 1 (sampling) is refuted** — but the diagnostic fired twice and
+the second round is much more informative than the first.
+
+### Round 2: oracle analysis
+
+Scoring all 25 samples for 2 of 3 triage targets (8v52 OOM'd again):
+
+| target | ranked DockQ | oracle DockQ | lift | # samples ≥ 0.23 |
+|---|---|---|---|---|
+| **8t59** | 0.125 | **0.571** | **+0.446** | **11 / 25 (44%)** |
+| 8q3j | 0.080 | 0.161 | +0.081 | 0 / 25 (0%) |
+
+**8t59 is the smoking gun.** 44% of the 25 samples cross the DockQ success
+threshold and the oracle sample is 0.571 — but the ranker picks a DockQ
+0.125 sample. The model clearly *can* predict the correct interface on
+this target; the ranking head is selecting badly out of a pool full of
+good answers. Roughly half the time, a random pick from the sample pool
+would be a success; the ranker does substantially worse than random.
+
+**8q3j is different.** Even the best of 25 samples (DockQ 0.161) is
+below the success threshold. More sampling won't help this target
+because the model simply isn't finding good binding poses for it.
+This is the featurization/epitope-recognition mode — different from
+the 8t59 pattern.
+
+### Two distinct problems identified
+
+1. **Ranking bug** (demonstrated on 8t59): the confidence-head scoring
+   used by `predict_target` to select the best sample from n candidates
+   is poorly correlated with DockQ for antibody-antigen. Same model
+   weights, same predictions — picking them better would move 8t59
+   alone from failure to 0.57 DockQ.
+
+2. **Featurization / epitope issue** (pattern in 8q3j): for some
+   targets, none of the 25 samples are close to correct. This isn't a
+   ranking problem; the model isn't even generating candidates with
+   the right binding mode. Likely suspects: CDR-loop MSA handling,
+   chain-pair features at the epitope, or the pair-rep itself not
+   encoding the antibody-antigen interaction.
+
+The overall 7× gap vs upstream Protenix is probably a blend of these
+two — some targets are ranker-limited (fixable cheaply), others are
+generation-limited (needs real model work).
+
+### Immediate followups
+
+- **Rerank-by-pLDDT analysis** (cheapest to do next): the model
+  computes per-sample pLDDT but currently only returns the best
+  sample's. Expose `all_plddts` from `Helico.predict`, then on the
+  existing 25-sample cache compute mean-pLDDT per sample and check
+  whether that ranker picks better than the current confidence_head
+  ranker. If yes, the fix is a one-line change in the ranker; if no,
+  the issue is in the confidence head itself.
+- **Upstream Protenix on these 3 targets** (#7): does upstream also
+  get 8q3j wrong, or does their MSA / featurization produce
+  correctly-generated samples where ours don't? This is the cleanest
+  way to attribute the 8q3j-style cases.
+- **Distogram output on 8q3j specifically** (still TODO): check
+  whether the pair representation puts the antibody near the correct
+  epitope. If yes → issue is in diffusion; if no → featurization.
+
+### Round 1 context (sampling refutation, for the record)
 
 Category-wide across 74 targets (48 with valid comparisons after
 dedup; 31 after dropping NaN DockQ):
@@ -461,39 +521,10 @@ Triage targets:
 | 8q3j-assembly1 | 0.069 | 0.106 | +0.038 |
 | 8v52-assembly1 | 0.020 | OOM | — |
 
-**The diagnostic insight** is that n=25 hurt the two targets that were
-actually succeeding at n=5 (8t59 and 9jbq both dropped out of the
-DockQ ≥ 0.23 success band). The most parsimonious explanation isn't
-that more sampling is worse in itself — it's that the **ranking
-signal is picking the wrong sample** among a larger pool. With 5
-samples, there's less for the ranker to get wrong; with 25, the ranker
-pulls in samples it prefers that are structurally worse.
-
-So the antibody-antigen underperformance is probably **not** primarily
-a sampling problem. It's at least two things:
-1. **Bad ranking** — ensemble confidence / ranking head picks poor
-   samples disproportionately on this category
-2. **Something featurization / epitope-specific** — still untested,
-   pending distogram analysis
-
-Followups (none done in exp8):
-
-- **Oracle-best-of-N analysis**: modify `predict_target` to return
-  per-sample coords and scores (not just the top-ranked). Compute
-  oracle DockQ (best DockQ across all N samples). If oracle-n=25 ≫ ranked-n=25,
-  the ranker is broken independently of sampling. Worth doing before
-  anything else.
-- **Distogram outputs** (see TODO cell above) — expose the distogram
-  head from `Predictor.predict` and check whether Helico's pair rep
-  places the antibody at the right epitope. A "right distogram, wrong
-  structure" pattern would point to the diffusion head / SDE step
-  (same territory as ranking); a "wrong distogram" would point to
-  featurization / MSA handling.
-- **Upstream Protenix on these three targets** (#7) — still the
-  cleanest way to separate "reimplementation gap" from "method
-  ceiling". Now more interesting: if upstream Protenix at n=25 beats
-  Helico at n=25 substantially on the same targets, the gap is in our
-  reimplementation, not the methodology.
+The diagnostic insight was that n=25 hurt two targets that succeeded at
+n=5 (8t59 and 9jbq both dropped out of the success band). This is the
+opposite of what a sampling-limited model would do. The round-2 oracle
+analysis confirms: the ranker systematically prefers poor samples.
 
 The rendered Cα traces (saved) aren't actually informative at this
 scale — the chains look similar; what's different is the relative

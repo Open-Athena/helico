@@ -264,15 +264,20 @@ class Predictor:
             pred_pdb_str = coords_to_pdb(
                 results["coords"][0], results["plddt"][0], tokenized,
             )
-            # For oracle-best-of-N diagnostics (see exp8): also return all
-            # N samples, not just the top-ranked. The scoring path still
-            # uses sample 0; downstream analysis can score each entry of
-            # all_pdb_strs to compute max-over-N DockQ.
-            all_coords = results["coords"].cpu().float().numpy()
-            all_plddts = results["plddt"].cpu().float().numpy()
+            # For oracle-best-of-N diagnostics (see exp8): also surface
+            # all N diffusion samples, not just the ranker's top pick.
+            # The model already returns them as `all_coords`; per-sample
+            # pLDDTs aren't exposed separately (only the best sample's
+            # pLDDT is flattened and returned), so for per-sample PDB
+            # rendering we reuse the best-sample pLDDT in the B-factor
+            # column — fine for structural review; not per-sample
+            # confidence.
+            all_coords_np = results["all_coords"][0].cpu().float().numpy()
             all_pdb_strs = [
-                coords_to_pdb(results["coords"][i], results["plddt"][i], tokenized)
-                for i in range(results["coords"].shape[0])
+                coords_to_pdb(
+                    results["all_coords"][0, i], results["plddt"][0], tokenized,
+                )
+                for i in range(all_coords_np.shape[0])
             ]
             torch.cuda.empty_cache()
 
@@ -284,8 +289,7 @@ class Predictor:
                 "plddt": plddt_np,
                 "pdb_str": pred_pdb_str,
                 "tokenized": tokenized,
-                "all_coords": all_coords,
-                "all_plddts": all_plddts,
+                "all_coords": all_coords_np,
                 "all_pdb_strs": all_pdb_strs,
             }
 
@@ -560,7 +564,7 @@ def run_bench(
                 }
                 # Persist per-sample arrays if the predictor returned them
                 # (for oracle-best-of-N diagnostics; see exp8).
-                for k in ("all_coords", "all_plddts", "all_pdb_strs"):
+                for k in ("all_coords", "all_pdb_strs"):
                     if k in result:
                         cache_payload[k] = result[k]
                 with open(pred_cache_path, "wb") as f:
