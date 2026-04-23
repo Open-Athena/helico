@@ -66,19 +66,25 @@ Expected wall clock ~45 min; estimated cost ~$24.
 
 ```python
 bench = ensure_bench_run(
-    "protenix-v1-default",
+    "protenix-v1-5seeds",
     checkpoint="protenix-v1",
     workers=8,
     gpu="H100",
-    n_samples=5,
+    n_samples=5,           # samples per seed
+    n_seeds=5,             # total predictions = 25, matches published FoldBench protocol
     n_cycles=10,
     max_tokens=2048,
     cutoff_date="2024-01-01",
-    est_wall_hours=0.75,
+    est_wall_hours=4.0,    # 5× recycling per target ⇒ ~5× 0.75h
 )
 git_sha = bench.meta.get("git_sha") or "?"
 print(f"cached: {bench.cached}  |  git_sha: {git_sha[:8]}")
 ```
+
+This is the new baseline. The previous single-seed run
+(`protenix-v1-default`) is kept under the old `data/summary.csv` for
+reference; the n=5×5 numbers become the post-exp8-round-3 canonical
+comparison point.
 
 ## Summary table
 
