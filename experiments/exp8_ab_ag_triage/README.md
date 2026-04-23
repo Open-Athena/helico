@@ -292,4 +292,63 @@ Blocked on #7 (upstream Protenix runner on Modal). Once landed:
 
 ## Conclusion
 
-(Filled in once the n=25 bench finishes and the TODOs land.)
+**Hypothesis 1 (sampling) is refuted.** n=25 does not close the gap to
+upstream Protenix; on average it makes things worse.
+
+Category-wide across 74 targets (48 with valid comparisons after
+dedup; 31 after dropping NaN DockQ):
+
+| | n=5 (exp4) | n=25 (this exp) | Δ |
+|---|---|---|---|
+| mean LDDT | 0.662 | 0.648 | **-0.014** |
+| mean DockQ | 0.058 | 0.053 | **-0.006** |
+| success rate (DockQ ≥ 0.23) | 7.3% | 4.9% | **-2.4 pp** |
+| OOM count | 0 | **7** | larger memory footprint at 25 samples |
+| regressed / improved / unchanged | — | 13 / 9 / 9 | 59% of changed targets got worse |
+
+Triage targets:
+
+| target | n=5 DockQ | n=25 DockQ | Δ |
+|---|---|---|---|
+| 8t59-assembly1 | 0.495 | 0.108 | **-0.387** (catastrophic) |
+| 8q3j-assembly1 | 0.069 | 0.106 | +0.038 |
+| 8v52-assembly1 | 0.020 | OOM | — |
+
+**The diagnostic insight** is that n=25 hurt the two targets that were
+actually succeeding at n=5 (8t59 and 9jbq both dropped out of the
+DockQ ≥ 0.23 success band). The most parsimonious explanation isn't
+that more sampling is worse in itself — it's that the **ranking
+signal is picking the wrong sample** among a larger pool. With 5
+samples, there's less for the ranker to get wrong; with 25, the ranker
+pulls in samples it prefers that are structurally worse.
+
+So the antibody-antigen underperformance is probably **not** primarily
+a sampling problem. It's at least two things:
+1. **Bad ranking** — ensemble confidence / ranking head picks poor
+   samples disproportionately on this category
+2. **Something featurization / epitope-specific** — still untested,
+   pending distogram analysis
+
+Followups (none done in exp8):
+
+- **Oracle-best-of-N analysis**: modify `predict_target` to return
+  per-sample coords and scores (not just the top-ranked). Compute
+  oracle DockQ (best DockQ across all N samples). If oracle-n=25 ≫ ranked-n=25,
+  the ranker is broken independently of sampling. Worth doing before
+  anything else.
+- **Distogram outputs** (see TODO cell above) — expose the distogram
+  head from `Predictor.predict` and check whether Helico's pair rep
+  places the antibody at the right epitope. A "right distogram, wrong
+  structure" pattern would point to the diffusion head / SDE step
+  (same territory as ranking); a "wrong distogram" would point to
+  featurization / MSA handling.
+- **Upstream Protenix on these three targets** (#7) — still the
+  cleanest way to separate "reimplementation gap" from "method
+  ceiling". Now more interesting: if upstream Protenix at n=25 beats
+  Helico at n=25 substantially on the same targets, the gap is in our
+  reimplementation, not the methodology.
+
+The rendered Cα traces (saved) aren't actually informative at this
+scale — the chains look similar; what's different is the relative
+docking pose between antibody and antigen, which isn't visible without
+proper structural overlay. PyMOL / ChimeraX for that.
