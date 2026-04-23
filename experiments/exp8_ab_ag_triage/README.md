@@ -415,6 +415,101 @@ fig.savefig(PLOTS / "per_sample_dockq.png", dpi=150)
 plt.show()
 ```
 
+## Upstream Protenix A/B (round 4)
+
+Direct comparison: upstream Protenix v1.0.9 loading the **same Protenix
+v1.0.0 checkpoint** Helico uses, running on the same 3 targets with the
+same 5 seeds × 5 samples protocol. See `modal/bench_upstream.py` and
+`scripts/pm/score_upstream.py` for the runner.
+
+```python
+import pandas as pd
+ups_path = DATA / "upstream" / "upstream_per_sample_scores.csv"
+if ups_path.exists():
+    ups = pd.read_csv(ups_path)
+    hel = per_sample.copy() if 'per_sample' in dir() and not per_sample.empty else None
+
+    rows = []
+    for pid in TARGETS:
+        u = ups[(ups["pdb_id"] == pid) & ups["dockq"].notna()]
+        if hel is not None:
+            h = hel[(hel["pdb_id"] == pid) & hel["dockq"].notna()]
+            hmean = float(h["dockq"].mean()) if len(h) else None
+            hmax = float(h["dockq"].max()) if len(h) else None
+            h_succ = int((h["dockq"] >= 0.23).sum())
+        else:
+            hmean = hmax = h_succ = None
+        umean = float(u["dockq"].mean()) if len(u) else None
+        umax = float(u["dockq"].max()) if len(u) else None
+        u_succ = int((u["dockq"] >= 0.23).sum())
+        rows.append({
+            "target": pid,
+            "helico_mean_dockq": hmean,
+            "helico_oracle_dockq": hmax,
+            "helico_successes": h_succ,
+            "upstream_mean_dockq": umean,
+            "upstream_oracle_dockq": umax,
+            "upstream_successes": u_succ,
+        })
+    upstream_compare = pd.DataFrame(rows).set_index("target")
+    upstream_compare.to_csv(DATA / "helico_vs_upstream_summary.csv")
+    upstream_compare
+```
+
+```python
+# Paired-bar chart: Helico vs upstream oracle DockQ
+if ups_path.exists():
+    fig, ax = plt.subplots(figsize=(8, 4))
+    pids = [r["target"] for r in rows]
+    y = np.arange(len(pids))
+    ax.barh(y - 0.18, [r["helico_oracle_dockq"] for r in rows],
+            height=0.36, color="#4c72b0", label="Helico (our reimpl)")
+    ax.barh(y + 0.18, [r["upstream_oracle_dockq"] for r in rows],
+            height=0.36, color="#dd8452", label="Upstream Protenix (1.0.9)")
+    ax.set_yticks(y)
+    ax.set_yticklabels([p.split("-")[0] for p in pids])
+    ax.axvline(0.23, color="k", alpha=0.3, linestyle="--", linewidth=1,
+               label="DockQ success threshold")
+    ax.set_xlabel("oracle DockQ across 5 seeds × 5 samples")
+    ax.set_xlim(0, 1)
+    ax.set_title("Same weights, same protocol — featurization/pipeline gap")
+    ax.legend(loc="lower right")
+    ax.invert_yaxis()
+    fig.tight_layout()
+    fig.savefig(PLOTS / "helico_vs_upstream.png", dpi=150)
+    plt.show()
+```
+
+### The Conclusion, revised (round 4)
+
+| target | Helico mean | Helico oracle | Upstream mean | Upstream oracle | Upstream success |
+|---|---|---|---|---|---|
+| 8t59 | 0.407 | 0.546 | **0.824** | **0.907** | 25/25 |
+| 8q3j | 0.071 | 0.098 | 0.303 | 0.329 | 25/25 |
+| 8v52 | 0.025 | 0.033 | 0.610 | 0.835 | 25/25 |
+
+**Upstream Protenix gets 100% success on all three targets, including
+the ones Helico completely fails.** Same weights, same 5-seed × 5-sample
+protocol. On 8v52 the gap is 25× in oracle DockQ.
+
+This cleanly refutes both earlier hypotheses (sampling count, ranker
+broken-ness) and points squarely at **Helico's featurization /
+inference pipeline**. Candidates, in rough order of likelihood:
+
+1. **MSA featurization** — possibly how we deduplicate, align or gap
+   the antibody CDR loops. FoldBench ships one a3m per sequence; we
+   treat it uniformly; maybe our pairing logic diverges from upstream.
+2. **Pair representation updates during recycling** — the
+   template/MSA → pair signal flow.
+3. **Chain-pair features** — how sym_id/asym_id are assigned to
+   antibody heavy/light chains vs antigen.
+4. **Diffusion sampler details** — noise schedule, step count,
+   clamping. Upstream uses 200 steps; we use 200 too (via n_cycles and
+   default sample_diffusion.N_step), but implementation might differ.
+
+This is now #7's territory — an actual pipeline diff between the two
+implementations, not a methodology difference in how we run them.
+
 ## Distogram outputs — TODO
 
 Saving distograms requires a small change to `Predictor.predict` in

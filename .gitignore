@@ -4,6 +4,9 @@ workbench
 # Helico experiment artifacts (see experiments/AGENTS.md)
 experiments/**/.cache/
 experiments/**/README.html
+# Per-sample CIF dumps from upstream Protenix — bulk, live on Modal volume
+# + HF; only the summary/per-sample CSVs are committed under data/upstream/
+experiments/**/data/upstream/*/predictions/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -1,0 +1,4 @@
+pdb_id,first_seed_sample0_dockq,oracle_dockq,oracle_seed,oracle_sample,n_samples_scored,n_successes,success_rate_pct
+8t59-assembly1,0.9035574793815613,0.9065449833869934,66,0,25,25,100.0
+8q3j-assembly1,0.26236021518707275,0.3294923007488251,66,0,25,25,100.0
+8v52-assembly1,0.3282776474952698,0.8349133729934692,8888,1,25,25,100.0
