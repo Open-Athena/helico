@@ -1,0 +1,36 @@
+category,metric,value,model,regime,n_samples,source,notes
+monomer_dna,mean_lddt,0.44,Protenix,2023-01+,25,FoldBench paper,n=14 in 2023-01+ full set
+monomer_dna,mean_lddt,0.53,AF3,2023-01+,25,FoldBench paper,
+monomer_dna,mean_lddt,0.34,Boltz-1,2023-01+,25,FoldBench paper,
+monomer_dna,mean_lddt,0.46,Chai-1,2023-01+,25,FoldBench paper,
+monomer_rna,mean_lddt,0.59,Protenix,2023-01+,25,FoldBench paper,n=15 in 2023-01+ full set
+monomer_rna,mean_lddt,0.61,AF3,2023-01+,25,FoldBench paper,
+monomer_rna,mean_lddt,0.44,Boltz-1,2023-01+,25,FoldBench paper,
+monomer_rna,mean_lddt,0.49,Chai-1,2023-01+,25,FoldBench paper,
+monomer_protein,mean_lddt,,Protenix,2023-01+,25,FoldBench paper,not reported as numeric table for Protenix
+interface_protein_protein,success_rate_pct,68.18,Protenix,2023-01+,25,FoldBench README,DockQ ≥ 0.23
+interface_protein_protein,success_rate_pct,64.80,Protenix,2024-01+,25,FoldBench README,DockQ ≥ 0.23; closest match to exp4 cutoff
+interface_protein_protein,success_rate_pct,72.93,AF3,2023-01+,25,FoldBench README,
+interface_protein_protein,success_rate_pct,68.25,Boltz-1,2023-01+,25,FoldBench README,
+interface_protein_protein,success_rate_pct,68.53,Chai-1,2023-01+,25,FoldBench README,
+interface_antibody_antigen,success_rate_pct,34.13,Protenix,2023-01+,25,FoldBench README,DockQ ≥ 0.23
+interface_antibody_antigen,success_rate_pct,38.36,Protenix,2024-01+,25,FoldBench README,DockQ ≥ 0.23; closest match to exp4 cutoff
+interface_antibody_antigen,success_rate_pct,47.90,AF3,2023-01+,25,FoldBench README,
+interface_antibody_antigen,success_rate_pct,33.54,Boltz-1,2023-01+,25,FoldBench README,
+interface_antibody_antigen,success_rate_pct,23.64,Chai-1,2023-01+,25,FoldBench README,
+interface_protein_peptide,success_rate_pct,,Protenix,2023-01+,25,FoldBench paper,not reported as numeric table for Protenix
+interface_protein_ligand,success_rate_pct,50.70,Protenix,2023-01+,25,FoldBench README,LDDT-PLI > 0.8 AND LRMSD < 2.0
+interface_protein_ligand,success_rate_pct,53.25,Protenix,2024-01+,25,FoldBench README,closest match to exp4 cutoff
+interface_protein_ligand,success_rate_pct,64.90,AF3,2023-01+,25,FoldBench README,
+interface_protein_ligand,success_rate_pct,55.04,Boltz-1,2023-01+,25,FoldBench README,
+interface_protein_ligand,success_rate_pct,51.23,Chai-1,2023-01+,25,FoldBench README,
+interface_protein_dna,success_rate_pct,68.39,Protenix,2023-01+,25,FoldBench README,DockQ ≥ 0.23
+interface_protein_dna,success_rate_pct,67.63,Protenix,2024-01+,25,FoldBench README,DockQ ≥ 0.23; closest match to exp4 cutoff
+interface_protein_dna,success_rate_pct,79.18,AF3,2023-01+,25,FoldBench README,
+interface_protein_dna,success_rate_pct,70.97,Boltz-1,2023-01+,25,FoldBench README,
+interface_protein_dna,success_rate_pct,69.97,Chai-1,2023-01+,25,FoldBench README,
+interface_protein_rna,success_rate_pct,44.78,Protenix,2023-01+,25,FoldBench README,DockQ ≥ 0.23
+interface_protein_rna,success_rate_pct,56.41,Protenix,2024-01+,25,FoldBench README,DockQ ≥ 0.23; closest match to exp4 cutoff
+interface_protein_rna,success_rate_pct,62.32,AF3,2023-01+,25,FoldBench README,
+interface_protein_rna,success_rate_pct,56.90,Boltz-1,2023-01+,25,FoldBench README,
+interface_protein_rna,success_rate_pct,50.91,Chai-1,2023-01+,25,FoldBench README,

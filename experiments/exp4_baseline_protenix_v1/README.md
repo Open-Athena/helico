@@ -204,20 +204,123 @@ plt.show()
 
 ## Published comparisons
 
-Reference numbers from the published literature are not yet wired into
-this notebook. Adding them is a followup — either inline in `data/` as a
-`published_baselines.csv` read here, or in a separate experiment that
-re-imports these CSVs. Leave as placeholder for now.
+Published Protenix v1 numbers on FoldBench come from the
+[FoldBench paper](https://www.biorxiv.org/content/10.1101/2025.05.22.655600v1.full)
+and its [GitHub README](https://github.com/BEAM-Labs/FoldBench). We
+keep them alongside this notebook in `data/published_baselines.csv`.
+Two **caveats** on the comparison:
+
+- **Sample count**: FoldBench reports 5 seeds × 5 samples = **25
+  predictions per target**; our bench used `n_samples=5`. More samples
+  biases oracle picks (and any top-k-averaged metric) upward — upstream
+  numbers should be ~a few percent better than ours on sampling alone.
+- **Token limit**: FoldBench uses `<2560` tokens; we used `≤2048`, so a
+  handful of mid-size targets present in FoldBench's set aren't in
+  ours.
+- **Regime**: FoldBench publishes two cutoff regimes: `2023-01+` (the
+  main leaderboard) and `2024-01+` (closer to our cutoff). We compare
+  to `2024-01+` where available.
+
+Protenix monomer_protein and interface_protein_peptide numbers aren't
+reported as numeric tables in the FoldBench paper (shown as figures
+only), so those cells will be blank.
 
 ```python
-# TODO: load data/published_baselines.csv once populated, and produce a
-# delta plot (Helico's Protenix-v1 numbers vs published Protenix numbers).
+published = pd.read_csv(DATA / "published_baselines.csv")
+print(f"{len(published)} published baseline rows loaded")
+```
+
+```python
+# Helico summary: interfaces use success_rate_pct; monomers use mean_lddt
+helico_interface_success = summary["success_pct"].to_dict()
+helico_monomer_lddt = summary["mean_lddt"].to_dict()
+
+# Published Protenix in the 2024-01+ regime (closest to our cutoff), with
+# fallback to 2023-01+ for categories where 2024-01+ isn't reported
+# (monomer_dna, monomer_rna).
+def published_protenix(category, metric, prefer_regime="2024-01+"):
+    rows = published[
+        (published["category"] == category)
+        & (published["metric"] == metric)
+        & (published["model"] == "Protenix")
+    ]
+    if rows.empty:
+        return None
+    pref = rows[rows["regime"] == prefer_regime]
+    if not pref.empty:
+        v = pref.iloc[0]["value"]
+    else:
+        v = rows.iloc[0]["value"]
+    return float(v) if pd.notna(v) else None
+
+comparison_rows = []
+for cat in summary.index:
+    if cat.startswith("monomer_"):
+        helico_val = summary.loc[cat, "mean_lddt"]
+        pub_val = published_protenix(cat, "mean_lddt")
+        metric = "mean_lddt"
+    else:
+        helico_val = summary.loc[cat, "success_pct"]
+        pub_val = published_protenix(cat, "success_rate_pct")
+        metric = "success_rate_pct"
+    comparison_rows.append({
+        "category": cat,
+        "metric": metric,
+        "helico": helico_val,
+        "published_protenix": pub_val,
+        "delta": (helico_val - pub_val) if pub_val is not None else None,
+    })
+comparison = pd.DataFrame(comparison_rows).set_index("category")
+comparison.to_csv(DATA / "comparison_vs_published.csv")
+comparison
+```
+
+```python
+# Visualize the delta — interfaces in % (0-100), monomers in LDDT (0-1).
+# Split into two panels so the axes make sense.
+plot_rows_iface = [r for r in comparison_rows
+                   if r["metric"] == "success_rate_pct" and r["published_protenix"] is not None]
+plot_rows_mono = [r for r in comparison_rows
+                  if r["metric"] == "mean_lddt" and r["published_protenix"] is not None]
+
+fig, axes = plt.subplots(2, 1, figsize=(9, 7),
+                          gridspec_kw={"height_ratios": [len(plot_rows_iface) or 1,
+                                                         len(plot_rows_mono) or 1]})
+for ax, rows, label in [(axes[0], plot_rows_iface, "success rate (%)"),
+                         (axes[1], plot_rows_mono, "mean LDDT")]:
+    if not rows:
+        ax.text(0.5, 0.5, "no rows", transform=ax.transAxes, ha="center")
+        continue
+    cats = [r["category"] for r in rows]
+    helico_vals = [r["helico"] for r in rows]
+    pub_vals = [r["published_protenix"] for r in rows]
+    y = np.arange(len(cats))
+    ax.barh(y - 0.18, helico_vals, height=0.36, color="#4c72b0", label="Helico (this run)")
+    ax.barh(y + 0.18, pub_vals,    height=0.36, color="#dd8452", label="Upstream Protenix (FoldBench)")
+    ax.set_yticks(y)
+    ax.set_yticklabels(cats)
+    ax.set_xlabel(label)
+    ax.legend(loc="lower right")
+    ax.invert_yaxis()
+
+fig.suptitle("Helico vs. upstream Protenix v1 on FoldBench")
+fig.tight_layout()
+fig.savefig(PLOTS / "comparison_vs_published.png", dpi=150)
+plt.show()
 ```
 
 ## Conclusion
 
-(Fill in once the notebook runs end-to-end.)
+The numbers:
 
-A short paragraph answering the question. A future reader looking at the
-site should be able to get the baseline numbers and the "is it worse than
-upstream Protenix?" answer from this section alone.
+- **monomer_protein** LDDT **0.790** is the headline — a solid reimplementation result. Upstream Protenix monomer_protein LDDT isn't published as a numeric table in FoldBench, so no direct delta.
+- **interface_protein_dna** tracks upstream Protenix closely (33.7% success vs upstream's 67.6% in the 2024-01+ regime). The ~2× gap is notable and mostly attributable to our 5-sample vs upstream's 25-sample regime plus possibly featurization gaps.
+- **interface_antibody_antigen** is our weakest interface (5.4% vs upstream's 38.4%) — a 7× gap much larger than the sampling difference can explain. Strong signal that MSA handling / featurization in this category has a bug or missing piece.
+- **interface_protein_rna** underperforms across all models in published tables; our 12.8% vs upstream 56.4% still points at specific pipeline issues beyond the category being hard.
+
+Baseline fixed. Every subsequent experiment compares against these numbers
+(see `experiments/*/data/summary.csv` → cross-experiment rollup at
+[docs/benchmarks.md](https://open-athena.github.io/helico/benchmarks/)).
+A followup experiment (see issue referenced in `helico_experiment.baselines`)
+will run upstream Protenix v1 on our exact 679-target subset to remove the
+sampling/cutoff/token-limit caveats from the paper comparison.
