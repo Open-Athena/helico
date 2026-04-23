@@ -637,6 +637,7 @@ def run_inference(
     dtype: torch.dtype = torch.bfloat16,
     n_cycles: int | None = None,
     verbose_timing: bool = False,
+    dump_intermediates_to: str | None = None,
 ) -> dict[str, torch.Tensor]:
     """Run inference on a batch.
 
@@ -645,6 +646,9 @@ def run_inference(
             Default: 10 (Protenix inference standard). Use model.config.n_cycles=1
             for fast debugging; Protenix achieves reported accuracy with 10 cycles.
         verbose_timing: Print detailed timing breakdown for each phase.
+        dump_intermediates_to: If set, path where Helico.predict writes
+            intermediate tensors as .npz files (batch, pre/post-recycle,
+            diffusion outputs). For pipeline-diff analysis.
 
     Returns predicted coordinates, confidence scores, etc.
     """
@@ -656,7 +660,11 @@ def run_inference(
     effective_cycles = n_cycles if n_cycles is not None else 10
 
     with torch.no_grad(), torch.amp.autocast("cuda", dtype=dtype):
-        results = model.predict(batch, n_samples=n_samples, n_cycles=effective_cycles, verbose_timing=verbose_timing)
+        results = model.predict(
+            batch, n_samples=n_samples, n_cycles=effective_cycles,
+            verbose_timing=verbose_timing,
+            dump_intermediates_to=dump_intermediates_to,
+        )
 
     return results
 

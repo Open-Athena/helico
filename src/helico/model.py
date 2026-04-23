@@ -2364,6 +2364,38 @@ def compute_clash(
     return has_clash
 
 
+def _maybe_build_dumper(dump_dir: str | None):
+    """Return a callable `dump(stage_name, tensors_dict)` or None.
+
+    Used by Helico.predict to optionally persist intermediate state for
+    pipeline-diff analysis (see scripts/pm/diff_pipelines.py). Each call
+    writes `<dump_dir>/<stage_name>.npz` with all given tensors as
+    float32 numpy arrays. Falls through harmlessly when dump_dir is None.
+    """
+    if dump_dir is None:
+        return None
+    from pathlib import Path
+    import numpy as np
+
+    out = Path(dump_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    def _dump(stage: str, tensors: dict):
+        arrs = {}
+        for k, v in tensors.items():
+            if isinstance(v, torch.Tensor):
+                arrs[k] = v.detach().to(dtype=torch.float32, device="cpu").numpy()
+            elif isinstance(v, (int, float, bool)):
+                arrs[k] = np.array(v)
+            elif isinstance(v, dict):
+                for sk, sv in v.items():
+                    if isinstance(sv, torch.Tensor):
+                        arrs[f"{k}.{sk}"] = sv.detach().to(dtype=torch.float32, device="cpu").numpy()
+        np.savez_compressed(out / f"{stage}.npz", **arrs)
+
+    return _dump
+
+
 def compute_ranking_score(
     ptm: torch.Tensor,
     iptm: torch.Tensor,
@@ -2822,6 +2854,7 @@ class Helico(nn.Module):
         n_samples: int = 5,
         n_cycles: int | None = None,
         verbose_timing: bool = False,
+        dump_intermediates_to: str | None = None,
     ) -> dict[str, torch.Tensor]:
         """Run inference: generate structure predictions.
 
@@ -2830,8 +2863,16 @@ class Helico(nn.Module):
             n_samples: Number of diffusion samples per input.
             n_cycles: Override number of recycling cycles (default: self.config.n_cycles).
             verbose_timing: Print detailed timing breakdown for each phase.
+            dump_intermediates_to: If set, write intermediate tensors to
+                this directory as .npz files for pipeline-diff analysis.
+                Writes batch inputs, pre-recycle embeddings, post-recycle
+                (final) s/z, diffusion outputs, and confidence-head
+                outputs. Costs ~100-200 MB per target on 2048-token inputs.
         """
         self.eval()
+
+        # Lazy-imported helper for optional intermediate dumping
+        _dump = _maybe_build_dumper(dump_intermediates_to)
 
         def _sync_time():
             if verbose_timing:
@@ -2848,6 +2889,11 @@ class Helico(nn.Module):
 
         B, N_tok = batch["token_types"].shape
         device = batch["token_types"].device
+
+        if _dump is not None:
+            # Persist input batch first — this is where featurization
+            # bugs show up if they exist.
+            _dump("00_batch", {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)})
 
         t0 = _sync_time()
         ref_charge, ref_features = self._build_ref_features(batch)
@@ -2869,6 +2915,15 @@ class Helico(nn.Module):
 
         # Recycling
         msa_raw, msa_mask = self._build_msa_raw(batch)
+        if _dump is not None:
+            _dump("01_pre_recycle", {
+                "s_inputs": s_inputs, "s_init": s_init, "z_init": z_init,
+                "msa_raw": msa_raw, "msa_mask": msa_mask,
+                "ref_charge": ref_charge, "ref_features": ref_features,
+                "atom_mask": atom_mask, "pair_mask": pair_mask,
+                "relpe_feats": relpe_feats,
+            })
+
         s = torch.zeros_like(s_init)
         z = torch.zeros_like(z_init)
         actual_cycles = n_cycles if n_cycles is not None else self.config.n_cycles
@@ -2886,6 +2941,11 @@ class Helico(nn.Module):
             s, z = self.pairformer(s, z, mask=mask, pair_mask=pair_mask)
             cycle_times.append(_sync_time() - t_c0)
         t_recycle = _sync_time() - t_recycle_start
+
+        if _dump is not None:
+            # Dump final s/z only — intermediate cycles are ~64MB each;
+            # final state is the signal the diffusion sees.
+            _dump("02_post_recycle", {"s": s, "z": z})
 
         # Generate all samples in one batched call: expand (B, ...) → (B*n_samples, ...)
         def _expand(t):
@@ -2992,6 +3052,17 @@ class Helico(nn.Module):
         plddt_flat = _flatten_plddt(
             best_plddt, batch["atom_to_token"], batch["atoms_per_token"], atom_mask,
         )
+
+        if _dump is not None:
+            _dump("03_post_diffusion", {
+                "all_coords": all_coords,        # (B, n_samples, N_atoms, 3)
+                "best_coords": best_coords,      # (B, N_atoms, 3)
+                "best_idx": best_idx,
+                "ranking_score_per_sample": best_ranking,
+                "ptm": best_ptm, "iptm": best_iptm,
+                "plddt_flat": plddt_flat,
+                "pae": best_pae,
+            })
 
         t_overall = _sync_time() - t_overall_start
 

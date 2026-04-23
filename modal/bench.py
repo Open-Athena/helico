@@ -219,6 +219,7 @@ class Predictor:
         n_seeds: int = 1,
         max_tokens: int = 2048,
         n_cycles: int = 10,
+        dump_intermediates_relpath: str = "",
     ) -> dict | None:
         """Run prediction for a single target. Returns serializable result dict or None."""
         import logging
@@ -261,10 +262,16 @@ class Predictor:
             seeds = list(range(42, 42 + n_seeds)) if n_seeds > 0 else [42]
             per_seed_compact = []  # (rs, all_coords_np, all_pdb_strs, top_coords_np, top_plddt_np, top_pdb_str)
 
-            for seed in seeds:
+            # Pipeline-diff dump mode: when dump_intermediates_relpath is
+            # non-empty, write intermediate tensors to that path on the
+            # shared volume for the FIRST seed only.
+            for seed_idx, seed in enumerate(seeds):
                 torch.manual_seed(seed)
                 if torch.cuda.is_available():
                     torch.cuda.manual_seed_all(seed)
+                dump_to = None
+                if dump_intermediates_relpath and seed_idx == 0:
+                    dump_to = f"{DATA_CACHE}/{dump_intermediates_relpath}/{pdb_id}"
                 pred_result = predict_target(
                     self.model,
                     chains,
@@ -274,6 +281,7 @@ class Predictor:
                     max_tokens=max_tokens,
                     msa_dir=msa_dir,
                     n_cycles=n_cycles,
+                    dump_intermediates_to=dump_to,
                 )
                 if pred_result is None:
                     return {"pdb_id": pdb_id, "category": category, "status": "too_large"}
@@ -451,6 +459,7 @@ def run_bench(
     max_targets: int = 0,
     checkpoint: str = "protenix-v1",
     target_pdb_ids: str = "",  # comma-separated pdb_ids to restrict to; empty = all
+    dump_intermediates_relpath: str = "",  # if set, dump intermediates to /cache/helico-data/<this>/<pdb_id>/
 ):
     import logging
     import pickle
@@ -591,6 +600,7 @@ def run_bench(
             [n_seeds] * len(to_predict),
             [max_tokens] * len(to_predict),
             [n_cycles] * len(to_predict),
+            [dump_intermediates_relpath] * len(to_predict),
         )
 
         for result in results_iter:

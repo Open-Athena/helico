@@ -363,6 +363,7 @@ def predict_target(
     msa_cache_dir: Path | None = None,
     n_cycles: int | None = None,
     verbose_timing: bool = False,
+    dump_intermediates_to: str | None = None,
 ) -> tuple[TokenizedStructure, dict[str, torch.Tensor]] | None:
     """Run Helico inference on a target defined by chain dicts.
 
@@ -571,7 +572,11 @@ def predict_target(
         batch["deletion_mean"] = torch.zeros(1, n_tok)
         batch["has_msa"] = torch.zeros(1)
 
-    results = run_inference(model, batch, n_samples=n_samples, device=device, dtype=dtype, n_cycles=n_cycles, verbose_timing=verbose_timing)
+    results = run_inference(
+        model, batch, n_samples=n_samples, device=device, dtype=dtype,
+        n_cycles=n_cycles, verbose_timing=verbose_timing,
+        dump_intermediates_to=dump_intermediates_to,
+    )
     return tokenized, results
 
 
