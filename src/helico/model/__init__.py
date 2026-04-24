@@ -26,7 +26,6 @@ Structure (in rough order of AF3 SI section):
                        distogram_loss, violation_loss
 - ``metrics.py``       compute_plddt / pae / ptm / iptm / clash /
                        ranking_score — post-processing of head logits
-- ``dumper.py``        _maybe_build_dumper — pipeline-diff instrumentation
 - ``helico.py``        Helico top-level nn.Module (Alg 1)
 
 The public API is a small set of classes re-exported below. Importing
@@ -93,7 +92,6 @@ from helico.model.metrics import (
     compute_ranking_score,
     _flatten_plddt,
 )
-from helico.model.dumper import _maybe_build_dumper
 from helico.model.helico import Helico
 
 
