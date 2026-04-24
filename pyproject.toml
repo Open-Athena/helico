@@ -79,3 +79,7 @@ no-build-isolation-package = ["dockq"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: tests that take >1 min (e.g. full 10-sample 1MBN fold)",
+    "numerics: numerical-regression tests against golden snapshots",
+]

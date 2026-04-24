@@ -285,6 +285,148 @@ class TestMSAModule:
                 assert not block.has_msa_stack
 
 
+class TestMSASubsample:
+    """Tests for MSAModule's per-call random MSA row subsampling.
+
+    AF3 SI §3.5: sample_size = randint(1, N_msa); take random permutation.
+    MSAModule.forward does this once per call, so each recycle cycle sees
+    a different subsample. Tests verify the subsample contract:
+    determinism (given seed), short-circuit at N_msa<=1, and non-equal
+    output under different RNG state.
+    """
+
+    def _make_inputs(self, n_msa: int):
+        module = MSAModule(TEST_CONFIG).to(device=DEVICE, dtype=DTYPE)
+        m_raw = torch.randn(BATCH_SIZE, n_msa, N_TOKENS, 34, device=DEVICE, dtype=DTYPE)
+        z = torch.randn(BATCH_SIZE, N_TOKENS, N_TOKENS, TEST_CONFIG.d_pair,
+                        device=DEVICE, dtype=DTYPE)
+        s_inputs = torch.randn(BATCH_SIZE, N_TOKENS, TEST_CONFIG.c_s_inputs,
+                               device=DEVICE, dtype=DTYPE)
+        return module, m_raw, z, s_inputs
+
+    def test_shape_unchanged_by_subsample(self):
+        """Output pair shape is independent of N_msa (subsample is internal)."""
+        module, m_raw, z, s_inputs = self._make_inputs(n_msa=32)
+        torch.manual_seed(0)
+        out = module(m_raw, z, s_inputs)
+        assert out.shape == z.shape
+
+    def test_determinism_with_seed(self):
+        """Same torch seed → same output, despite random subsample."""
+        module, m_raw, z, s_inputs = self._make_inputs(n_msa=16)
+        torch.manual_seed(42)
+        out1 = module(m_raw, z, s_inputs)
+        torch.manual_seed(42)
+        out2 = module(m_raw, z, s_inputs)
+        assert torch.allclose(out1, out2)
+
+    def test_different_seeds_give_different_outputs(self):
+        """Different seeds should produce different subsamples → different z."""
+        module, m_raw, z, s_inputs = self._make_inputs(n_msa=16)
+        torch.manual_seed(0)
+        out_a = module(m_raw, z, s_inputs)
+        torch.manual_seed(1)
+        out_b = module(m_raw, z, s_inputs)
+        # They should differ somewhere — not bitwise-identical
+        assert not torch.allclose(out_a, out_b)
+
+    def test_n_msa_1_no_subsample(self):
+        """N_msa=1 short-circuits the subsampling path — output must be
+        reproducible without re-seeding because no RNG is drawn."""
+        module, m_raw, z, s_inputs = self._make_inputs(n_msa=1)
+        # Burn some RNG state between calls to rule out "accidentally deterministic"
+        out1 = module(m_raw, z, s_inputs)
+        _ = torch.randn(1000, device=DEVICE)
+        out2 = module(m_raw, z, s_inputs)
+        assert torch.allclose(out1, out2), (
+            "N_msa=1 should not consume RNG state, so calls with different "
+            "RNG state between them should still give the same output."
+        )
+
+    def test_subsample_advances_rng(self):
+        """Confirm subsample actually draws from the RNG (forensics — if this
+        ever became false, the subsample has been accidentally disabled).
+        Subsample uses device-side RNG, so we measure state on the same device."""
+        module, m_raw, z, s_inputs = self._make_inputs(n_msa=16)
+        torch.manual_seed(7)
+        before = torch.rand(1, device=DEVICE).item()
+        torch.manual_seed(7)
+        _ = module(m_raw, z, s_inputs)
+        after = torch.rand(1, device=DEVICE).item()
+        assert before != after, (
+            "MSA subsample is meant to consume RNG state (randint + randperm) — "
+            "the rand() call after the module should see advanced state."
+        )
+
+
+class TestRecycleAndDeterminism:
+    """Cheap smoke tests on the Helico predict() path: recycling shape
+    invariants and RNG-determinism. Catches refactor bugs that would
+    silently break the cycle-by-cycle update or reintroduce stray
+    non-determinism. Uses the small TEST_CONFIG (randomly initialized)."""
+
+    def test_predict_deterministic_with_seed(self):
+        """Two predict() calls with the same torch seed should produce
+        identical outputs. Required for reproducible benchmarks and
+        safe refactoring."""
+        config = HelicoConfig(**{**TEST_CONFIG.__dict__, "n_diffusion_steps": 3})
+        model = Helico(config).to(DEVICE)
+        batch = _make_batch(n_tokens=8)
+
+        torch.manual_seed(123)
+        with torch.amp.autocast("cuda", dtype=DTYPE, enabled=DEVICE == "cuda"):
+            out1 = model.predict(batch, n_samples=1)
+        torch.manual_seed(123)
+        with torch.amp.autocast("cuda", dtype=DTYPE, enabled=DEVICE == "cuda"):
+            out2 = model.predict(batch, n_samples=1)
+
+        # pLDDT / pTM come from the confidence head, which sees predicted
+        # coords from diffusion — so bf16 noise accumulates. Allow small
+        # tolerances; a refactor that introduces new non-determinism would
+        # produce much larger differences.
+        assert torch.allclose(out1["plddt"], out2["plddt"], atol=1.0, rtol=1e-3), (
+            "predict() not deterministic: pLDDT differs between identical seeded runs "
+            f"(max diff {(out1['plddt'] - out2['plddt']).abs().max():.4g})"
+        )
+        assert torch.allclose(out1["ptm"], out2["ptm"], atol=5e-2, rtol=1e-2), (
+            "predict() not deterministic: pTM differs between identical seeded runs "
+            f"(values {out1['ptm'].item():.4g} vs {out2['ptm'].item():.4g})"
+        )
+
+    def test_recycle_invariance_on_shape(self):
+        """After N cycles, s/z shape must equal their initial shape."""
+        config = HelicoConfig(**{**TEST_CONFIG.__dict__, "n_cycles": 3,
+                                 "n_diffusion_steps": 3})
+        model = Helico(config).to(DEVICE)
+        batch = _make_batch(n_tokens=8)
+
+        torch.manual_seed(0)
+        with torch.amp.autocast("cuda", dtype=DTYPE, enabled=DEVICE == "cuda"):
+            out = model.predict(batch, n_samples=1)
+
+        # predict() returns coords/plddt/pae; the invariant we check is just
+        # that the pipeline ran without reshape errors.
+        assert out["coords"].shape == (BATCH_SIZE, 8 * N_ATOMS_PER_TOKEN, 3)
+
+    def test_n_cycles_override_runs(self):
+        """Caller's n_cycles argument is honored. We can't easily assert
+        that output differs (untrained model gives constant output), but
+        we can verify that both n_cycles=1 and n_cycles=3 run to
+        completion and return the right shapes. The actual recycling
+        behavior is covered by TestFoldRealProtein (full 1MBN fold)."""
+        config = HelicoConfig(**{**TEST_CONFIG.__dict__, "n_cycles": 1,
+                                 "n_diffusion_steps": 3})
+        model = Helico(config).to(DEVICE)
+        batch = _make_batch(n_tokens=8)
+
+        for n_cycles in (1, 3):
+            torch.manual_seed(0)
+            with torch.amp.autocast("cuda", dtype=DTYPE, enabled=DEVICE == "cuda"):
+                out = model.predict(batch, n_samples=1, n_cycles=n_cycles)
+            assert out["coords"].shape == (BATCH_SIZE, 8 * N_ATOMS_PER_TOKEN, 3)
+            assert out["plddt"].shape == (BATCH_SIZE, 8 * N_ATOMS_PER_TOKEN)
+
+
 class TestPairformerBlockPairOnly:
     def test_no_single_params(self):
         """PairformerBlock with has_single=False should have no single params."""
@@ -667,12 +809,58 @@ class TestInputFeatureEmbedder:
 
 
 class TestTemplateEmbedder:
-    def test_returns_zero(self):
-        te = TemplateEmbedder(TEST_CONFIG).to(DEVICE)
-        batch = _make_batch()
-        z = torch.randn(BATCH_SIZE, N_TOKENS, N_TOKENS, TEST_CONFIG.d_pair, device=DEVICE)
+    def test_output_shape_and_finite(self):
+        """AF3 Algorithm 16 forward: pair-shaped, finite, non-trivial.
+
+        The embedder uses dummy template features when real ones aren't in
+        the batch (Protenix v1.0.0 checkpoint expects this path). The
+        output is a pairformer-transformed version of layernorm(z)
+        projected back to c_z, so it should not be all-zeros even though
+        the template inputs are.
+        """
+        te = TemplateEmbedder(TEST_CONFIG).to(device=DEVICE, dtype=DTYPE)
+        z = torch.randn(BATCH_SIZE, N_TOKENS, N_TOKENS, TEST_CONFIG.d_pair,
+                        device=DEVICE, dtype=DTYPE)
+        # Use 2 chains so multichain_mask has non-trivial inter-chain zeros
+        chain_indices = (torch.arange(N_TOKENS, device=DEVICE) // (N_TOKENS // 2)).unsqueeze(0).expand(BATCH_SIZE, -1)
+        batch = {
+            "chain_indices": chain_indices,
+            "token_mask": torch.ones(BATCH_SIZE, N_TOKENS, dtype=torch.bool, device=DEVICE),
+        }
         out = te(batch, z)
-        assert out == 0
+        assert out.shape == z.shape
+        assert torch.isfinite(out).all()
+        # The template-embedder contribution should be meaningfully non-zero
+        # (the fix replaces a stub that returned exactly 0).
+        assert out.float().abs().mean().item() > 1e-6
+
+    def test_four_template_slots(self):
+        """Algorithm 16 averages over 4 template slots per Protenix's
+        InferenceTemplateFeaturizer. Hook pairformer_stack to count calls;
+        expect 4 × n_blocks forward passes per template-embedder forward."""
+        te = TemplateEmbedder(TEST_CONFIG).to(device=DEVICE, dtype=DTYPE)
+        call_count = [0]
+        # Each block in pairformer_stack should be called once per template slot
+        orig_forwards = [block.forward for block in te.pairformer_stack]
+
+        def make_counting_forward(orig):
+            def wrapped(*args, **kwargs):
+                call_count[0] += 1
+                return orig(*args, **kwargs)
+            return wrapped
+
+        for i, block in enumerate(te.pairformer_stack):
+            block.forward = make_counting_forward(orig_forwards[i])
+
+        z = torch.randn(BATCH_SIZE, N_TOKENS, N_TOKENS, TEST_CONFIG.d_pair,
+                        device=DEVICE, dtype=DTYPE)
+        batch = {
+            "chain_indices": torch.zeros(BATCH_SIZE, N_TOKENS, dtype=torch.long, device=DEVICE),
+            "token_mask": torch.ones(BATCH_SIZE, N_TOKENS, dtype=torch.bool, device=DEVICE),
+        }
+        te(batch, z)
+        # 4 template slots × n_template_blocks blocks = expected call count
+        assert call_count[0] == 4 * TEST_CONFIG.n_template_blocks
 
     def test_has_params(self):
         """Verify template embedder creates parameters (for weight transfer)."""
@@ -1176,11 +1364,16 @@ if not CCD_CACHE.exists():
     CCD_CACHE = _processed_dir() / "ccd_cache.pkl"
 
 
+@pytest.mark.slow
 class TestFoldRealProtein:
     """Fold 1MBN (sperm whale myoglobin + heme) with Protenix weights and MSA server.
 
     Verifies that Helico with Protenix weights can fold a real protein to high
     accuracy (CA RMSD < 2.0 A), confirming the MSA encoding is correct.
+
+    Marked @pytest.mark.slow — runs in ~7 min on H100. For quick refactor
+    checks, see TestFold1MBNFast in test_snapshots.py (same target, 1
+    sample, 3 cycles, ~30 sec) and the trunk/build_helpers snapshot tests.
     """
 
     # 1MBN sequence: sperm whale myoglobin, 153 residues, single chain + HEM ligand
