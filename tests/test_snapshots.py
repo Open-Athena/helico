@@ -31,6 +31,12 @@ sys.path.insert(0, str(REPO / "src"))
 
 from helico.data import make_synthetic_batch
 from helico.model import Helico, HelicoConfig
+from helico.model.features import (
+    build_ref_features,
+    build_relpe_feats,
+    build_s_inputs,
+    build_msa_raw,
+)
 from helico.load_protenix import load_protenix_state_dict
 
 SNAPSHOTS_DIR = Path(__file__).resolve().parent / "data" / "snapshots"
@@ -173,19 +179,19 @@ class TestTrunkSnapshot:
             if mask is not None:
                 pair_mask = (mask.unsqueeze(-1) & mask.unsqueeze(-2)).float()
 
-            ref_charge, ref_features = model._build_ref_features(batch)
+            ref_charge, ref_features = build_ref_features(batch)
             atom_mask = batch.get("atom_mask",
                                    torch.ones(1, batch["atom_coords"].shape[1], device=DEVICE))
             atom_mask = atom_mask.float()
-            s_inputs = model._build_s_inputs(batch, ref_charge, ref_features, atom_mask)
+            s_inputs = build_s_inputs(model.input_embedder, batch, ref_charge, ref_features, atom_mask)
             s_init = model.linear_sinit(s_inputs)
             z_init = (
                 model.linear_zinit1(s_init).unsqueeze(2)
                 + model.linear_zinit2(s_init).unsqueeze(1)
             )
-            relpe_feats = model._build_relpe_feats(batch)
+            relpe_feats = build_relpe_feats(batch)
             z_init = z_init + model.trunk_relpe(**relpe_feats)
-            msa_raw, msa_mask = model._build_msa_raw(batch)
+            msa_raw, msa_mask = build_msa_raw(batch)
 
             s = torch.zeros_like(s_init)
             z = torch.zeros_like(z_init)
@@ -262,19 +268,19 @@ class TestDiffusionSnapshot:
                 if mask is not None:
                     pair_mask = (mask.unsqueeze(-1) & mask.unsqueeze(-2)).float()
 
-                ref_charge, ref_features = model._build_ref_features(batch)
+                ref_charge, ref_features = build_ref_features(batch)
                 atom_mask = batch.get("atom_mask",
                                        torch.ones(1, batch["atom_coords"].shape[1], device=DEVICE))
                 atom_mask = atom_mask.float()
-                s_inputs = model._build_s_inputs(batch, ref_charge, ref_features, atom_mask)
+                s_inputs = build_s_inputs(model.input_embedder, batch, ref_charge, ref_features, atom_mask)
                 s_init = model.linear_sinit(s_inputs)
                 z_init = (
                     model.linear_zinit1(s_init).unsqueeze(2)
                     + model.linear_zinit2(s_init).unsqueeze(1)
                 )
-                relpe_feats = model._build_relpe_feats(batch)
+                relpe_feats = build_relpe_feats(batch)
                 z_init = z_init + model.trunk_relpe(**relpe_feats)
-                msa_raw, msa_mask = model._build_msa_raw(batch)
+                msa_raw, msa_mask = build_msa_raw(batch)
 
                 s = torch.zeros_like(s_init)
                 z = torch.zeros_like(z_init)
@@ -333,14 +339,14 @@ class TestDiffusionSnapshot:
 
 
 # ---------------------------------------------------------------------------
-# _build_* helpers snapshot
+# Feature-builder snapshot (model/features.py)
 # ---------------------------------------------------------------------------
 
 class TestBuildHelpersSnapshot:
-    """Pin outputs of Helico._build_ref_features / _build_msa_raw /
-    _build_relpe_feats / _build_s_inputs. These methods are targeted for
-    extraction to features.py; the snapshot ensures extraction doesn't
-    change values."""
+    """Pin outputs of the free functions in ``helico.model.features``
+    (build_ref_features, build_msa_raw, build_relpe_feats, build_s_inputs).
+    Catches any refactor that changes how the batch dict is translated
+    into submodule-shaped tensors."""
 
     @pytest.fixture(scope="class")
     def snapshot(self):
@@ -353,13 +359,13 @@ class TestBuildHelpersSnapshot:
         model = protenix_model
         batch = canonical_batch
         with torch.no_grad(), torch.amp.autocast("cuda", dtype=torch.bfloat16):
-            ref_charge, ref_features = model._build_ref_features(batch)
+            ref_charge, ref_features = build_ref_features(batch)
             atom_mask = batch.get("atom_mask",
                                    torch.ones(1, batch["atom_coords"].shape[1], device=DEVICE))
             atom_mask = atom_mask.float()
-            s_inputs = model._build_s_inputs(batch, ref_charge, ref_features, atom_mask)
-            relpe_feats = model._build_relpe_feats(batch)
-            msa_raw, _ = model._build_msa_raw(batch)
+            s_inputs = build_s_inputs(model.input_embedder, batch, ref_charge, ref_features, atom_mask)
+            relpe_feats = build_relpe_feats(batch)
+            msa_raw, _ = build_msa_raw(batch)
         return {
             "ref_charge": ref_charge, "ref_features": ref_features,
             "s_inputs": s_inputs, "msa_raw": msa_raw,

@@ -38,7 +38,12 @@ from .metrics import (
     compute_clash, compute_ranking_score, _flatten_plddt,
 )
 from .dumper import _maybe_build_dumper
-from . import features as _features
+from .features import (
+    build_ref_features,
+    build_relpe_feats,
+    build_s_inputs,
+    build_msa_raw,
+)
 
 class Helico(nn.Module):
     """Complete Helico model."""
@@ -82,23 +87,6 @@ class Helico(nn.Module):
         self.distogram_head = DistogramHead(config)
         self.affinity = AffinityModule(config)
 
-    # Thin wrappers around features.py — kept on the class so
-    # tests/test_snapshots.py::TestBuildHelpersSnapshot and existing
-    # callers continue to work. New code should use features.build_* directly.
-    def _build_ref_features(self, batch):
-        return _features.build_ref_features(batch)
-
-    def _build_relpe_feats(self, batch):
-        return _features.build_relpe_feats(batch)
-
-    def _build_s_inputs(self, batch, ref_charge, ref_features, atom_mask):
-        return _features.build_s_inputs(
-            self.input_embedder, batch, ref_charge, ref_features, atom_mask,
-        )
-
-    def _build_msa_raw(self, batch):
-        return _features.build_msa_raw(batch)
-
     def forward(
         self,
         batch: dict[str, torch.Tensor],
@@ -116,18 +104,18 @@ class Helico(nn.Module):
         device = batch["token_types"].device
 
         # Build reference features and atom mask
-        ref_charge, ref_features = self._build_ref_features(batch)
+        ref_charge, ref_features = build_ref_features(batch)
         atom_mask = batch.get("atom_mask", torch.ones(B, batch["atom_coords"].shape[1], device=device))
         atom_mask = atom_mask.float()
 
         # 1. Input embedding -> s_inputs (B, N_tok, 449)
-        s_inputs = self._build_s_inputs(batch, ref_charge, ref_features, atom_mask)
+        s_inputs = build_s_inputs(self.input_embedder, batch, ref_charge, ref_features, atom_mask)
 
         # 2. Trunk initialization
         s_init = self.linear_sinit(s_inputs)
         z_init = self.linear_zinit1(s_init).unsqueeze(2) + self.linear_zinit2(s_init).unsqueeze(1)
 
-        relpe_feats = self._build_relpe_feats(batch)
+        relpe_feats = build_relpe_feats(batch)
         z_init = z_init + self.trunk_relpe(**relpe_feats)
 
         # Token bonds
@@ -136,7 +124,7 @@ class Helico(nn.Module):
             z_init = z_init + self.linear_token_bond(token_bonds.unsqueeze(-1).to(z_init.dtype))
 
         # 3. Recycling loop
-        msa_raw, msa_mask = self._build_msa_raw(batch)
+        msa_raw, msa_mask = build_msa_raw(batch)
         n_cycles = self.config.n_cycles
 
         s = torch.zeros_like(s_init)
@@ -157,7 +145,7 @@ class Helico(nn.Module):
         # 4. Diffusion — s_inputs is already (B, N_tok, 449 = d_single + 65)
         # n_diffusion_samples > 1 amortizes the expensive trunk over several
         # denoising passes per batch entry (gh#6). Outputs are (B*N_d, ...).
-        n_d = max(1, int(getattr(self.config, "n_diffusion_samples", 1)))
+        n_d = max(1, self.config.n_diffusion_samples)
         x_denoised, gt_coords, sigma = self.diffusion.forward_training(
             gt_coords=batch["atom_coords"],
             ref_pos=batch["ref_coords"],
@@ -277,17 +265,17 @@ class Helico(nn.Module):
             _dump("00_batch", {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)})
 
         t0 = _sync_time()
-        ref_charge, ref_features = self._build_ref_features(batch)
+        ref_charge, ref_features = build_ref_features(batch)
         atom_mask = batch.get("atom_mask", torch.ones(B, batch["ref_coords"].shape[1], device=device))
         atom_mask = atom_mask.float()
 
         # Build s_inputs
-        s_inputs = self._build_s_inputs(batch, ref_charge, ref_features, atom_mask)
+        s_inputs = build_s_inputs(self.input_embedder, batch, ref_charge, ref_features, atom_mask)
 
         # Trunk init
         s_init = self.linear_sinit(s_inputs)
         z_init = self.linear_zinit1(s_init).unsqueeze(2) + self.linear_zinit2(s_init).unsqueeze(1)
-        relpe_feats = self._build_relpe_feats(batch)
+        relpe_feats = build_relpe_feats(batch)
         z_init = z_init + self.trunk_relpe(**relpe_feats)
         token_bonds = batch.get("token_bonds")
         if token_bonds is not None:
@@ -295,7 +283,7 @@ class Helico(nn.Module):
         t_embed = _sync_time() - t0
 
         # Recycling
-        msa_raw, msa_mask = self._build_msa_raw(batch)
+        msa_raw, msa_mask = build_msa_raw(batch)
         if _dump is not None:
             _dump("01_pre_recycle", {
                 "s_inputs": s_inputs, "s_init": s_init, "z_init": z_init,
