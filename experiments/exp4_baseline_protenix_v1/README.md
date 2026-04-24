@@ -25,17 +25,32 @@ What is our performance on FoldBench when loading weights from a Protenix v1 che
 
 ## Hypothesis
 
-We expect meaningful but worse performance than upstream Protenix v1, due to
-numerical-precision differences in parts of the trunk and potentially
-bugs/differences in featurization. This notebook is the baseline: every
-future experiment compares against these numbers.
+With the TemplateEmbedder + MSA-subsample fixes now on main, we expect to
+be within a small constant factor of upstream Protenix's published
+FoldBench numbers. Any substantial remaining delta points at something
+specific we'd want to keep hunting (MSA differences, sampling variance,
+or another featurization bug).
 
 ## Background
 
-Ad hoc runs over the past weeks (`bench_results_v1_*` dirs in the repo root)
-have shown worse performance than upstream Protenix on several categories.
-This notebook carefully documents the baseline so improvements can be
-measured.
+The initial exp4 baseline in this experiment — pre-fix Helico — fell
+dramatically short of Protenix on interface categories (6.8% vs 38.4%
+ab-ag, 14.5% vs 64.8% p-protein, etc.). Two bugs were found and fixed
+via Helico↔Protenix pipeline diffing (see commits `72f10e6` and `61e94f5`):
+
+- **`TemplateEmbedder.forward` was stubbed to return `0`.** Protenix
+  v1.0.0's weights were trained to run the embedder every recycle on
+  a 4-slot dummy-template pad (`aatype=[31, 0, 0, 0]`, everything else
+  zero) even when `use_template=False` — we were silently skipping
+  that contribution to the pair tensor. Responsible for ~75% of the
+  trunk-side divergence.
+- **MSA rows weren't randomly subsampled per cycle.** Protenix draws
+  a fresh `randint(1, N_msa)` subset every cycle (AF3 SI §3.5). We
+  were using all rows every cycle. Mattered most on large multi-chain
+  ab-ag targets.
+
+This notebook re-runs the benchmark with both fixes on main and
+compares to Protenix's published FoldBench numbers.
 
 ## Setup
 
@@ -317,16 +332,32 @@ plt.show()
 
 ## Conclusion
 
-The numbers:
+Post-fix numbers (same 679-target, 25-sample protocol, 2024-01+ cutoff):
 
-- **monomer_protein** LDDT **0.790** is the headline — a solid reimplementation result. Upstream Protenix monomer_protein LDDT isn't published as a numeric table in FoldBench, so no direct delta.
-- **interface_protein_dna** tracks upstream Protenix closely (33.7% success vs upstream's 67.6% in the 2024-01+ regime). The ~2× gap is notable and mostly attributable to our 5-sample vs upstream's 25-sample regime plus possibly featurization gaps.
-- **interface_antibody_antigen** is our weakest interface (5.4% vs upstream's 38.4%) — a 7× gap much larger than the sampling difference can explain. Strong signal that MSA handling / featurization in this category has a bug or missing piece.
-- **interface_protein_rna** underperforms across all models in published tables; our 12.8% vs upstream 56.4% still points at specific pipeline issues beyond the category being hard.
+| Category                 | Helico (this run) | Protenix (published, 2024-01+) | Helico/Protenix |
+|--------------------------|-------------------|--------------------------------|-----------------|
+| interface_antibody_antigen | 30.4%           | 38.4%                          | 79%             |
+| interface_protein_dna      | 46.7%           | 67.6%                          | 69%             |
+| interface_protein_ligand   | 33.2%           | 53.3%                          | 62%             |
+| interface_protein_peptide  | 42.9%           | —                              | —               |
+| interface_protein_protein  | 33.6%           | 64.8%                          | 52%             |
+| interface_protein_rna      | 31.8%           | 56.4%                          | 56%             |
+| monomer_dna (mean LDDT)    | 0.52            | 0.44                           | 118%            |
+| monomer_rna (mean LDDT)    | 0.60            | 0.59                           | 102%            |
+| monomer_protein (mean LDDT)| 0.83            | — (not published numerically)  | —               |
 
-Baseline fixed. Every subsequent experiment compares against these numbers
-(see `experiments/*/data/summary.csv` → cross-experiment rollup at
-[docs/benchmarks.md](https://open-athena.github.io/helico/benchmarks/)).
-A followup experiment (see issue referenced in `helico_experiment.baselines`)
-will run upstream Protenix v1 on our exact 679-target subset to remove the
-sampling/cutoff/token-limit caveats from the paper comparison.
+Headlines:
+
+- **Monomer categories match or beat Protenix's published numbers** (monomer_dna 0.52 ≥ 0.44, monomer_rna 0.60 ≥ 0.59, monomer_protein 0.83). With a very small N for DNA/RNA these aren't statistically significant but confirm nothing is horribly wrong.
+- **Interface categories are ~50–80% of Protenix's published success rates.** All of these came up substantially from the pre-fix baseline (ab-ag 6.8% → 30.4%, p-protein 14.5% → 33.6%, etc.) — the template + MSA-subsample fixes are doing the expected work.
+- **interface_protein_protein remains the widest relative gap** (52% of Protenix). Worth prioritizing in followup.
+
+The remaining gap isn't template-shaped — FoldBench doesn't ship templates
+and Protenix's published numbers also use the dummy-template path. Most
+likely candidates for the remaining delta:
+
+1. **MSA differences.** Published Protenix runs with `--use_msa_server` (its own MSA server); we use the FoldBench-bundled MSAs. Different MSA depth/pairing → different predictions.
+2. **bf16 numerical accumulation.** Same weights, slightly different op ordering/precision across implementations compounds over 10 recycles × 200 diffusion steps × 25 samples.
+
+The MSA hypothesis is the most testable — see issue #TBD for the
+follow-up experiment.
