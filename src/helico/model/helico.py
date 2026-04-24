@@ -38,6 +38,7 @@ from .metrics import (
     compute_clash, compute_ranking_score, _flatten_plddt,
 )
 from .dumper import _maybe_build_dumper
+from . import features as _features
 
 class Helico(nn.Module):
     """Complete Helico model."""
@@ -81,127 +82,22 @@ class Helico(nn.Module):
         self.distogram_head = DistogramHead(config)
         self.affinity = AffinityModule(config)
 
-    def _build_ref_features(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
-        """Build reference features for atom attention encoder.
+    # Thin wrappers around features.py — kept on the class so
+    # tests/test_snapshots.py::TestBuildHelpersSnapshot and existing
+    # callers continue to work. New code should use features.build_* directly.
+    def _build_ref_features(self, batch):
+        return _features.build_ref_features(batch)
 
-        Returns:
-            ref_charge: (B, N_atoms, 1) — formal charges from CCD (arcsinh-transformed)
-            ref_features: (B, N_atoms, 385) — mask(1) + element_onehot(128) + atom_name_chars(256)
-        """
-        B, N_atoms = batch["atom_element_idx"].shape
-        device = batch["atom_element_idx"].device
-        dtype = batch.get("ref_coords", batch["atom_coords"]).dtype
+    def _build_relpe_feats(self, batch):
+        return _features.build_relpe_feats(batch)
 
-        # Use real ref_charge from CCD if available, else zeros
-        if "ref_charge" in batch:
-            ref_charge = torch.arcsinh(batch["ref_charge"].to(dtype)).unsqueeze(-1)
-        else:
-            ref_charge = torch.zeros(B, N_atoms, 1, device=device, dtype=dtype)
-
-        # Element one-hot (128 dims, padded from n_elements)
-        elem_onehot = F.one_hot(batch["atom_element_idx"].clamp(max=127), 128).to(dtype)
-
-        # Atom mask as feature
-        atom_mask = batch.get("atom_mask")
-        if atom_mask is not None:
-            mask_feat = atom_mask.unsqueeze(-1).to(dtype)
-        else:
-            mask_feat = torch.ones(B, N_atoms, 1, device=device, dtype=dtype)
-
-        # Atom name chars: 4 chars × 64-class one-hot = 256 features
-        name_chars = batch.get("atom_name_chars")
-        if name_chars is None:
-            name_chars = torch.zeros(B, N_atoms, 256, device=device, dtype=dtype)
-        else:
-            name_chars = name_chars.to(device=device, dtype=dtype)
-
-        ref_features = torch.cat([mask_feat, elem_onehot, name_chars], dim=-1)  # (B, N_atoms, 385)
-        return ref_charge, ref_features
-
-    def _build_relpe_feats(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """Build relpe feature dict from batch for RelativePositionEncoding."""
-        return {
-            "residue_index": batch["rel_pos"],
-            "token_index": batch["token_index"],
-            "asym_id": batch["chain_indices"],
-            "entity_id": batch["entity_id"],
-            "sym_id": batch["sym_id"],
-        }
-
-    def _build_s_inputs(self, batch: dict[str, torch.Tensor], ref_charge: torch.Tensor,
-                        ref_features: torch.Tensor, atom_mask: torch.Tensor) -> torch.Tensor:
-        """Build s_inputs (B, N_tok, 449) via InputFeatureEmbedder."""
-        B, N_tok = batch["token_types"].shape
-        device = batch["token_types"].device
-        dtype = ref_charge.dtype
-
-        # restype one-hot (32 dims): precomputed in data pipeline (handles RNA/DNA correctly)
-        restype = F.one_hot(batch["restype"], 32).to(dtype)
-
-        # MSA profile (32 dims, already Protenix 32-class from data pipeline)
-        profile = batch.get("msa_profile", torch.zeros(B, N_tok, 32, device=device, dtype=dtype))
-
-        # deletion_mean (1 dim): use real values from data pipeline
-        deletion_mean = batch.get("deletion_mean", torch.zeros(B, N_tok, 1, device=device, dtype=dtype))
-        if deletion_mean.dim() == 2:
-            deletion_mean = deletion_mean.unsqueeze(-1)
-
-        return self.input_embedder(
-            ref_pos=batch["ref_coords"],
-            ref_charge=ref_charge,
-            ref_features=ref_features,
-            atom_to_token=batch["atom_to_token"],
-            atom_mask=atom_mask,
-            n_tokens=N_tok,
-            restype=restype,
-            profile=profile,
-            deletion_mean=deletion_mean,
-            ref_space_uid=batch.get("ref_space_uid"),
+    def _build_s_inputs(self, batch, ref_charge, ref_features, atom_mask):
+        return _features.build_s_inputs(
+            self.input_embedder, batch, ref_charge, ref_features, atom_mask,
         )
 
-    def _build_msa_raw(self, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Build raw MSA features (B, N_msa, N_tok, 34) and mask.
-
-        Protenix feeds the RAW MSA rows (with deletion matrix) to the MSA
-        module, not a clustered view: a 13k-row MSA enters as 13k rows
-        (optionally subsampled to test_cutoff=16384). We previously fed the
-        64-row cluster summary via `cluster_msa` which threw away >99% of the
-        alignment diversity and explains most of the reproduction gap on
-        multichain targets. Now prefer the raw `msa` + `deletion_matrix` when
-        provided, falling back to clustered fields for backward compat.
-        """
-        B, N_tok = batch["token_types"].shape
-        device = batch["token_types"].device
-        dtype = batch.get("ref_coords", batch["atom_coords"]).dtype
-
-        msa_int = batch.get("msa")
-        if msa_int is not None:
-            del_raw = batch.get(
-                "deletion_matrix",
-                torch.zeros(B, msa_int.shape[1], N_tok, device=device, dtype=dtype),
-            )
-        else:
-            msa_int = batch.get("cluster_msa")
-            del_raw = batch.get("cluster_deletion_mean")
-        if msa_int is None:
-            msa_raw = torch.zeros(B, 1, N_tok, 34, device=device, dtype=dtype)
-            return msa_raw, None
-
-        N_msa = msa_int.shape[1]
-        if del_raw is None:
-            del_raw = torch.zeros(B, N_msa, N_tok, device=device, dtype=dtype)
-
-        # One-hot encode MSA residues (already in Protenix 32-class encoding)
-        msa_onehot = F.one_hot(msa_int.clamp(max=31), 32).to(dtype)
-
-        # Features per Protenix (pairformer.py:724-725):
-        # has_deletion = clip(deletion_matrix, 0, 1), deletion_value = arctan(d/3)*2/pi
-        del_raw = del_raw.to(dtype)
-        has_del = del_raw.clamp(0, 1).unsqueeze(-1)  # (B, N_msa, N_tok, 1)
-        del_val = (torch.arctan(del_raw / 3.0) * (2.0 / math.pi)).unsqueeze(-1)
-
-        msa_raw = torch.cat([msa_onehot, has_del, del_val], dim=-1)  # (B, N_msa, N_tok, 34)
-        return msa_raw, None
+    def _build_msa_raw(self, batch):
+        return _features.build_msa_raw(batch)
 
     def forward(
         self,
