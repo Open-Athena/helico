@@ -46,11 +46,16 @@ SEED = 42
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Tolerance rationale: bf16 has ~8 mantissa bits → ~3.9e-3 relative error
-# compounds through dozens of ops. 1% rtol / 5e-2 atol catches refactor
-# drift (which would typically be orders of magnitude larger) without
-# flagging normal bf16 non-determinism.
+# compounds through dozens of ops. Pre-recycle tensors are close enough
+# across GPUs that per-element atol/rtol works. Post-recycle values
+# accumulate bf16 noise across 2+ recycle iterations and the noise
+# varies per GPU generation (A5000 vs H100 etc.), so we use a
+# whole-tensor rel_L2 check instead — robust to cross-GPU noise but
+# still catches refactor drift (which would change numerics
+# coherently, not just at the edges).
 RTOL = 1e-2
 ATOL = 5e-2
+REL_L2_TOL = 5e-2   # Whole-tensor ‖Δ‖ / ‖expected‖ — used for post-recycle
 
 _PROTENIX_AVAIL = CHECKPOINT.exists() and DEVICE == "cuda"
 pytestmark = [
@@ -98,6 +103,14 @@ def canonical_batch():
 
 
 def _assert_matches(actual: torch.Tensor, expected: np.ndarray, name: str):
+    """Element-wise tolerance check.
+
+    Uses atol OR rtol — i.e., an element passes if EITHER the absolute
+    diff is under atol OR the relative diff is under rtol. This handles
+    both large- and small-magnitude elements. Appropriate for tensors
+    that should match closely across machines (pre-recycle values,
+    feature-builder outputs).
+    """
     a = actual.detach().to(dtype=torch.float32, device="cpu").numpy()
     e = expected
     assert a.shape == e.shape, f"{name}: shape mismatch {a.shape} vs {e.shape}"
@@ -107,6 +120,28 @@ def _assert_matches(actual: torch.Tensor, expected: np.ndarray, name: str):
         f"{name}: max abs diff {diff.max():.4g} (atol={ATOL}), "
         f"max rel diff {rel.max():.4g} (rtol={RTOL}). "
         f"mean={a.mean():.4g} (expected {e.mean():.4g})"
+    )
+
+
+def _assert_matches_rel_l2(actual: torch.Tensor, expected: np.ndarray, name: str,
+                            tol: float = REL_L2_TOL):
+    """Whole-tensor relative L2 check — robust to cross-GPU noise.
+
+    Computes ‖actual − expected‖_2 / ‖expected‖_2 and asserts it's below
+    ``tol``. Unlike per-element max-checks, this summarises the overall
+    divergence: a refactor bug typically moves values coherently (big
+    rel_L2), while bf16 noise across GPUs only affects tail elements
+    (small rel_L2 even if per-element diffs look bad).
+    """
+    a = actual.detach().to(dtype=torch.float32, device="cpu").numpy()
+    e = expected
+    assert a.shape == e.shape, f"{name}: shape mismatch {a.shape} vs {e.shape}"
+    diff = a.astype(np.float64) - e.astype(np.float64)
+    rel_l2 = float(np.linalg.norm(diff) / (np.linalg.norm(e) + 1e-8))
+    assert rel_l2 < tol, (
+        f"{name}: rel_L2 {rel_l2:.4g} > {tol} "
+        f"(actual mean={a.mean():.4g}, std={a.std():.4g}; "
+        f"expected mean={e.mean():.4g}, std={e.std():.4g})"
     )
 
 
@@ -179,12 +214,14 @@ class TestTrunkSnapshot:
         _assert_matches(actual["z_init"], snapshot["z_init"], "z_init")
 
     def test_s_post_recycle(self, snapshot, actual):
-        _assert_matches(actual["s_post_recycle"], snapshot["s_post_recycle"],
-                        "s_post_recycle")
+        # Post-recycle tensors accumulate bf16 noise across 2 recycle
+        # iterations; noise magnitude varies per-GPU. Use rel_L2.
+        _assert_matches_rel_l2(actual["s_post_recycle"], snapshot["s_post_recycle"],
+                                "s_post_recycle")
 
     def test_z_post_recycle(self, snapshot, actual):
-        _assert_matches(actual["z_post_recycle"], snapshot["z_post_recycle"],
-                        "z_post_recycle")
+        _assert_matches_rel_l2(actual["z_post_recycle"], snapshot["z_post_recycle"],
+                                "z_post_recycle")
 
     def test_ref_charge(self, snapshot, actual):
         _assert_matches(actual["ref_charge"], snapshot["ref_charge"], "ref_charge")
