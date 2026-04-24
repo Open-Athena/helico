@@ -1,11 +1,9 @@
 """Auxiliary prediction heads — AF3 SI §4.
 
-- ``DistogramHead``    (AF3 SI §4.4) — pair binned-distance logits
-- ``ConfidenceHead``   (AF3 SI §4.3) — PAE/PDE/pLDDT/resolved
-- ``AffinityModule``   (Boltz2 extension, not in AF3) — binding affinity
-  regression + binder/non-binder classification over a pocket mask
+- ``DistogramHead``   (AF3 SI §4.4) — pair binned-distance logits
+- ``ConfidenceHead``  (AF3 SI §4.3) — PAE/PDE/pLDDT/resolved
 
-All heads read from the trunk's detached (s_trunk, z_trunk) and the
+Both heads read from the trunk's detached (s_trunk, z_trunk) and the
 input embedding s_inputs; the ConfidenceHead also receives predicted
 coordinates from the diffusion rollout.
 """
@@ -178,72 +176,3 @@ class ConfidenceHead(nn.Module):
         return centers / counts.clamp(min=1)
 
 
-class AffinityModule(nn.Module):
-    """Binding affinity prediction — Boltz2 extension (not in AF3 SI).
-
-    Small PairFormer over pocket tokens, then:
-      - binary binder/non-binder logit (classifier)
-      - continuous log₁₀(IC50/Ki/Kd) regression
-
-    Currently unused by the default inference path; kept here because it
-    shares the trunk's Pairformer primitive.
-    """
-
-    def __init__(self, config):
-        super().__init__()
-        c = config
-
-        self.single_proj = nn.Linear(c.d_single, c.d_affinity)
-        self.pair_proj = nn.Linear(c.d_pair, c.d_affinity)
-
-        from .config import HelicoConfig as _Config
-        pocket_config = _Config(
-            d_single=c.d_affinity,
-            d_pair=c.d_affinity,
-            n_pairformer_blocks=c.n_affinity_pairformer_blocks,
-            n_heads_pair=max(1, c.d_affinity // 32),
-            n_heads_single=max(1, c.d_affinity // 16),
-            pair_head_dim=32,
-            single_head_dim=min(16, c.d_affinity),
-            gradient_checkpointing=False,
-            dropout=c.dropout,
-        )
-        self.pocket_pairformer = Pairformer(pocket_config)
-
-        self.classifier = nn.Sequential(
-            LayerNorm(c.d_affinity),
-            nn.Linear(c.d_affinity, 1),
-        )
-        self.regressor = nn.Sequential(
-            LayerNorm(c.d_affinity),
-            nn.Linear(c.d_affinity, c.d_affinity),
-            nn.ReLU(),
-            nn.Linear(c.d_affinity, 1),
-        )
-
-    def forward(
-        self,
-        single: torch.Tensor,
-        pair: torch.Tensor,
-        pocket_mask: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        """single: (B, N, d_single), pair: (B, N, N, d_pair), pocket_mask: (B, N)."""
-        s = self.single_proj(single)
-        z = self.pair_proj(pair)
-
-        s = s * pocket_mask.unsqueeze(-1)
-        z = (z * pocket_mask.unsqueeze(-1).unsqueeze(-2)
-                 * pocket_mask.unsqueeze(-2).unsqueeze(-1))
-
-        pair_mask = pocket_mask.unsqueeze(-1) & pocket_mask.unsqueeze(-2)
-        s, z = self.pocket_pairformer(s, z, mask=pocket_mask, pair_mask=pair_mask)
-
-        pooled = (
-            (s * pocket_mask.unsqueeze(-1)).sum(dim=1)
-            / pocket_mask.sum(dim=1, keepdim=True).clamp(min=1)
-        )
-
-        return {
-            "bind_logits": self.classifier(pooled),
-            "affinity": self.regressor(pooled),
-        }

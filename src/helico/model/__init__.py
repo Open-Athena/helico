@@ -21,8 +21,7 @@ Structure (in rough order of AF3 SI section):
 - ``template.py``      TemplateEmbedder (Alg 16) + the pure-PyTorch
                        template-specific triangle ops (hidden ≠ d variants)
 - ``input_embedder.py`` InputFeatureEmbedder (Alg 2)
-- ``heads.py``         DistogramHead (§4.4), ConfidenceHead (§4.3),
-                       AffinityModule (Boltz2 extension, not AF3)
+- ``heads.py``         DistogramHead (§4.4), ConfidenceHead (§4.3)
 - ``losses.py``        diffusion_loss (Eq. 3), smooth_lddt_loss (Alg 27),
                        distogram_loss, violation_loss
 - ``metrics.py``       compute_plddt / pae / ptm / iptm / clash /
@@ -78,7 +77,7 @@ from helico.model.diffusion import (
 )
 from helico.model.input_embedder import InputFeatureEmbedder
 from helico.model.template import TemplateEmbedder
-from helico.model.heads import ConfidenceHead, DistogramHead, AffinityModule
+from helico.model.heads import ConfidenceHead, DistogramHead
 from helico.model.losses import (
     diffusion_loss,
     smooth_lddt_loss,
@@ -121,7 +120,7 @@ __all__ = [
     # Input + template
     "InputFeatureEmbedder", "TemplateEmbedder",
     # Heads
-    "DistogramHead", "ConfidenceHead", "AffinityModule",
+    "DistogramHead", "ConfidenceHead",
     # Losses
     "diffusion_loss", "smooth_lddt_loss",
     "distogram_loss", "violation_loss",

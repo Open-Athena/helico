@@ -85,10 +85,6 @@ class HelicoConfig:
     # --- Recycling (AF3 Alg 1 outer loop) ---
     n_cycles: int = 1                     # Inference default: 10; tests use 1
 
-    # --- Affinity module (Boltz2 extension, not AF3) ---
-    n_affinity_pairformer_blocks: int = 4
-    d_affinity: int = 64
-
     # --- Training ---
     max_atoms_per_token: int = 24
     dropout: float = 0.0

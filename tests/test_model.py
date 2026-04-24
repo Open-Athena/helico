@@ -37,7 +37,6 @@ from helico.model import (
     DiffusionConditioning,
     DiffusionModule,
     ConfidenceHead,
-    AffinityModule,
     diffusion_loss,
     smooth_lddt_loss,
     distogram_loss,
@@ -78,8 +77,6 @@ TEST_CONFIG = HelicoConfig(
     n_heads_atom=2,
     atom_head_dim=32,  # 64/2
     n_diffusion_steps=10,
-    d_affinity=64,
-    n_affinity_pairformer_blocks=1,
     # Template embedder
     n_template_blocks=2,
     d_template=64,
@@ -925,25 +922,6 @@ class TestConfidenceHead:
 
 
 # ============================================================================
-# Affinity Module Tests
-# ============================================================================
-
-class TestAffinityModule:
-    def test_output_shapes(self):
-        module = AffinityModule(TEST_CONFIG).to(DEVICE)
-        s = torch.randn(BATCH_SIZE, N_TOKENS, TEST_CONFIG.d_single, device=DEVICE, dtype=DTYPE)
-        z = torch.randn(BATCH_SIZE, N_TOKENS, N_TOKENS, TEST_CONFIG.d_pair, device=DEVICE, dtype=DTYPE)
-        pocket_mask = torch.zeros(BATCH_SIZE, N_TOKENS, device=DEVICE, dtype=torch.bool)
-        pocket_mask[:, :8] = True  # first 8 tokens are pocket
-
-        with torch.amp.autocast("cuda", dtype=DTYPE, enabled=DEVICE == "cuda"):
-            out = module(s, z, pocket_mask)
-
-        assert out["bind_logits"].shape == (BATCH_SIZE, 1)
-        assert out["affinity"].shape == (BATCH_SIZE, 1)
-
-
-# ============================================================================
 # Confidence Score Tests
 # ============================================================================
 
@@ -1052,7 +1030,7 @@ class TestFullModel:
         model = Helico(TEST_CONFIG).to(DEVICE)
         batch = _make_batch()
         with torch.amp.autocast("cuda", dtype=DTYPE, enabled=DEVICE == "cuda"):
-            out = model(batch, compute_confidence=True, compute_affinity=False)
+            out = model(batch, compute_confidence=True)
 
         assert "diffusion_loss" in out
         assert out["diffusion_loss"].dim() == 0
@@ -1067,7 +1045,7 @@ class TestFullModel:
         model = Helico(cfg).to(DEVICE)
         batch = _make_batch()
         with torch.amp.autocast("cuda", dtype=DTYPE, enabled=DEVICE == "cuda"):
-            out = model(batch, compute_confidence=True, compute_affinity=False)
+            out = model(batch, compute_confidence=True)
 
         B, N_atoms = batch["atom_coords"].shape[:2]
         assert out["x_denoised"].shape == (B * 4, N_atoms, 3)

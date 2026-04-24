@@ -31,7 +31,7 @@ from .msa import MSAModule
 from .diffusion import DiffusionModule
 from .template import TemplateEmbedder
 from .input_embedder import InputFeatureEmbedder
-from .heads import ConfidenceHead, DistogramHead, AffinityModule
+from .heads import ConfidenceHead, DistogramHead
 from .losses import diffusion_loss, smooth_lddt_loss, distogram_loss, violation_loss
 from .metrics import (
     compute_plddt, compute_pae, compute_ptm, compute_iptm,
@@ -85,14 +85,11 @@ class Helico(nn.Module):
         # Heads
         self.confidence_head = ConfidenceHead(config)
         self.distogram_head = DistogramHead(config)
-        self.affinity = AffinityModule(config)
 
     def forward(
         self,
         batch: dict[str, torch.Tensor],
         compute_confidence: bool = True,
-        compute_affinity: bool = False,
-        pocket_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Full forward pass for training."""
         mask = batch.get("token_mask")
@@ -190,11 +187,6 @@ class Helico(nn.Module):
             results["distogram_loss"] = distogram_loss(
                 distogram_logits, token_centers, mask,
             )
-
-        # Affinity module
-        if compute_affinity and pocket_mask is not None:
-            affinity = self.affinity(s, z, pocket_mask)
-            results.update(affinity)
 
         return results
 

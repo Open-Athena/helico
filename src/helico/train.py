@@ -391,10 +391,10 @@ def train(
     model = model.to(device)
 
     if config.distributed:
-        # find_unused_parameters=True: the affinity module (and other
-        # conditionally-used sub-modules like MSA paths) don't receive
-        # gradients on every batch. Without this flag, DDP's all-reduce
-        # deadlocks with "Expected to have finished reduction" on step 1.
+        # find_unused_parameters=True: conditionally-used sub-modules (e.g.
+        # MSA paths when no MSA is present) don't receive gradients on
+        # every batch. Without this flag, DDP's all-reduce deadlocks with
+        # "Expected to have finished reduction" on step 1.
         model = DDP(model, device_ids=[device], find_unused_parameters=True)
 
     # Optimizer
