@@ -735,6 +735,21 @@ class MSAModule(nn.Module):
         Returns:
             z: (B, N_tok, N_tok, c_z) updated pair embedding
         """
+        # Protenix-match: random subsample MSA rows every call
+        # (sample_msa_feature_dict_random_without_replacement, strategy="random",
+        # lower_bound=1, cutoff=16384). Since MSAModule is invoked once per
+        # recycle cycle, each cycle sees a different subsample. This reduces
+        # overfitting to specific co-evolution signals and is what the v1.0.0
+        # checkpoint was trained against.
+        N_msa = m_raw.shape[-3]
+        if N_msa > 1:
+            device = m_raw.device
+            sample_size = torch.randint(low=1, high=N_msa + 1, size=(1,), device=device).item()
+            indices = torch.randperm(n=N_msa, device=device)[:sample_size]
+            m_raw = m_raw.index_select(-3, indices)
+            if msa_mask is not None:
+                msa_mask = msa_mask.index_select(-3, indices)
+
         # Project MSA features and add single input broadcast
         m = self.linear_m(m_raw) + self.linear_s(s_inputs).unsqueeze(-3)
 
