@@ -29,6 +29,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from helico.protenix_compat import DUMMY_TEMPLATE_SPEC_V1_0_0
+
 from .blocks import LayerNorm, Transition, linear_no_bias
 
 
@@ -194,10 +196,12 @@ class TemplateEmbedder(nn.Module):
         dtype = z.dtype
         device = z.device
 
-        # Protenix v1.0.0 "no templates" path: 4 dummy slots with aatype
-        # [31, 0, 0, 0] and everything else zero. See docstring.
-        num_templ = 4
-        aatype_per_slot = [31, 0, 0, 0]
+        # Protenix v1.0.0 "no templates" path — see
+        # helico.protenix_compat.DUMMY_TEMPLATE_SPEC_V1_0_0 for the recipe
+        # and why it exists despite not being in the AF3 SI.
+        spec = DUMMY_TEMPLATE_SPEC_V1_0_0
+        num_templ = spec.num_templates
+        aatype_per_slot = spec.aatype_per_slot
 
         asym_id = batch.get("chain_indices")
         if asym_id is not None:
