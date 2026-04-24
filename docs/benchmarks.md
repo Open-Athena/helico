@@ -13,15 +13,15 @@ Higher is better. Dashes indicate the category wasn't scored in that run.
 
 | category | exp4_baseline_protenix_v1 |
 |---|---|
-| `monomer_protein` | 0.790 |
-| `monomer_dna` | 0.448 |
-| `monomer_rna` | 0.529 |
-| `interface_protein_protein` | 0.559 |
-| `interface_antibody_antigen` | 0.613 |
-| `interface_protein_peptide` | 0.631 |
-| `interface_protein_ligand` | 0.737 |
-| `interface_protein_dna` | 0.699 |
-| `interface_protein_rna` | 0.459 |
+| `monomer_protein` | 0.830 |
+| `monomer_dna` | 0.522 |
+| `monomer_rna` | 0.602 |
+| `interface_protein_protein` | 0.737 |
+| `interface_antibody_antigen` | 0.816 |
+| `interface_protein_peptide` | 0.817 |
+| `interface_protein_ligand` | 0.822 |
+| `interface_protein_dna` | 0.833 |
+| `interface_protein_rna` | 0.813 |
 
 ## Mean DockQ (interface categories)
 
@@ -29,11 +29,11 @@ Higher is better. DockQ isn't defined for monomers or the ligand interface categ
 
 | category | exp4_baseline_protenix_v1 |
 |---|---|
-| `interface_protein_protein` | 0.149 |
-| `interface_antibody_antigen` | 0.058 |
-| `interface_protein_peptide` | 0.134 |
-| `interface_protein_dna` | 0.324 |
-| `interface_protein_rna` | 0.088 |
+| `interface_protein_protein` | 0.297 |
+| `interface_antibody_antigen` | 0.272 |
+| `interface_protein_peptide` | 0.319 |
+| `interface_protein_dna` | 0.523 |
+| `interface_protein_rna` | 0.263 |
 
 ## Success rate (%)
 
@@ -41,12 +41,12 @@ Non-ligand interface success: DockQ ≥ 0.23. Ligand interface success: LDDT-PLI
 
 | category | exp4_baseline_protenix_v1 |
 |---|---|
-| `interface_protein_protein` | 15.3 |
-| `interface_antibody_antigen` | 5.4 |
-| `interface_protein_peptide` | 20.0 |
-| `interface_protein_ligand` | 15.0 |
-| `interface_protein_dna` | 33.7 |
-| `interface_protein_rna` | 12.8 |
+| `interface_protein_protein` | 33.6 |
+| `interface_antibody_antigen` | 30.4 |
+| `interface_protein_peptide` | 42.9 |
+| `interface_protein_ligand` | 33.2 |
+| `interface_protein_dna` | 46.7 |
+| `interface_protein_rna` | 31.8 |
 
 ## Source data
 
