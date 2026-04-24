@@ -82,32 +82,40 @@ TOKEN_LIGAND_ATOM = 27   # ligand atoms start here
 
 NUM_TOKEN_TYPES = 28 + UNK_ELEM_IDX + 1  # protein + nucleotide + per-element ligand tokens
 
-# Protenix 32-class MSA encoding (matches Protenix checkpoint expectations)
-PROTENIX_MSA_AAS = "ARNDCQEGHILKMFPSTWYV"  # 3-letter alphabetical order
-PROTENIX_MSA_AA_MAP = {aa: i for i, aa in enumerate(PROTENIX_MSA_AAS)}
-PROTENIX_MSA_UNK_PROTEIN = 20
-PROTENIX_MSA_RNA = {c: 21 + i for i, c in enumerate("AGCU")}  # 21-24 (purines first)
-PROTENIX_MSA_UNK_RNA = 25
-PROTENIX_MSA_DNA = {c: 26 + i for i, c in enumerate("AGCT")}  # 26-29 (purines first)
-PROTENIX_MSA_UNK_DNA = 30
-PROTENIX_MSA_GAP = 31
-PROTENIX_NUM_MSA_CLASSES = 32
+# AF3 32-class restype encoding (SI §2.8 Table 13).
+# 0-19:  standard amino acids in 3-letter alphabetical order (ALA, ARG, ASN, ...)
+# 20:    UNK (unknown AA / ligand atom / modified residue)
+# 21-24: standard RNA nucleotides, purines first (A, G, C, U)
+# 25:    UNK RNA (N)
+# 26-29: standard DNA nucleotides, purines first (DA, DG, DC, DT)
+# 30:    UNK DNA (DN)
+# 31:    gap (MSA-only; padding for empty MSA positions)
+AF3_MSA_AAS = "ARNDCQEGHILKMFPSTWYV"
+AF3_MSA_AA_MAP = {aa: i for i, aa in enumerate(AF3_MSA_AAS)}
+AF3_MSA_UNK_PROTEIN = 20
+AF3_MSA_RNA = {c: 21 + i for i, c in enumerate("AGCU")}
+AF3_MSA_UNK_RNA = 25
+AF3_MSA_DNA = {c: 26 + i for i, c in enumerate("AGCT")}
+AF3_MSA_UNK_DNA = 30
+AF3_MSA_GAP = 31
+AF3_NUM_MSA_CLASSES = 32
 
-# Map Helico token_types indices to Protenix restype indices
-# token_types 0-19 = ACDEFGHIKLMNPQRSTVWY (1-letter alpha)
-# Protenix restype 0-19 = ARNDCQEGHILKMFPSTWYV (3-letter alpha)
-_HELICO_AA_TO_PROTENIX = [PROTENIX_MSA_AA_MAP[aa] for aa in STANDARD_AAS]
-TOKEN_TYPE_TO_RESTYPE = _HELICO_AA_TO_PROTENIX + [PROTENIX_MSA_UNK_PROTEIN]  # idx 20 = UNK
-# For nucleotides (token_types 21-26) and ligands (27+), map to gap (31) as placeholder
-TOKEN_TYPE_TO_RESTYPE += [PROTENIX_MSA_GAP] * (NUM_TOKEN_TYPES - 21)
+# Map Helico's internal token_types indices → AF3 32-class restype.
+# token_types 0-19 use 1-letter alphabetical order (ACDEFGHIKLMNPQRSTVWY);
+# AF3 restype uses 3-letter alphabetical (ARNDCQEGHILKMFPSTWYV).
+_HELICO_AA_TO_AF3 = [AF3_MSA_AA_MAP[aa] for aa in STANDARD_AAS]
+TOKEN_TYPE_TO_RESTYPE = _HELICO_AA_TO_AF3 + [AF3_MSA_UNK_PROTEIN]  # idx 20 = UNK
+# Nucleotides (token_types 21-26) and ligands (27+): placeholder gap (31);
+# RES_NAME_TO_RESTYPE below picks the right AF3 index from the CCD code.
+TOKEN_TYPE_TO_RESTYPE += [AF3_MSA_GAP] * (NUM_TOKEN_TYPES - 21)
 
-# CCD res_name -> Protenix restype index for nucleotides.
+# CCD res_name → AF3 restype for nucleotides.
 # TOKEN_TYPE_TO_RESTYPE can't distinguish RNA from DNA (both map to gap), so we
 # fix up nucleotide restypes using the token's res_name (CCD code) instead.
 RES_NAME_TO_RESTYPE: dict[str, int] = {
-    # RNA — purines first: A=21, G=22, C=23, U=24 (matching Protenix)
+    # RNA — AF3 SI Table 13: A=21, G=22, C=23, U=24 (purines first)
     "A": 21, "G": 22, "C": 23, "U": 24,
-    # DNA — purines first: DA=26, DG=27, DC=28, DT=29 (matching Protenix)
+    # DNA — AF3 SI Table 13: DA=26, DG=27, DC=28, DT=29 (purines first)
     "DA": 26, "DG": 27, "DC": 28, "DT": 29,
 }
 
@@ -798,7 +806,7 @@ class TokenizedStructure:
         # and RNA_UNK (25) / DNA_UNK (30) for unknown nucleotides.
         restype = [TOKEN_TYPE_TO_RESTYPE[t.token_type] for t in self.tokens]
         for i, token in enumerate(self.tokens):
-            if restype[i] != PROTENIX_MSA_GAP:
+            if restype[i] != AF3_MSA_GAP:
                 continue
             mapped = RES_NAME_TO_RESTYPE.get(token.res_name)
             if mapped is not None:
@@ -807,13 +815,13 @@ class TokenizedStructure:
             etype = self.entity_types[i]
             if etype == "nucleotide":
                 restype[i] = (
-                    PROTENIX_MSA_UNK_DNA
+                    AF3_MSA_UNK_DNA
                     if token.res_name.startswith("D")
-                    else PROTENIX_MSA_UNK_RNA
+                    else AF3_MSA_UNK_RNA
                 )
             else:
                 # Ligand, modified residue, or anything we couldn't classify
-                restype[i] = PROTENIX_MSA_UNK_PROTEIN
+                restype[i] = AF3_MSA_UNK_PROTEIN
         restype = torch.tensor(restype, dtype=torch.long)
 
         # Relative position encoding (within each chain)
@@ -1630,9 +1638,9 @@ def a3m_to_msa_matrix(seqs: list[str]) -> tuple[np.ndarray, np.ndarray]:
     query_aligned = "".join(c for c in query if not c.islower())
     L = len(query_aligned)
 
-    aa_map = PROTENIX_MSA_AA_MAP  # ARNDCQEGHILKMFPSTWYV -> 0-19
-    gap_idx = PROTENIX_MSA_GAP    # 31
-    unk_idx = PROTENIX_MSA_UNK_PROTEIN  # 20
+    aa_map = AF3_MSA_AA_MAP  # ARNDCQEGHILKMFPSTWYV -> 0-19
+    gap_idx = AF3_MSA_GAP    # 31
+    unk_idx = AF3_MSA_UNK_PROTEIN  # 20
 
     n_seqs = len(seqs)
     msa = np.full((n_seqs, L), gap_idx, dtype=np.int8)
@@ -1690,7 +1698,7 @@ def compute_msa_features(
         n_seqs = max_seqs
 
     # Compute profile (residue frequencies at each position, Protenix 32-class)
-    n_classes = PROTENIX_NUM_MSA_CLASSES  # 32
+    n_classes = AF3_NUM_MSA_CLASSES  # 32
     profile = np.zeros((L, n_classes), dtype=np.float32)
     for pos in range(L):
         counts = np.bincount(msa[:, pos].astype(np.int32), minlength=n_classes)[:n_classes]
@@ -1950,7 +1958,7 @@ def assemble_complex_msa_features(
 
     Profile and clustering are computed on the combined matrix.
     """
-    gap = PROTENIX_MSA_GAP
+    gap = AF3_MSA_GAP
     n_chains = len(chain_raws)
     lengths = [c.length for c in chain_raws]
     L_total = sum(lengths)
@@ -2344,9 +2352,9 @@ class HelicoDataset(Dataset):
         else:
             # Placeholder MSA features
             n_tok = features["n_tokens"]
-            features["msa_profile"] = torch.zeros(n_tok, PROTENIX_NUM_MSA_CLASSES)
+            features["msa_profile"] = torch.zeros(n_tok, AF3_NUM_MSA_CLASSES)
             features["cluster_msa"] = torch.zeros(1, n_tok, dtype=torch.long)
-            features["cluster_profile"] = torch.zeros(1, n_tok, PROTENIX_NUM_MSA_CLASSES)
+            features["cluster_profile"] = torch.zeros(1, n_tok, AF3_NUM_MSA_CLASSES)
             features["deletion_mean"] = torch.zeros(n_tok)
             features["cluster_deletion_mean"] = torch.zeros(1, n_tok)
             features["has_msa"] = torch.tensor(0)
@@ -2611,7 +2619,7 @@ def make_synthetic_batch(
 
     batch = {
         "token_types": torch.randint(0, NUM_TOKEN_TYPES, (batch_size, n_tokens), device=device),
-        "restype": torch.randint(0, PROTENIX_NUM_MSA_CLASSES, (batch_size, n_tokens), device=device),
+        "restype": torch.randint(0, AF3_NUM_MSA_CLASSES, (batch_size, n_tokens), device=device),
         "chain_indices": torch.zeros(batch_size, n_tokens, dtype=torch.long, device=device),
         "res_indices": torch.arange(n_tokens, device=device).unsqueeze(0).expand(batch_size, -1),
         "rel_pos": torch.arange(n_tokens, device=device).unsqueeze(0).expand(batch_size, -1),
@@ -2636,16 +2644,16 @@ def make_synthetic_batch(
     }
 
     if has_msa:
-        batch["msa_profile"] = torch.randn(batch_size, n_tokens, PROTENIX_NUM_MSA_CLASSES, device=device).softmax(dim=-1)
-        batch["cluster_msa"] = torch.randint(0, PROTENIX_NUM_MSA_CLASSES, (batch_size, 4, n_tokens), device=device)
-        batch["cluster_profile"] = torch.randn(batch_size, 4, n_tokens, PROTENIX_NUM_MSA_CLASSES, device=device).softmax(dim=-1)
+        batch["msa_profile"] = torch.randn(batch_size, n_tokens, AF3_NUM_MSA_CLASSES, device=device).softmax(dim=-1)
+        batch["cluster_msa"] = torch.randint(0, AF3_NUM_MSA_CLASSES, (batch_size, 4, n_tokens), device=device)
+        batch["cluster_profile"] = torch.randn(batch_size, 4, n_tokens, AF3_NUM_MSA_CLASSES, device=device).softmax(dim=-1)
         batch["deletion_mean"] = torch.rand(batch_size, n_tokens, device=device)
         batch["cluster_deletion_mean"] = torch.rand(batch_size, 4, n_tokens, device=device)
         batch["has_msa"] = torch.ones(batch_size, device=device)
     else:
-        batch["msa_profile"] = torch.zeros(batch_size, n_tokens, PROTENIX_NUM_MSA_CLASSES, device=device)
+        batch["msa_profile"] = torch.zeros(batch_size, n_tokens, AF3_NUM_MSA_CLASSES, device=device)
         batch["cluster_msa"] = torch.zeros(batch_size, 1, n_tokens, dtype=torch.long, device=device)
-        batch["cluster_profile"] = torch.zeros(batch_size, 1, n_tokens, PROTENIX_NUM_MSA_CLASSES, device=device)
+        batch["cluster_profile"] = torch.zeros(batch_size, 1, n_tokens, AF3_NUM_MSA_CLASSES, device=device)
         batch["deletion_mean"] = torch.zeros(batch_size, n_tokens, device=device)
         batch["cluster_deletion_mean"] = torch.zeros(batch_size, 1, n_tokens, device=device)
         batch["has_msa"] = torch.zeros(batch_size, device=device)
@@ -2949,9 +2957,9 @@ class LazyHelicoDataset(Dataset):
             features["has_msa"] = torch.tensor(1)
         else:
             n_tok = features["n_tokens"]
-            features["msa_profile"] = torch.zeros(n_tok, PROTENIX_NUM_MSA_CLASSES)
+            features["msa_profile"] = torch.zeros(n_tok, AF3_NUM_MSA_CLASSES)
             features["cluster_msa"] = torch.zeros(1, n_tok, dtype=torch.long)
-            features["cluster_profile"] = torch.zeros(1, n_tok, PROTENIX_NUM_MSA_CLASSES)
+            features["cluster_profile"] = torch.zeros(1, n_tok, AF3_NUM_MSA_CLASSES)
             features["deletion_mean"] = torch.zeros(n_tok)
             features["cluster_deletion_mean"] = torch.zeros(1, n_tok)
             features["has_msa"] = torch.tensor(0)

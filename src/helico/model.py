@@ -3012,39 +3012,17 @@ class Helico(nn.Module):
         actual_cycles = n_cycles if n_cycles is not None else self.config.n_cycles
         t_recycle_start = _sync_time()
         cycle_times = []
-        cycle_trace: list[dict] = []
-
-        def _tstats(t: torch.Tensor) -> dict:
-            return {
-                "shape": tuple(t.shape),
-                "mean": float(t.float().mean().item()),
-                "std": float(t.float().std().item()),
-                "min": float(t.float().min().item()),
-                "max": float(t.float().max().item()),
-            }
 
         for cycle in range(actual_cycles):
             t_c0 = _sync_time()
-            rec: dict = {}
             z = z_init + self.linear_z_cycle(self.layernorm_z_cycle(z))
-            if _dump is not None:
-                rec["msa_in"] = _tstats(z)
             z = z + self.template_embedder(batch, z)
             z = self.msa_module(
                 msa_raw, z, s_inputs, msa_mask, pair_mask,
                 msa_chunk_size=(None if self.training else 2048),
             )
-            if _dump is not None:
-                rec["msa_out"] = _tstats(z)
-                rec["pf_z_in"] = _tstats(z)
             s = s_init + self.linear_s(self.layernorm_s(s))
-            if _dump is not None:
-                rec["pf_s_in"] = _tstats(s)
             s, z = self.pairformer(s, z, mask=mask, pair_mask=pair_mask)
-            if _dump is not None:
-                rec["pf_s_out"] = _tstats(s)
-                rec["pf_z_out"] = _tstats(z)
-                cycle_trace.append(rec)
             cycle_times.append(_sync_time() - t_c0)
         t_recycle = _sync_time() - t_recycle_start
 
@@ -3052,10 +3030,6 @@ class Helico(nn.Module):
             # Dump final s/z only — intermediate cycles are ~64MB each;
             # final state is the signal the diffusion sees.
             _dump("02_post_recycle", {"s": s, "z": z})
-            import json as _json_mod
-            (_dump.dump_dir / "cycle_trace.json").write_text(
-                _json_mod.dumps(cycle_trace, indent=2)
-            )
 
         # Generate all samples in one batched call: expand (B, ...) → (B*n_samples, ...)
         def _expand(t):

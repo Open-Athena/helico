@@ -8,7 +8,7 @@ from pathlib import Path
 
 from helico.data import (
     PROCESSED_DIR,
-    PROTENIX_MSA_GAP,
+    AF3_MSA_GAP,
     CCDComponent,
     LazyHelicoDataset,
     StructureMetadata,
@@ -333,7 +333,7 @@ class TestNucleotideAndSymId:
         assert restype[1].item() == 24, f"U got {restype[1].item()}"
         assert restype[2].item() == 22, f"G got {restype[2].item()}"
         assert restype[3].item() == 23, f"C got {restype[3].item()}"
-        assert (restype != PROTENIX_MSA_GAP).all(), "No RNA token should be gap"
+        assert (restype != AF3_MSA_GAP).all(), "No RNA token should be gap"
 
     def test_dna_restype(self):
         """DNA tokens should get Protenix restype 26-29, not gap (31)."""
@@ -347,7 +347,7 @@ class TestNucleotideAndSymId:
         assert restype[1].item() == 29, f"DT got {restype[1].item()}"
         assert restype[2].item() == 27, f"DG got {restype[2].item()}"
         assert restype[3].item() == 28, f"DC got {restype[3].item()}"
-        assert (restype != PROTENIX_MSA_GAP).all(), "No DNA token should be gap"
+        assert (restype != AF3_MSA_GAP).all(), "No DNA token should be gap"
 
     def test_sym_id_homo_multimer(self):
         """Two identical protein chains should get distinct sym_id values."""
@@ -393,11 +393,11 @@ class TestNucleotideAndSymId:
         restype = features["restype"]
         # Ligand tokens must NOT be the MSA-gap sentinel (which would make the
         # restype embedding treat them as missing-alignment positions).
-        assert (restype[2:] != PROTENIX_MSA_GAP).all()
+        assert (restype[2:] != AF3_MSA_GAP).all()
         # Ligand tokens use UNK-protein (20) per Protenix convention.
         assert (restype[2:] == 20).all()
         # Protein tokens should not be gap
-        assert (restype[:2] != PROTENIX_MSA_GAP).all()
+        assert (restype[:2] != AF3_MSA_GAP).all()
 
     def test_protein_restype_unchanged(self):
         """Protein restype should still map correctly (regression test)."""

@@ -1000,10 +1000,10 @@ def infer_main():
         batch["cluster_deletion_mean"] = cluster_deletion_mean[:, :n_tok].unsqueeze(0)
         batch["has_msa"] = torch.ones(1)
     elif "msa_profile" not in batch:
-        from helico.data import PROTENIX_NUM_MSA_CLASSES
-        batch["msa_profile"] = torch.zeros(1, n_tok, PROTENIX_NUM_MSA_CLASSES)
+        from helico.data import AF3_NUM_MSA_CLASSES
+        batch["msa_profile"] = torch.zeros(1, n_tok, AF3_NUM_MSA_CLASSES)
         batch["cluster_msa"] = torch.zeros(1, 1, n_tok, dtype=torch.long)
-        batch["cluster_profile"] = torch.zeros(1, 1, n_tok, PROTENIX_NUM_MSA_CLASSES)
+        batch["cluster_profile"] = torch.zeros(1, 1, n_tok, AF3_NUM_MSA_CLASSES)
         batch["deletion_mean"] = torch.zeros(1, n_tok)
         batch["cluster_deletion_mean"] = torch.zeros(1, 1, n_tok)
         batch["has_msa"] = torch.zeros(1)

@@ -403,7 +403,7 @@ def predict_target(
     # it at positions 0..L_A, leaving other chains with zero MSA and possibly
     # overwriting non-protein tokens. That broke every multichain target.
     from helico.data import (
-        PROTENIX_NUM_MSA_CLASSES, RawChainMSA, compute_msa_features,
+        AF3_NUM_MSA_CLASSES, RawChainMSA, compute_msa_features,
         load_raw_msa_for_chain,
     )
 
@@ -521,7 +521,7 @@ def predict_target(
                                                       size=max_depth - 1,
                                                       replace=False)])
             n_rows = sel.size
-            msa_c = np.full((max_depth, L_c), PROTENIX_NUM_MSA_CLASSES - 1, dtype=np.int8)
+            msa_c = np.full((max_depth, L_c), AF3_NUM_MSA_CLASSES - 1, dtype=np.int8)
             del_c = np.zeros((max_depth, L_c), dtype=np.int16)
             msa_c[:n_rows] = r.msa[sel]
             del_c[:n_rows] = r.deletion_matrix[sel]
@@ -537,7 +537,7 @@ def predict_target(
 
         # Scatter into (max_depth, n_tok) with gap-fill for non-protein tokens.
         raw_msa = torch.full(
-            (max_depth, n_tok), PROTENIX_NUM_MSA_CLASSES - 1, dtype=torch.long,
+            (max_depth, n_tok), AF3_NUM_MSA_CLASSES - 1, dtype=torch.long,
         )
         raw_del = torch.zeros(max_depth, n_tok)
         tok_sel = torch.tensor(flat_tok, dtype=torch.long)
@@ -546,7 +546,7 @@ def predict_target(
         raw_del[:, tok_sel[:k]] = torch.tensor(merged_del[:, :k], dtype=torch.float32)
 
         # Profile / deletion_mean scattered per-chain (unchanged).
-        profile = torch.zeros(n_tok, PROTENIX_NUM_MSA_CLASSES)
+        profile = torch.zeros(n_tok, AF3_NUM_MSA_CLASSES)
         deletion_mean = torch.zeros(n_tok)
         for cid in ordered_chains:
             feat = chain_msa[cid]
@@ -564,9 +564,9 @@ def predict_target(
         batch["deletion_mean"] = deletion_mean.unsqueeze(0)
         batch["has_msa"] = torch.ones(1)
     else:
-        batch["msa_profile"] = torch.zeros(1, n_tok, PROTENIX_NUM_MSA_CLASSES)
+        batch["msa_profile"] = torch.zeros(1, n_tok, AF3_NUM_MSA_CLASSES)
         batch["msa"] = torch.full(
-            (1, 1, n_tok), PROTENIX_NUM_MSA_CLASSES - 1, dtype=torch.long,
+            (1, 1, n_tok), AF3_NUM_MSA_CLASSES - 1, dtype=torch.long,
         )
         batch["deletion_matrix"] = torch.zeros(1, 1, n_tok)
         batch["deletion_mean"] = torch.zeros(1, n_tok)
