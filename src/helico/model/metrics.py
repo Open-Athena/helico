@@ -155,13 +155,24 @@ def compute_clash(
     atom_mask: torch.Tensor,
     threshold: float = 1.1,
 ) -> torch.Tensor:
-    """Inter-chain atom-clash flag — AF3 SI §5.9.2.
+    """Inter-chain atom-clash flag — AF3 SI §5.9.2 / Protenix metrics/clash.py.
 
-    Returns 1 per batch element if any two atoms in different chains are
-    within ``threshold`` Å, else 0. For very large structures we
-    subsample 5000 atoms to bound memory; this makes the detection a
-    probabilistic lower bound but remains sufficient for ranking
-    purposes.
+    Per Protenix's `Clash.get_chain_pair_violations` (the source the
+    Protenix v1 ranking_score was trained against), a chain pair is
+    flagged as clashing iff EITHER:
+
+      * total clashing atom pairs > 100, OR
+      * (clashing atom pairs / min(N_atoms_chain_i, N_atoms_chain_j)) > 0.5
+
+    A sample is flagged as clashing iff ANY chain pair is. Earlier
+    Helico logic flagged "any single inter-chain atom-pair < 1.1Å"
+    which is far more sensitive — legitimate close interface contacts
+    trip the flag, giving good predictions the −100 ranking_score
+    penalty and demoting them below worse predictions.
+
+    Atoms are subsampled per chain (cap 5000 each) to bound memory on
+    very large structures; counts are scaled accordingly so the >100 /
+    >0.5 thresholds remain meaningful.
     """
     B = pred_coords.shape[0]
     device = pred_coords.device
@@ -173,16 +184,40 @@ def compute_clash(
         tok_ids = atom_to_token[b][mask]
         chain_ids = chain_indices[b][tok_ids]
 
-        n = coords.shape[0]
-        if n > 5000:
-            idx = torch.randperm(n, device=device)[:5000]
-            coords = coords[idx]
-            chain_ids = chain_ids[idx]
-
-        dists = torch.cdist(coords.float(), coords.float())
-        inter_chain = chain_ids.unsqueeze(0) != chain_ids.unsqueeze(1)
-        clash_mask = (dists < threshold) & inter_chain
-        has_clash[b] = clash_mask.any().float()
+        # Iterate over unique chain ids; for each pair compute the
+        # number of < threshold inter-atom pairs and apply the AF3 dual
+        # criterion (>100 OR >50%).
+        uniq = torch.unique(chain_ids)
+        if uniq.numel() < 2:
+            continue
+        sample_clash = False
+        for i_idx in range(uniq.numel()):
+            if sample_clash:
+                break
+            ci = uniq[i_idx]
+            mask_i = chain_ids == ci
+            coords_i = coords[mask_i].float()
+            n_i = coords_i.shape[0]
+            if n_i > 5000:
+                sub = torch.randperm(n_i, device=device)[:5000]
+                coords_i = coords_i[sub]
+                n_i = coords_i.shape[0]
+            for j_idx in range(i_idx + 1, uniq.numel()):
+                cj = uniq[j_idx]
+                mask_j = chain_ids == cj
+                coords_j = coords[mask_j].float()
+                n_j = coords_j.shape[0]
+                if n_j > 5000:
+                    sub = torch.randperm(n_j, device=device)[:5000]
+                    coords_j = coords_j[sub]
+                    n_j = coords_j.shape[0]
+                d = torch.cdist(coords_i, coords_j)
+                clash_count = int((d < threshold).sum().item())
+                rel = clash_count / max(min(n_i, n_j), 1)
+                if clash_count > 100 or rel > 0.5:
+                    sample_clash = True
+                    break
+        has_clash[b] = 1.0 if sample_clash else 0.0
 
     return has_clash
 

@@ -290,6 +290,11 @@ class Predictor:
 
                 rs_i = float(res_i["ranking_score"][0].item())
                 all_coords_np_i = res_i["all_coords"][0].cpu().float().numpy()
+                # Per-sample stats for downstream re-ranking
+                all_ranking_np_i = res_i["all_ranking_score"][0].cpu().float().numpy()
+                all_ptm_np_i = res_i["all_ptm"][0].cpu().float().numpy()
+                all_iptm_np_i = res_i["all_iptm"][0].cpu().float().numpy()
+                all_has_clash_np_i = res_i["all_has_clash"][0].cpu().float().numpy()
                 # coords_to_pdb does its own cpu().numpy() so safe to call
                 all_pdb_strs_i = [
                     coords_to_pdb(res_i["all_coords"][0, si],
@@ -310,6 +315,10 @@ class Predictor:
                     "top_coords_np": top_coords_np_i,
                     "top_plddt_np": top_plddt_np_i,
                     "top_pdb_str": top_pdb_str_i,
+                    "all_ranking_np": all_ranking_np_i,
+                    "all_ptm_np": all_ptm_np_i,
+                    "all_iptm_np": all_iptm_np_i,
+                    "all_has_clash_np": all_has_clash_np_i,
                 })
                 # Free this seed's GPU state before running the next seed.
                 del res_i, pred_result
@@ -330,6 +339,19 @@ class Predictor:
             all_pdb_strs = []
             for p in per_seed_compact:
                 all_pdb_strs.extend(p["all_pdb_strs"])
+            # Per-sample arrays so downstream code can re-rank.
+            all_ranking_np = np.concatenate(
+                [p["all_ranking_np"] for p in per_seed_compact], axis=0,
+            )
+            all_ptm_np = np.concatenate(
+                [p["all_ptm_np"] for p in per_seed_compact], axis=0,
+            )
+            all_iptm_np = np.concatenate(
+                [p["all_iptm_np"] for p in per_seed_compact], axis=0,
+            )
+            all_has_clash_np = np.concatenate(
+                [p["all_has_clash_np"] for p in per_seed_compact], axis=0,
+            )
 
             return {
                 "pdb_id": pdb_id,
@@ -342,6 +364,10 @@ class Predictor:
                 "all_coords": all_coords_np,
                 "all_pdb_strs": all_pdb_strs,
                 "ranking_score": best_rs,
+                "all_ranking_score": all_ranking_np,
+                "all_ptm": all_ptm_np,
+                "all_iptm": all_iptm_np,
+                "all_has_clash": all_has_clash_np,
                 "seeds": seeds,
                 "n_samples_per_seed": n_samples,
             }
@@ -618,8 +644,10 @@ def run_bench(
                     "pdb_str": result["pdb_str"],
                 }
                 # Persist per-sample arrays if the predictor returned them
-                # (for oracle-best-of-N diagnostics; see exp8).
-                for k in ("all_coords", "all_pdb_strs"):
+                # (for oracle-best-of-N diagnostics + offline re-ranking).
+                for k in ("all_coords", "all_pdb_strs",
+                          "all_ranking_score", "all_ptm", "all_iptm",
+                          "all_has_clash"):
                     if k in result:
                         cache_payload[k] = result[k]
                 with open(pred_cache_path, "wb") as f:

@@ -310,6 +310,12 @@ class Helico(nn.Module):
         best_ptm = None
         best_iptm = None
 
+        # Per-sample stats for downstream re-ranking from saved predictions.
+        all_ptm = torch.zeros(B, n_samples, device=device)
+        all_iptm = torch.zeros(B, n_samples, device=device)
+        all_ranking = torch.zeros(B, n_samples, device=device)
+        all_has_clash = torch.zeros(B, n_samples, device=device)
+
         chain_indices = batch.get("chain_indices")
 
         rep_atom_idx = batch.get("rep_atom_idx")
@@ -355,6 +361,11 @@ class Helico(nn.Module):
 
             ranking = compute_ranking_score(ptm, iptm, has_interface, has_clash=has_clash)
             conf_times.append(_sync_time() - t_ci)
+
+            all_ptm[:, si] = ptm
+            all_iptm[:, si] = iptm
+            all_ranking[:, si] = ranking
+            all_has_clash[:, si] = has_clash
 
             if best_ranking is None:
                 best_ranking = ranking.clone()
@@ -414,6 +425,12 @@ class Helico(nn.Module):
             "ptm": best_ptm,                      # (B,)
             "iptm": best_iptm,                    # (B,)
             "ranking_score": best_ranking,        # (B,)
+            # Per-sample arrays so downstream code can re-rank without
+            # re-running diffusion.
+            "all_ptm": all_ptm,                   # (B, n_samples)
+            "all_iptm": all_iptm,                 # (B, n_samples)
+            "all_ranking_score": all_ranking,     # (B, n_samples)
+            "all_has_clash": all_has_clash,       # (B, n_samples)
             # Raw logits for downstream use
             "pae_logits": best_confidence["pae_logits"],
             "plddt_logits": best_confidence["plddt_logits"],
