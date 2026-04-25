@@ -31,6 +31,16 @@ class HelicoConfig:
     n_msa_pw_heads: int = 8          # Alg 10 N_head
     msa_pw_head_dim: int = 8
 
+    # --- MSA subsampling (AF3 SI §3.5 / Protenix configs_data.py) ---
+    # Protenix clamps the per-cycle row sample to [min_size, cutoff] — at
+    # inference both sit at 2048, so the MSA module always sees ~2048 rows
+    # regardless of how deep the assembled MSA is. At training, min_size=1
+    # (fully random) and cutoff=2048 (hard cap). Row-0 (query) ordering is
+    # still randomized via randperm.
+    msa_sample_cutoff: int = 2048
+    msa_sample_min_train: int = 1
+    msa_sample_min_eval: int = 2048
+
     # --- Pairformer (AF3 Alg 17) ---
     n_pairformer_blocks: int = 48    # AF3 default: 48 blocks
     n_heads_pair: int = 4            # d_pair / 32

@@ -306,15 +306,28 @@ class MSAModule(nn.Module):
         for deep MSAs (>4k rows) to avoid OOM. Mathematically identical to
         the non-chunked path.
         """
-        # Random row subsample every call (AF3 SI §3.5)
+        # Row subsample every call, AF3 SI §3.5 / Protenix configs_data.py.
+        # Match Protenix: sample_size uniform in [min_size, N_msa], then clip
+        # to first `cutoff` indices of a random permutation. At inference
+        # min_size == cutoff == 2048 so the module sees exactly 2048 rows
+        # (or all of N_msa if shallower). At training, min_size=1 makes the
+        # range fully random — a regularizer — while cutoff still caps
+        # effective depth. m_raw is 4D (B, N_msa, N_tok, C), msa_mask is 3D
+        # (B, N_msa, N_tok) — both have the MSA axis at dim 1.
+        c = self.config
+        cutoff = c.msa_sample_cutoff
+        min_size = c.msa_sample_min_train if self.training else c.msa_sample_min_eval
         N_msa = m_raw.shape[-3]
         if N_msa > 1:
             device = m_raw.device
-            sample_size = torch.randint(low=1, high=N_msa + 1, size=(1,), device=device).item()
+            low = min(min_size, N_msa)
+            sample_size = torch.randint(low=low, high=N_msa + 1, size=(1,), device=device).item()
             indices = torch.randperm(n=N_msa, device=device)[:sample_size]
-            m_raw = m_raw.index_select(-3, indices)
+            if cutoff > 0:
+                indices = indices[:cutoff]
+            m_raw = m_raw.index_select(1, indices)
             if msa_mask is not None:
-                msa_mask = msa_mask.index_select(-3, indices)
+                msa_mask = msa_mask.index_select(1, indices)
 
         # Project MSA features + broadcast single input (AF3 SI Alg 8 line 2)
         m = self.linear_m(m_raw) + self.linear_s(s_inputs).unsqueeze(-3)

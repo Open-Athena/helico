@@ -105,7 +105,10 @@ CKPT_MOUNT = "/ckpts"
 
 @app.cls(image=predictor_image, gpu=GPU_TYPE, timeout=3600,
          max_containers=N_WORKERS,
-         volumes={DATA_CACHE: data_volume, CKPT_MOUNT: ckpt_volume})
+         volumes={DATA_CACHE: data_volume, CKPT_MOUNT: ckpt_volume},
+         # HF_TOKEN avoids anonymous rate-limits when 8 workers each pull the
+         # foldbench-msas-server tars on cold-start.
+         secrets=[modal.Secret.from_name("helico-hf-modal")])
 class Predictor:
     # "" / "protenix-v1" → the Protenix v1 checkpoint baked into the image.
     # Anything else is interpreted as a path on the helico-checkpoints
@@ -141,10 +144,12 @@ class Predictor:
 
         # Populate shared volume on first worker. Chunks + retries keep this
         # robust against transient HF CDN stalls (see image-build history).
+        # Bundled foldbench-msas/ is skipped — we use foldbench-msas-server/
+        # (paired ColabFold tars) via the --use-msa-server code path.
         chunks = [
             ["processed/ccd_cache.pkl"],
             ["benchmarks/FoldBench/targets/**", "benchmarks/FoldBench/examples/**"],
-            ["benchmarks/FoldBench/foldbench-msas/**"],
+            ["benchmarks/FoldBench/foldbench-msas-server/**/out.tar.gz"],
         ]
         for i, patterns in enumerate(chunks):
             for attempt in range(5):
@@ -207,7 +212,8 @@ class Predictor:
         # Load CCD
         self.ccd = parse_ccd()
 
-        # Ensure FoldBench data is available
+        # FoldBench dirs are already populated on the Volume by the chunk
+        # downloads above; this call is a no-op lookup.
         self.foldbench_dir = download_foldbench()
 
     @modal.method()
@@ -235,9 +241,11 @@ class Predictor:
         logger = logging.getLogger(__name__)
 
         gt_dir = self.foldbench_dir / "examples" / "ground_truths"
-        msa_dir = self.foldbench_dir / "foldbench-msas"
-        if not msa_dir.exists():
-            msa_dir = None
+        # Paired MSA path — uses foldbench-msas-server/ cache (pulled from HF)
+        # via the --use-msa-server code path. The ColabFold URL is only hit
+        # if the sequence tuple isn't cached.
+        server_cache_dir = self.foldbench_dir / "foldbench-msas-server"
+        msa_server_url = "https://api.colabfold.com"
 
         try:
             gt_path = _find_gt_path(gt_dir, pdb_id)
@@ -272,7 +280,8 @@ class Predictor:
                     target_name=pdb_id,
                     n_samples=n_samples,
                     max_tokens=max_tokens,
-                    msa_dir=msa_dir,
+                    msa_server_url=msa_server_url,
+                    msa_cache_dir=server_cache_dir,
                     n_cycles=n_cycles,
                 )
                 if pred_result is None:

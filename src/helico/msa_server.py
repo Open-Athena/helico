@@ -6,11 +6,13 @@ Boltz (https://github.com/jwohlwend/boltz).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import random
 import tarfile
 import time
+from pathlib import Path
 
 try:
     import requests
@@ -20,6 +22,58 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 DEFAULT_HOST = "https://api.colabfold.com"
+
+
+def fetch_paired_and_unpaired(
+    sequences: list[str],
+    cache_dir: Path,
+    host_url: str = DEFAULT_HOST,
+) -> tuple[list[str], list[str]]:
+    """Fetch both paired and non-paired MSAs for a set of chain sequences.
+
+    Uses a stable cache layout keyed by the hash of the sequence tuple so
+    repeated benchmark runs never re-query the server. The cache is
+    portable: the underlying ``out.tar.gz`` from the ColabFold service is
+    written into ``{cache_dir}/{query_hash}_{mode}/`` and can be
+    synced to a shared location (e.g. HuggingFace dataset).
+
+    Args:
+        sequences: Chain sequences in the order they appear in the target.
+            Passed through to ``run_mmseqs2`` — dedup and ordering inside.
+        cache_dir: Root directory for cached server responses.
+        host_url: MMseqs2 server URL.
+
+    Returns:
+        ``(paired_a3ms, nonpaired_a3ms)``, each a list of A3M-format
+        strings aligned to ``sequences``. Paired entries are row-aligned
+        across chains (row N = same species); non-paired are deep per-chain
+        MSAs.
+
+    For single-sequence queries paired and non-paired are identical
+    (ColabFold's pair endpoint reduces to the monomer case).
+    """
+    cache_dir = Path(cache_dir)
+    # Query hash is order-independent to allow cache sharing across runs that
+    # present the same chains in different orders. run_mmseqs2 dedups + maps
+    # back to input order, so order-independence is safe.
+    dedup_sorted = sorted(set(sequences))
+    query_hash = hashlib.sha256("\n".join(dedup_sorted).encode()).hexdigest()[:16]
+    subdir = cache_dir / query_hash
+    subdir.mkdir(parents=True, exist_ok=True)
+
+    nonpaired = run_mmseqs2(
+        sequences, result_dir=str(subdir / "np"),
+        use_pairing=False, host_url=host_url,
+    )
+    if len(sequences) > 1:
+        paired = run_mmseqs2(
+            sequences, result_dir=str(subdir / "p"),
+            use_pairing=True, host_url=host_url,
+        )
+    else:
+        # Pair endpoint requires ≥2 queries; for monomers just reuse non-paired.
+        paired = nonpaired
+    return paired, nonpaired
 
 
 def run_mmseqs2(

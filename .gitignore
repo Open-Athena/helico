@@ -1,5 +1,6 @@
 checkpoints
 workbench
+context
 
 # Helico experiment artifacts (see experiments/AGENTS.md)
 experiments/**/.cache/
