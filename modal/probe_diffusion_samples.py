@@ -70,13 +70,18 @@ def probe(crop_size: int = 384) -> list:
     _freeze_trunk(model)
 
     results = []
-    for n_d in (8, 16, 32, 64):
+    for n_d in (8, 16, 24, 32):
         # Override n_d on the model config — read by Helico.forward.
         cfg.n_diffusion_samples = n_d
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         try:
-            batch = make_synthetic_batch(n_tokens=crop_size, device="cuda")
+            # Real proteins have ~12 heavy atoms/token (vs default 5 in
+            # make_synthetic_batch). Probe with the realistic value so
+            # we don't undersize the activation footprint.
+            batch = make_synthetic_batch(
+                n_tokens=crop_size, n_atoms_per_token=12, device="cuda",
+            )
             with torch.amp.autocast("cuda", dtype=torch.bfloat16):
                 out = model(batch, compute_confidence=False)
             loss = out["diffusion_loss"]

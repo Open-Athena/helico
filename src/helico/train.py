@@ -272,6 +272,15 @@ def _eval_quality_metrics(outputs: dict, batch: dict) -> dict[str, float]:
         return out
     pred = pred.float()
     gt = gt.float()
+    # When n_diffusion_samples > 1 (gh#6), pred has shape (B*N_d, N, 3)
+    # while gt and atom_mask are still (B, ...). lddt_hard's cdist happens
+    # to broadcast the leading dim, but rmsd_after_kabsch's bmm does not
+    # ("Expected [B*N_d, N] but got [B, N]"). Slice pred down to the first
+    # denoising sample per batch entry — these are noisy single-batch
+    # snapshots anyway, so collapsing N_d → 1 is fine.
+    if pred.shape[0] != gt.shape[0]:
+        n_d = pred.shape[0] // gt.shape[0]
+        pred = pred[::n_d] if n_d > 1 else pred
     if not torch.isfinite(pred).all():
         logger.warning("eval_metrics: pred coords contain NaN/inf, skipping quality metrics")
         return out
