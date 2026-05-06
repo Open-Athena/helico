@@ -152,6 +152,39 @@ def get_lr(step: int, config: TrainConfig, stage_lr: float | None = None) -> flo
 # EMA
 # ============================================================================
 
+def _init_distogram_proj_from_z(model: nn.Module) -> None:
+    """gh#9: warm-start pair_proj_dist from pair_proj's relpe weights.
+
+    Without this, training a distogram-mode model from a legacy "z"-mode
+    checkpoint starts with random ``pair_proj_dist`` weights — the diffusion
+    module sees a totally fresh input distribution and explodes (grad norms
+    in the 30k-150k range observed during the gh#9 LR sweep).
+
+    Smart init:
+      - distogram-channel weights → 0 (distogram contributes nothing initially)
+      - relpe-channel weights → copy of legacy pair_proj's relpe weights
+        (relpe contribution matches z-mode at step 0)
+
+    The diffusion module then starts in a near-legacy state and gradually
+    learns to use the distogram signal as training proceeds. Idempotent if
+    pair_proj_dist already has nonzero distogram-channel weights from a
+    prior training run.
+    """
+    base = model.module if hasattr(model, "module") else model
+    cond = base.diffusion.conditioning
+    n_distogram_bins = base.config.n_distogram_bins
+    c_z = base.config.d_pair
+    with torch.no_grad():
+        cond.pair_proj_dist.weight.data[:, :n_distogram_bins].zero_()
+        cond.pair_proj_dist.weight.data[:, n_distogram_bins:].copy_(
+            cond.pair_proj.weight.data[:, c_z:]
+        )
+    logger.info(
+        f"_init_distogram_proj_from_z: zeroed {n_distogram_bins} distogram "
+        f"input channels; copied {c_z} relpe channels from pair_proj"
+    )
+
+
 def _freeze_trunk(model: nn.Module) -> tuple[int, int]:
     """Freeze every parameter outside ``model.diffusion`` (gh#9).
 
@@ -232,13 +265,28 @@ def load_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
     ema: EMAModel | None = None,
-) -> int:
+) -> tuple[int, list[str]]:
+    """Load a checkpoint. Returns ``(start_step, missing_keys)``.
+
+    ``missing_keys`` is the list of state-dict keys the model expected
+    that the checkpoint didn't have. Used by gh#9's smart-init: when
+    pair_proj_dist is in missing_keys, we know we're loading a legacy
+    "z"-mode seed and need to warm-start the new layers.
+    """
     state = torch.load(path, map_location="cpu", weights_only=False)
 
-    if isinstance(model, DDP):
-        model.module.load_state_dict(state["model_state_dict"])
-    else:
-        model.load_state_dict(state["model_state_dict"])
+    # strict=False so legacy "z"-mode checkpoints (which lack pair_proj_dist
+    # / pair_norm_dist) can be loaded into a distogram-mode model.
+    target = model.module if isinstance(model, DDP) else model
+    missing, unexpected = target.load_state_dict(
+        state["model_state_dict"], strict=False,
+    )
+    if missing:
+        logger.info(f"Loaded checkpoint with {len(missing)} missing keys "
+                    f"(first: {missing[:3]})")
+    if unexpected:
+        logger.warning(f"Loaded checkpoint had {len(unexpected)} unexpected keys "
+                       f"(first: {unexpected[:3]})")
 
     if optimizer is not None and "optimizer_state_dict" in state:
         optimizer.load_state_dict(state["optimizer_state_dict"])
@@ -251,7 +299,7 @@ def load_checkpoint(
 
     step = state.get("step", 0)
     logger.info(f"Loaded checkpoint from {path} at step {step}")
-    return step
+    return step, list(missing)
 
 
 # ============================================================================
@@ -460,8 +508,24 @@ def train(
 
     # Resume
     start_step = 0
+    missing_keys: list[str] = []
     if resume_path:
-        start_step = load_checkpoint(resume_path, model, optimizer, ema)
+        start_step, missing_keys = load_checkpoint(resume_path, model, optimizer, ema)
+
+    # gh#9 smart init: when starting a distogram-mode run from a legacy
+    # "z"-mode checkpoint (or freshly without resume), warm-start
+    # pair_proj_dist from pair_proj's relpe weights so training doesn't
+    # explode out of the gate. Skip when resuming a distogram run — the
+    # checkpoint already has the trained pair_proj_dist.
+    if config.diffusion_pair_source == "distogram_logits":
+        loaded_dist = (
+            resume_path is not None
+            and not any("pair_proj_dist" in k for k in missing_keys)
+        )
+        if not loaded_dist:
+            _init_distogram_proj_from_z(model)
+        else:
+            logger.info("pair_proj_dist loaded from checkpoint — skipping smart init")
 
     # W&B (rank 0 only). Enabled by HELICO_WANDB_ENABLE=1 in env.
     wandb_run = None
@@ -526,7 +590,11 @@ def train(
 
             # Update stage-specific settings
             stage = stage_config.get_stage(step)
-            current_lr = get_lr(step, config, stage.get("lr"))
+            # Always use config.lr (from CLI / TrainConfig) — the per-stage
+            # ``lr`` field in StageConfig is legacy and silently overrode
+            # the CLI before, making LR sweeps meaningless. Crop-size
+            # staging below is unaffected.
+            current_lr = get_lr(step, config)
             for param_group in optimizer.param_groups:
                 param_group["lr"] = current_lr
 
