@@ -512,20 +512,29 @@ def train(
     if resume_path:
         start_step, missing_keys = load_checkpoint(resume_path, model, optimizer, ema)
 
-    # gh#9 smart init: when starting a distogram-mode run from a legacy
-    # "z"-mode checkpoint (or freshly without resume), warm-start
-    # pair_proj_dist from pair_proj's relpe weights so training doesn't
-    # explode out of the gate. Skip when resuming a distogram run — the
-    # checkpoint already has the trained pair_proj_dist.
+    # gh#9 smart init: warm-start pair_proj_dist from pair_proj's relpe
+    # weights so training doesn't explode out of the gate. Triggers when:
+    #   1. No resume (fresh model — pair_proj_dist is at default-random init)
+    #   2. Resuming from a step-0 seed (the convention for warm-starts from
+    #      Protenix v1 / other "z"-mode source models — even if the seed
+    #      file contains a pair_proj_dist key, those weights were just
+    #      random-init from the seed-builder's model construction)
+    #   3. Resuming from a checkpoint that is genuinely missing
+    #      pair_proj_dist (legacy "z"-only checkpoint).
+    # Skipped only when resuming a distogram-mode run at step > 0.
     if config.diffusion_pair_source == "distogram_logits":
-        loaded_dist = (
-            resume_path is not None
-            and not any("pair_proj_dist" in k for k in missing_keys)
+        is_seed_or_missing = (
+            resume_path is None
+            or start_step == 0
+            or any("pair_proj_dist" in k for k in missing_keys)
         )
-        if not loaded_dist:
+        if is_seed_or_missing:
             _init_distogram_proj_from_z(model)
         else:
-            logger.info("pair_proj_dist loaded from checkpoint — skipping smart init")
+            logger.info(
+                f"pair_proj_dist already trained at step {start_step} — "
+                f"skipping smart init"
+            )
 
     # W&B (rank 0 only). Enabled by HELICO_WANDB_ENABLE=1 in env.
     wandb_run = None
