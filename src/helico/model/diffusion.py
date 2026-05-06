@@ -288,6 +288,7 @@ class AtomAttentionEncoder(nn.Module):
     def __init__(self, config, has_coords: bool = True,
                  c_token_override: int | None = None):
         super().__init__()
+        self.config = config
         c = config
         c_atom = c.c_atom
         c_atompair = c.c_atompair
@@ -309,7 +310,12 @@ class AtomAttentionEncoder(nn.Module):
             # Noisy coords projection
             self.noisy_pos_proj = linear_no_bias(3, c_atom)
 
-            # Trunk s,z injection (zero-init → no-op at start of training)
+            # Trunk s,z injection (zero-init → no-op at start of training).
+            # NOTE: in DiffusionModule, this z_trunk arg is actually z_cond
+            # (DiffusionConditioning output, always c_z), not the raw trunk
+            # pair tensor. So gh#9's distogram swap only needs to happen
+            # inside DiffusionConditioning — by the time z reaches the atom
+            # encoder it's already been projected back to c_z.
             self.trunk_s_norm = LayerNorm(c_s)
             self.trunk_s_proj = linear_no_bias(c_s, c_atom, zeros_init=True)
             self.trunk_z_norm = LayerNorm(c_z)
@@ -413,7 +419,9 @@ class AtomAttentionEncoder(nn.Module):
         p = p + self.pair_valid_proj(v_lm)
         p = p * pad_mask.unsqueeze(0).unsqueeze(-1).to(diff.dtype)
 
-        # 5. Trunk pair injection (windowed gather of token-pair z into atom-pair)
+        # 5. Trunk pair injection (windowed gather of token-pair z into atom-pair).
+        # ``z_trunk`` here is z_cond (post DiffusionConditioning, always c_z
+        # channels) — see note in __init__.
         if self.has_coords and z_trunk is not None:
             z_trunk_proj = self.trunk_z_proj(self.trunk_z_norm(z_trunk))
             z_windowed = self._gather_trunk_pair_windowed(
@@ -536,6 +544,7 @@ class DiffusionConditioning(nn.Module):
 
     def __init__(self, config):
         super().__init__()
+        self.config = config
         c = config
         c_s = c.d_single
         c_z = c.d_pair
@@ -546,6 +555,13 @@ class DiffusionConditioning(nn.Module):
         self.pair_proj = linear_no_bias(2 * c_z, c_z)
         self.pair_transition_1 = Transition(c_z, factor=2)
         self.pair_transition_2 = Transition(c_z, factor=2)
+
+        # gh#9: parallel pair input for diffusion_pair_source="distogram_logits".
+        # Input is concat(distogram_logits, relpe) — c.n_distogram_bins + c_z.
+        # Always present so checkpoints from "z" mode round-trip; only
+        # active when config.diffusion_pair_source != "z".
+        self.pair_norm_dist = nn.LayerNorm(c.n_distogram_bins + c_z)
+        self.pair_proj_dist = linear_no_bias(c.n_distogram_bins + c_z, c_z)
 
         # Single path
         self.fourier = FourierEmbedding(c.c_noise_embedding)
@@ -566,9 +582,16 @@ class DiffusionConditioning(nn.Module):
         """
         sigma_data = 16.0  # EDM constant (σ_data)
 
-        # Pair conditioning: concat(z_trunk, relpe) → norm → linear → 2x Transition
+        # Pair conditioning: concat(z_trunk, relpe) → norm → linear → 2x Transition.
+        # gh#9: in "distogram_logits" mode, z_trunk is actually the distogram
+        # logits (B, N, N, n_distogram_bins) and we use the parallel
+        # pair_proj_dist sized for that channel count.
         relpe = self.relpe(**relpe_feats)
-        z = self.pair_proj(self.pair_norm(torch.cat([z_trunk, relpe], dim=-1)))
+        z_in = torch.cat([z_trunk, relpe], dim=-1)
+        if self.config.diffusion_pair_source == "distogram_logits":
+            z = self.pair_proj_dist(self.pair_norm_dist(z_in))
+        else:
+            z = self.pair_proj(self.pair_norm(z_in))
         z = z + self.pair_transition_1(z)
         z = z + self.pair_transition_2(z)
 

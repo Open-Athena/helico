@@ -138,9 +138,24 @@ class Helico(nn.Module):
 
         results = {"single": s, "pair": z}
 
-        # 4. Diffusion — s_inputs is already (B, N_tok, 449 = d_single + 65)
+        # 4a. Distogram (always computed; needs to be available *before*
+        # diffusion when diffusion_pair_source == "distogram_logits" so the
+        # diffusion module can read from it. distogram_head is itself a
+        # single Linear (z → 64-bin logits, symmetrized).
+        distogram_logits = self.distogram_head(z)
+        results["distogram_logits"] = distogram_logits
+
+        # 4b. Diffusion — s_inputs is already (B, N_tok, 449 = d_single + 65)
         # n_diffusion_samples > 1 amortizes the expensive trunk over several
         # denoising passes per batch entry (gh#6). Outputs are (B*N_d, ...).
+        # gh#9: when configured, swap z_trunk for the trunk's distogram
+        # output (information bottleneck). detach() ensures the trunk
+        # graph isn't pinned through the diffusion backward when the
+        # trunk is frozen — saves activation memory.
+        if self.config.diffusion_pair_source == "distogram_logits":
+            z_for_diffusion = distogram_logits.detach()
+        else:
+            z_for_diffusion = z
         n_d = max(1, self.config.n_diffusion_samples)
         x_denoised, gt_coords, sigma = self.diffusion.forward_training(
             gt_coords=batch["atom_coords"],
@@ -150,7 +165,7 @@ class Helico(nn.Module):
             atom_to_token=batch["atom_to_token"],
             atom_mask=atom_mask,
             s_trunk=s,
-            z_trunk=z,
+            z_trunk=z_for_diffusion,
             s_inputs=s_inputs,
             relpe_feats=relpe_feats,
             n_samples=n_d,
@@ -162,10 +177,6 @@ class Helico(nn.Module):
         # match the expanded batch.
         atom_mask_d = atom_mask.repeat_interleave(n_d, dim=0) if n_d > 1 else atom_mask
         results["diffusion_loss"] = diffusion_loss(x_denoised, gt_coords, sigma, atom_mask_d)
-
-        # 5. Distogram (from trunk pair)
-        distogram_logits = self.distogram_head(z)
-        results["distogram_logits"] = distogram_logits
 
         # 6. Confidence head (uses pred_coords from diffusion). Use only
         # the first denoising sample per batch entry — the head expects
@@ -285,6 +296,13 @@ class Helico(nn.Module):
             return t.unsqueeze(1).expand(-1, n_samples, *[-1] * (t.dim() - 1)).reshape(B * n_samples, *t.shape[1:])
 
         ref_space_uid = batch.get("ref_space_uid")
+        # gh#9: same swap as in forward — at inference, when the diffusion
+        # module is configured to read from the distogram, run the head
+        # before sampling and feed those logits in place of z.
+        if self.config.diffusion_pair_source == "distogram_logits":
+            z_for_diffusion = self.distogram_head(z)
+        else:
+            z_for_diffusion = z
         t_diffusion_start = _sync_time()
         batched_coords = self.diffusion.sample(
             ref_pos=_expand(batch["ref_coords"]),
@@ -293,7 +311,7 @@ class Helico(nn.Module):
             atom_to_token=_expand(batch["atom_to_token"]),
             atom_mask=_expand(atom_mask),
             s_trunk=_expand(s),
-            z_trunk=_expand(z),
+            z_trunk=_expand(z_for_diffusion),
             s_inputs=_expand(s_inputs),
             relpe_feats={k: _expand(v) for k, v in relpe_feats.items()},
             ref_space_uid=_expand(ref_space_uid) if ref_space_uid is not None else None,

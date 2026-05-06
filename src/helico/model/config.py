@@ -77,6 +77,19 @@ class HelicoConfig:
     # (amortize the expensive trunk — AF3 SI §3.7.1 Fig 2c).
     n_diffusion_samples: int = 8
 
+    # --- Pair source for diffusion conditioning (gh#9) ---
+    # "z"               (default): use the trunk's final pair representation
+    #                              z_trunk : (B, N_tok, N_tok, d_pair)
+    # "distogram_logits": substitute the trunk's distogram-head output
+    #                     (B, N_tok, N_tok, n_distogram_bins). Forces an
+    #                     information bottleneck at the trunk → diffusion
+    #                     interface; intended for gh#9-style experiments
+    #                     where we freeze the trunk and only retrain the
+    #                     diffusion module from this lower-rank signal.
+    # The diffusion module gains a parallel set of input projections sized
+    # for the alternate channel count; only one path is active per forward.
+    diffusion_pair_source: str = "z"
+
     # --- Atom feature dims (from AF3 SI §2.8 Table 5) ---
     n_elements: int = UNK_ELEM_IDX + 1    # Number of element types + 1 UNK
     n_token_types: int = NUM_TOKEN_TYPES

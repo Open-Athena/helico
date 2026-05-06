@@ -97,6 +97,11 @@ class TrainConfig:
     # DDP
     distributed: bool = False
 
+    # gh#9: pair source for diffusion conditioning ("z" or "distogram_logits"),
+    # plus a flag to freeze the trunk so only the diffusion module trains.
+    diffusion_pair_source: str = "z"
+    freeze_trunk: bool = False
+
     def get_torch_dtype(self) -> torch.dtype:
         return {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[self.dtype]
 
@@ -146,6 +151,29 @@ def get_lr(step: int, config: TrainConfig, stage_lr: float | None = None) -> flo
 # ============================================================================
 # EMA
 # ============================================================================
+
+def _freeze_trunk(model: nn.Module) -> tuple[int, int]:
+    """Freeze every parameter outside ``model.diffusion`` (gh#9).
+
+    The convention here is "trunk" = everything except the diffusion module:
+    input embedder, trunk linears, MSA module, pairformer, distogram head,
+    confidence head, template embedder. The diffusion module's two new
+    distogram-input projections (``pair_proj_dist``, ``trunk_z_proj_dist``)
+    live under ``model.diffusion.*`` and stay trainable automatically.
+
+    Returns (n_frozen, n_trainable) parameter counts.
+    """
+    base = model.module if hasattr(model, "module") else model
+    n_frozen = n_trainable = 0
+    for name, param in base.named_parameters():
+        if name.startswith("diffusion."):
+            param.requires_grad = True
+            n_trainable += param.numel()
+        else:
+            param.requires_grad = False
+            n_frozen += param.numel()
+    return n_frozen, n_trainable
+
 
 class EMAModel:
     """Exponential Moving Average of model weights."""
@@ -390,6 +418,15 @@ def train(
 
     model = model.to(device)
 
+    # gh#9: freeze the trunk so only the diffusion module trains. Done
+    # before DDP wrapping so DDP sees the right requires_grad mask.
+    if config.freeze_trunk:
+        n_frozen, n_trainable = _freeze_trunk(model)
+        logger.info(
+            f"freeze_trunk=True: froze {n_frozen:,} params, "
+            f"{n_trainable:,} remain trainable"
+        )
+
     if config.distributed:
         # find_unused_parameters=True: conditionally-used sub-modules (e.g.
         # MSA paths when no MSA is present) don't receive gradients on
@@ -397,9 +434,9 @@ def train(
         # "Expected to have finished reduction" on step 1.
         model = DDP(model, device_ids=[device], find_unused_parameters=True)
 
-    # Optimizer
+    # Optimizer (skip frozen params so AdamW state doesn't grow uselessly).
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        [p for p in model.parameters() if p.requires_grad],
         lr=config.lr,
         weight_decay=config.weight_decay,
         betas=(0.9, 0.999),
@@ -741,6 +778,11 @@ def main():
     parser.add_argument("--n-diffusion-token-blocks", type=int, default=24, help="Number of diffusion token transformer blocks")
     parser.add_argument("--n-diffusion-samples", type=int, default=8,
                         help="Diffusion noise samples per trunk forward (gh#6). 1 = legacy.")
+    parser.add_argument("--diffusion-pair-source", type=str, default="z",
+                        choices=["z", "distogram_logits"],
+                        help="Pair conditioning source for the diffusion module (gh#9).")
+    parser.add_argument("--freeze-trunk", action="store_true",
+                        help="Freeze the trunk (gh#9). Only the diffusion module trains.")
     parser.add_argument("--crop-size", type=int, default=384, help="Initial crop size")
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size per GPU")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
@@ -798,12 +840,15 @@ def main():
         val_samples=args.val_samples,
         checkpoint_dir=args.checkpoint_dir,
         distributed=args.distributed,
+        diffusion_pair_source=args.diffusion_pair_source,
+        freeze_trunk=args.freeze_trunk,
     )
 
     model_config = HelicoConfig(
         n_pairformer_blocks=args.n_blocks,
         n_diffusion_token_blocks=args.n_diffusion_token_blocks,
         n_diffusion_samples=args.n_diffusion_samples,
+        diffusion_pair_source=args.diffusion_pair_source,
     )
 
     model = Helico(model_config)

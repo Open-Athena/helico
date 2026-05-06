@@ -13,6 +13,8 @@ Configure via env vars before `modal run`:
     HELICO_TRAIN_VAL_EVERY=0           # 0 disables; e.g. 500 runs val every 500 steps
     HELICO_TRAIN_VAL_SAMPLES=32
     HELICO_TRAIN_N_DIFFUSION_SAMPLES=8 # Diffusion noise samples per trunk forward (gh#6)
+    HELICO_TRAIN_DIFFUSION_PAIR_SOURCE=z   # "z" or "distogram_logits" (gh#9)
+    HELICO_TRAIN_FREEZE_TRUNK=0            # 1 = freeze trunk, train only diffusion (gh#9)
     HELICO_TRAIN_RESUME=               # /ckpts/<run>/step_<N>.pt to resume
     HELICO_TRAIN_PROTENIX_INIT=1       # warm-start from Protenix v1 weights
     HELICO_TRAIN_CUTOFF=2021-09-30     # train = release_date < this (AF3/Protenix/OF3 shared cutoff)
@@ -112,6 +114,8 @@ TRAIN_ARGS = {
     "val_every": _env_int("HELICO_TRAIN_VAL_EVERY", 0),
     "val_samples": _env_int("HELICO_TRAIN_VAL_SAMPLES", 32),
     "n_diffusion_samples": _env_int("HELICO_TRAIN_N_DIFFUSION_SAMPLES", 8),
+    "diffusion_pair_source": os.environ.get("HELICO_TRAIN_DIFFUSION_PAIR_SOURCE", "z"),
+    "freeze_trunk": os.environ.get("HELICO_TRAIN_FREEZE_TRUNK", "0") == "1",
     "resume_from": os.environ.get("HELICO_TRAIN_RESUME", ""),
     "protenix_init": os.environ.get("HELICO_TRAIN_PROTENIX_INIT", "1") == "1",
     "train_cutoff": os.environ.get("HELICO_TRAIN_CUTOFF", "2021-09-30"),
@@ -190,6 +194,7 @@ def train_remote(args: dict) -> dict:
         "--val-every", str(args["val_every"]),
         "--val-samples", str(args["val_samples"]),
         "--n-diffusion-samples", str(args["n_diffusion_samples"]),
+        "--diffusion-pair-source", args["diffusion_pair_source"],
         "--checkpoint-dir", str(run_ckpt_dir),
         "--train-cutoff", args["train_cutoff"],
         "--val-cutoff-start", args["val_cutoff_start"],
@@ -199,6 +204,8 @@ def train_remote(args: dict) -> dict:
         base_cli += ["--msa-dir", str(msa_dir)]
     if resume_from:
         base_cli += ["--resume", resume_from]
+    if args.get("freeze_trunk"):
+        base_cli += ["--freeze-trunk"]
 
     if n_gpus > 1:
         cmd = [
