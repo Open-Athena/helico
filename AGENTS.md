@@ -32,3 +32,20 @@ cuequivariance's hardcoded SDPA priority list. The patch silently did
 nothing because cuequivariance had already imported the function. The
 correct fix was to pad token sequences in `collate_fn` so cuDNN's
 flash-attn could compile a kernel.
+
+### W&B runs always go to `timodonnell/helico`
+
+All training runs must log to **`https://wandb.ai/timodonnell/helico`**
+(`WANDB_PROJECT=helico`, entity follows from the
+`helico-wandb-modal` Modal secret which is keyed to that account).
+
+The default in `modal/train.py` is `HELICO_TRAIN_WANDB_PROJECT=helico`,
+so launching with the standard env vars already routes correctly. Do
+**not** set `WANDB_PROJECT`, `WANDB_ENTITY`, or
+`HELICO_TRAIN_WANDB_PROJECT` to a different value when kicking off
+a run — keeping all runs in one project is what makes the leaderboard
+view (issue-tagged comparisons, x-axis sweeps) actually useful.
+
+If you need to scope a one-off experiment that shouldn't pollute the
+shared project, prefix the run name (`exp9-lrsweep-3e-4`,
+`debug-cuda-oom`) — don't fork the project.
