@@ -177,6 +177,12 @@ def train_remote(args: dict) -> dict:
     env["HELICO_WANDB_ENABLE"] = "1"
     # For cuEquivariance kernel caches.
     env["PYTHONUNBUFFERED"] = "1"
+    # Reduces CUDA allocator fragmentation — at large effective diffusion
+    # batches (gh#9 freeze_trunk + n_d=16+) we hit OOM on the largest val
+    # structures because PyTorch's default segmenting allocator can't
+    # rejoin freed segments. expandable_segments fixes that. See gh#9
+    # session 2026-05.
+    env.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 
     # Build the training command. Multi-GPU uses torchrun; single-GPU just calls
     # helico-train directly (no DDP init).
