@@ -14,7 +14,6 @@ _`gh issue list --label experiment` + each notebook's frontmatter._
 
 | Issue | Title | Branch | Notebook |
 |---|---|---|---|
-| [#9](https://github.com/Open-Athena/helico/issues/9) | exp: Train diffusion module to work from distogram rather than pair representation | `—` | _no notebook yet_ |
 | [#8](https://github.com/Open-Athena/helico/issues/8) | Triage antibody-antigen interface underperformance | `main` | [`exp8_ab_ag_triage`](https://github.com/Open-Athena/helico/blob/main/experiments/exp8_ab_ag_triage/README.md) |
 | [#7](https://github.com/Open-Athena/helico/issues/7) | exp: direct A/B of Helico vs upstream Protenix v1 on same 679 targets | `—` | _no notebook yet_ |
 | [#4](https://github.com/Open-Athena/helico/issues/4) | Baseline performance on Protenix v1 checkpoint | `main` | [`exp4_baseline_protenix_v1`](https://github.com/Open-Athena/helico/blob/main/experiments/exp4_baseline_protenix_v1/README.md) |
@@ -23,4 +22,5 @@ _`gh issue list --label experiment` + each notebook's frontmatter._
 
 | Issue | Title | Branch | Notebook |
 |---|---|---|---|
+| [#9](https://github.com/Open-Athena/helico/issues/9) | exp: Train diffusion module to work from distogram rather than pair representation | `—` | _no notebook yet_ |
 | [#5](https://github.com/Open-Athena/helico/issues/5) | exp: Fine tuning improves accuracy | `?` | [`exp5_v1-finetune-01`](https://github.com/Open-Athena/helico/blob/main/experiments/exp5_v1-finetune-01/README.md) |
