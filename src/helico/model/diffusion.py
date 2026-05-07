@@ -583,12 +583,12 @@ class DiffusionConditioning(nn.Module):
         sigma_data = 16.0  # EDM constant (σ_data)
 
         # Pair conditioning: concat(z_trunk, relpe) → norm → linear → 2x Transition.
-        # gh#9: in "distogram_logits" mode, z_trunk is actually the distogram
-        # logits (B, N, N, n_distogram_bins) and we use the parallel
-        # pair_proj_dist sized for that channel count.
+        # gh#9: in "distogram_logits" or "none" mode, z_trunk has shape
+        # (B, N, N, n_distogram_bins) and we route through pair_proj_dist;
+        # for "none" mode z_trunk is all zeros so only relpe contributes.
         relpe = self.relpe(**relpe_feats)
         z_in = torch.cat([z_trunk, relpe], dim=-1)
-        if self.config.diffusion_pair_source == "distogram_logits":
+        if self.config.diffusion_pair_source in ("distogram_logits", "none"):
             z = self.pair_proj_dist(self.pair_norm_dist(z_in))
         else:
             z = self.pair_proj(self.pair_norm(z_in))

@@ -522,7 +522,9 @@ def train(
     #   3. Resuming from a checkpoint that is genuinely missing
     #      pair_proj_dist (legacy "z"-only checkpoint).
     # Skipped only when resuming a distogram-mode run at step > 0.
-    if config.diffusion_pair_source == "distogram_logits":
+    # "none" mode also uses pair_proj_dist (with all-zero distogram input)
+    # so it benefits from the same smart init for the relpe channels.
+    if config.diffusion_pair_source in ("distogram_logits", "none"):
         is_seed_or_missing = (
             resume_path is None
             or start_step == 0
@@ -865,8 +867,9 @@ def main():
     parser.add_argument("--n-diffusion-samples", type=int, default=8,
                         help="Diffusion noise samples per trunk forward (gh#6). 1 = legacy.")
     parser.add_argument("--diffusion-pair-source", type=str, default="z",
-                        choices=["z", "distogram_logits"],
-                        help="Pair conditioning source for the diffusion module (gh#9).")
+                        choices=["z", "distogram_logits", "none"],
+                        help="Pair conditioning source for the diffusion module (gh#9). "
+                             "'none' = zero out the trunk's pair contribution (relpe-only baseline).")
     parser.add_argument("--freeze-trunk", action="store_true",
                         help="Freeze the trunk (gh#9). Only the diffusion module trains.")
     parser.add_argument("--crop-size", type=int, default=384, help="Initial crop size")

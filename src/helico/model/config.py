@@ -86,6 +86,14 @@ class HelicoConfig:
     #                     interface; intended for gh#9-style experiments
     #                     where we freeze the trunk and only retrain the
     #                     diffusion module from this lower-rank signal.
+    # "none"            : zero out the trunk's pair contribution entirely —
+    #                     the diffusion module sees only relpe (positional)
+    #                     info via its existing relpe path, no
+    #                     trunk-derived pair signal. Same architecture as
+    #                     "distogram_logits" (input dim n_distogram_bins
+    #                     + d_pair); zeros replace the distogram channels.
+    #                     gh#9 baseline — answers "is the diffusion module
+    #                     using the distogram at all?".
     # The diffusion module gains a parallel set of input projections sized
     # for the alternate channel count; only one path is active per forward.
     diffusion_pair_source: str = "z"

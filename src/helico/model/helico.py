@@ -154,6 +154,13 @@ class Helico(nn.Module):
         # trunk is frozen — saves activation memory.
         if self.config.diffusion_pair_source == "distogram_logits":
             z_for_diffusion = distogram_logits.detach()
+        elif self.config.diffusion_pair_source == "none":
+            # gh#9 baseline: zero out the trunk's pair contribution so the
+            # diffusion module sees only relpe. Reuses the distogram-mode
+            # input shape (B, N, N, n_distogram_bins) so DiffusionConditioning
+            # routes through pair_proj_dist; with all-zero distogram input the
+            # only nonzero signal is from relpe.
+            z_for_diffusion = torch.zeros_like(distogram_logits)
         else:
             z_for_diffusion = z
         n_d = max(1, self.config.n_diffusion_samples)
@@ -301,6 +308,10 @@ class Helico(nn.Module):
         # before sampling and feed those logits in place of z.
         if self.config.diffusion_pair_source == "distogram_logits":
             z_for_diffusion = self.distogram_head(z)
+        elif self.config.diffusion_pair_source == "none":
+            # gh#9 baseline — see Helico.forward note.
+            B, N, _, _ = z.shape
+            z_for_diffusion = z.new_zeros(B, N, N, self.config.n_distogram_bins)
         else:
             z_for_diffusion = z
         t_diffusion_start = _sync_time()
