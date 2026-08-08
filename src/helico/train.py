@@ -102,6 +102,16 @@ class TrainConfig:
     diffusion_pair_source: str = "z"
     freeze_trunk: bool = False
 
+    # Contact conditioning. `use_contacts` / `use_msa` are HelicoConfig fields
+    # mirrored here because asdict(TrainConfig) is what lands in the checkpoint
+    # and every loader rebuilds HelicoConfig from it by name.
+    use_contacts: bool = True
+    use_msa: bool = True
+    # How the 3-state contact matrix is masked/corrupted per example:
+    # "sampled" = random level each example (training), "oracle" = leave the
+    # ground-truth matrix untouched. Validation always pins fixed levels.
+    contact_conditioning: str = "sampled"
+
     def get_torch_dtype(self) -> torch.dtype:
         return {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[self.dtype]
 
@@ -364,6 +374,29 @@ def _eval_quality_metrics(outputs: dict, batch: dict) -> dict[str, float]:
     return out
 
 
+def _contact_conditioning_spec(config: TrainConfig) -> str | dict | None:
+    """Translate the TrainConfig knobs into a dataset conditioning spec."""
+    if not getattr(config, "use_contacts", True):
+        return None
+    if getattr(config, "contact_conditioning", "sampled") == "oracle":
+        return None
+    return "sampled"
+
+
+# Fixed contact-conditioning levels evaluated at validation. Pinned rather than
+# sampled so the numbers are comparable across steps and across runs — together
+# they trace the conditioning curve that is the headline result of the contact
+# work (see .agents/project/20260806_contact_conditioned_folding.md §8.1).
+# The config.val_samples budget is split across levels, so sweeping them costs
+# no more than single-level validation did.
+VAL_CONTACT_LEVELS: dict[str, dict] = {
+    "": {"mode": "full", "eps_fp": 0.0, "eps_fn": 0.0},       # perfect contacts
+    "@none": {"mode": "none"},                                 # ab initio
+    "@half": {"mode": "pair-subset", "reveal": 0.5, "eps_fp": 0.0, "eps_fn": 0.0},
+    "@noisy": {"mode": "full", "eps_fp": 0.2, "eps_fn": 0.2},  # realistic predictor
+}
+
+
 @torch.no_grad()
 def _run_validation(
     base_model: Helico,
@@ -372,13 +405,45 @@ def _run_validation(
     device: torch.device,
     dtype: torch.dtype,
 ) -> dict[str, float]:
-    """Run up to config.val_samples val batches. Returns mean metrics.
+    """Run validation, sweeping fixed contact-conditioning levels.
+
+    Metrics are suffixed by level (``val/lddt``, ``val/lddt@none``, …); the
+    unsuffixed keys are the perfect-contact level, so existing dashboards keep
+    working.
+    """
+    if not getattr(config, "use_contacts", True):
+        return _run_validation_pass(base_model, val_dataset, config, device, dtype,
+                                    config.val_samples, None, "")
+    levels = VAL_CONTACT_LEVELS
+    per_level = max(1, config.val_samples // len(levels))
+    result: dict[str, float] = {}
+    for suffix, spec in levels.items():
+        result.update(_run_validation_pass(
+            base_model, val_dataset, config, device, dtype, per_level, spec, suffix,
+        ))
+    return result
+
+
+@torch.no_grad()
+def _run_validation_pass(
+    base_model: Helico,
+    val_dataset: torch.utils.data.Dataset,
+    config: TrainConfig,
+    device: torch.device,
+    dtype: torch.dtype,
+    val_samples: int,
+    contact_spec: dict | None,
+    suffix: str,
+) -> dict[str, float]:
+    """Run up to val_samples val batches at one conditioning level.
 
     Uses an SDPA backend context that allows fallback to math attention —
     cuDNN flash-attn rejects some val structure shapes with "No valid
     execution plans built", which crashed the very first val sweep.
     """
     base_model.eval()
+    if contact_spec is not None and hasattr(val_dataset, "contact_conditioning"):
+        val_dataset.contact_conditioning = contact_spec
     try:
         loader = torch.utils.data.DataLoader(
             val_dataset,
@@ -397,7 +462,7 @@ def _run_validation(
         n_attempted = 0
         n_skipped = 0
         for i, batch in enumerate(loader):
-            if n_attempted >= config.val_samples:
+            if n_attempted >= val_samples:
                 break
             n_attempted += 1
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
@@ -438,9 +503,9 @@ def _run_validation(
                 if k in sums:
                     sums[k] += v
                     counts[k] += 1
-        result = {f"val/{k}": sums[k] / counts[k] for k in sums if counts[k] > 0}
-        result["val/n_attempted"] = float(n_attempted)
-        result["val/n_skipped"] = float(n_skipped)
+        result = {f"val/{k}{suffix}": sums[k] / counts[k] for k in sums if counts[k] > 0}
+        result[f"val/n_attempted{suffix}"] = float(n_attempted)
+        result[f"val/n_skipped{suffix}"] = float(n_skipped)
         return result
     finally:
         base_model.train()
@@ -559,6 +624,7 @@ def train(
             structures=train_data,
             crop_size=config.crop_size,
             msa_features=msa_features,
+            contact_conditioning=_contact_conditioning_spec(config),
         )
 
     sampler = DistributedSampler(dataset) if config.distributed else None
@@ -872,6 +938,15 @@ def main():
                              "'none' = zero out the trunk's pair contribution (relpe-only baseline).")
     parser.add_argument("--freeze-trunk", action="store_true",
                         help="Freeze the trunk (gh#9). Only the diffusion module trains.")
+    parser.add_argument("--no-contacts", action="store_true",
+                        help="Disable residue/residue contact conditioning.")
+    parser.add_argument("--no-msa", action="store_true",
+                        help="Run MSA-free. The MSA channels of s_inputs arrive zeroed, "
+                             "so the diffusion/atom modules stay warm-startable.")
+    parser.add_argument("--contact-conditioning", type=str, default="sampled",
+                        choices=["sampled", "oracle"],
+                        help="'sampled' masks and corrupts contacts per example (training); "
+                             "'oracle' passes the ground-truth matrix through untouched.")
     parser.add_argument("--crop-size", type=int, default=384, help="Initial crop size")
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size per GPU")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
@@ -931,6 +1006,9 @@ def main():
         distributed=args.distributed,
         diffusion_pair_source=args.diffusion_pair_source,
         freeze_trunk=args.freeze_trunk,
+        use_contacts=not args.no_contacts,
+        use_msa=not args.no_msa,
+        contact_conditioning=args.contact_conditioning,
     )
 
     model_config = HelicoConfig(
@@ -938,6 +1016,8 @@ def main():
         n_diffusion_token_blocks=args.n_diffusion_token_blocks,
         n_diffusion_samples=args.n_diffusion_samples,
         diffusion_pair_source=args.diffusion_pair_source,
+        use_contacts=not args.no_contacts,
+        use_msa=not args.no_msa,
     )
 
     model = Helico(model_config)
@@ -985,6 +1065,7 @@ def main():
             msa_tar_indices=msa_tar_indices,
             msa_dir=msa_dir,
             filter_fn=lambda m: m.release_date < train_cutoff if m.release_date else True,
+            contact_conditioning=_contact_conditioning_spec(train_config),
         )
         logger.info(f"Training dataset: {len(train_dataset)} structures (release_date < {train_cutoff})")
 
@@ -997,6 +1078,8 @@ def main():
                 msa_tar_indices=msa_tar_indices,
                 msa_dir=msa_dir,
                 filter_fn=lambda m: bool(m.release_date) and val_start <= m.release_date <= val_end,
+                # Overwritten per level by _run_validation; pinned, never sampled.
+                contact_conditioning=VAL_CONTACT_LEVELS[""],
             )
             logger.info(f"Validation dataset: {len(val_dataset)} structures "
                         f"({val_start} ≤ release_date ≤ {val_end})")

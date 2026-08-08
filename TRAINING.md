@@ -33,6 +33,13 @@ Processed data in `<data-dir>/processed/` (hosted on HuggingFace):
 > blew up preprocess workers to 200+ GB RSS on ribosomes/capsids. The loader
 > still accepts legacy dense pickles for backward compat.
 
+> **Note**: residue/residue contacts (`contact_edges` + `contact_eligible`) are
+> stored the same way, and densified to a 3-state `(N_tok, N_tok)` matrix
+> (unknown / no-contact / contact). Structures preprocessed before contacts
+> existed simply lack these fields and train with everything "unknown" — no
+> migration needed, but re-preprocessing is required to actually use contact
+> conditioning. See [Contact conditioning](#contact-conditioning).
+
 Raw data (not hosted on HuggingFace — download from PDB/OpenFold directly, see `LOG.md`):
 
 | File | Size | Description |
@@ -277,6 +284,10 @@ helico-train [OPTIONS]
 Model:
   --n-blocks N              Pairformer blocks (default: 48)
   --n-diffusion-token-blocks N    Diffusion transformer blocks (default: 24)
+  --no-contacts             Disable residue/residue contact conditioning
+  --no-msa                  Run MSA-free (MSA channels of s_inputs arrive zeroed)
+  --contact-conditioning M  'sampled' (default) masks + corrupts contacts per
+                            example; 'oracle' passes ground truth through
 
 Optimizer:
   --lr LR                   Base learning rate (default: 1e-3)
@@ -316,6 +327,108 @@ Protenix and OpenFold3-preview2 both reuse. Structures released in the
 `2021-09-30 → 2022-05-01` gap are in neither split (AF3's leakage-prevention
 design). Using the same cutoffs makes our metrics directly comparable to
 their published numbers.
+
+## Contact conditioning
+
+Helico can be conditioned on a token × token residue/residue contact matrix
+computed by [pyconfind](https://github.com/timodonnell/pyconfind) using
+[MarinFold](https://github.com/Open-Athena/MarinFold)'s `contacts-v1`
+parameters, so a MarinFold contact predictor can drive folding at inference
+time. Design notes and measurements:
+[`.agents/project/20260806_contact_conditioned_folding.md`](.agents/project/20260806_contact_conditioned_folding.md).
+
+The matrix has three states — **contact**, **no-contact**, and **unknown**. A
+pair is knowable only when pyconfind analysed both endpoints (protein residues;
+ligands, nucleotides and modified residues are always unknown) and the pair is
+either inter-chain or at least 6 apart in sequence. Both endpoints being
+knowable but no contact found is a real signal: measured over real structures,
+a contact means Cβ–Cβ < 13 Å and a no-contact means > 12 Å, so a fully
+specified matrix is close to a coarse distance matrix.
+
+### Conditioning levels
+
+Training samples a fresh conditioning level per example, so one model spans
+everything from ab initio to fully specified:
+
+| mode | p | behavior |
+|------|---|----------|
+| `none` | 0.15 | everything unknown — the MSA-free ab initio case |
+| `full` | 0.15 | every knowable pair specified |
+| `pair-subset` | 0.35 | reveal a fraction of *pairs*; the rest unknown |
+| `contact-list` | 0.35 | reveal a fraction of *contacts*; remaining knowable pairs become no-contact or unknown |
+
+`contact-list` is the mode that matches a real predictor: MarinFold emits a
+list of contacts and truncates it to a token budget, so an unlisted pair
+sometimes means "not a contact" and sometimes "didn't fit".
+
+Contacts are also **corrupted**, not just masked — false positives and false
+negatives are injected at up to 30% each, expressed relative to the number of
+revealed contacts. Masking alone would teach the model that every asserted
+contact is true, which is brittle exactly where it matters, since real
+predicted contacts have errors.
+
+### Validation
+
+Validation pins fixed levels rather than sampling, so numbers are comparable
+across steps and runs. Each is logged separately and together they trace the
+conditioning curve:
+
+| metric suffix | level |
+|---|---|
+| `val/lddt` | perfect contacts |
+| `val/lddt@none` | ab initio (no contacts) |
+| `val/lddt@half` | 50% of pairs revealed, clean |
+| `val/lddt@noisy` | all pairs revealed, 20% FP + 20% FN |
+
+The `--val-samples` budget is split across levels, so this costs no more than
+single-level validation.
+
+### Benchmarking with oracle contacts
+
+```bash
+helico-bench --checkpoint <ckpt> --oracle-contacts
+```
+
+or on Modal, `HELICO_BENCH_ORACLE_CONTACTS=1 modal run modal/bench.py`.
+
+> ⚠️ **This leaks the answer.** Contacts are derived from the ground-truth
+> structure, so the numbers measure how well the model *realizes* a structure
+> given that structure's own contact map — an upper bound on a
+> predicted-contact pipeline, not structure prediction. They are **not**
+> comparable to AF3/Protenix/FoldBench baselines and must always be reported as
+> "oracle contacts". The meaningful end-to-end number needs contacts from a
+> contact predictor.
+
+Without the flag, benchmark targets run with everything "unknown", i.e. ab
+initio — `tokenize_sequences` has no coordinates to derive contacts from.
+
+### Requirements: re-preprocessing
+
+Contacts are computed at preprocess time and stored in each structure pickle,
+so **using them requires re-preprocessing**. Structures processed before
+contacts existed load fine and train with everything "unknown" — no migration
+needed, but also no contact signal. Cost is ~1.6 ms per protein residue,
+roughly doubling the structures pass.
+
+On Modal, reusing the raw data already on the `helico-train-data` Volume:
+
+```bash
+HELICO_SKIP_DOWNLOAD=1 HELICO_STEP=structures HELICO_NO_SKIP_EXISTING=1 modal run modal/preprocess_on_modal.py
+```
+
+All three env vars matter:
+
+| var | why |
+|---|---|
+| `HELICO_SKIP_DOWNLOAD=1` | raw data is already on the Volume; skips ~220 GB of re-download |
+| `HELICO_STEP=structures` | reuses the CCD cache and MSA tar indices instead of re-parsing 473 MB of CCD and re-indexing 219 GB of tars |
+| `HELICO_NO_SKIP_EXISTING=1` | **required.** `skip_existing` defaults to true, so an already-populated `structures/` dir makes the whole step a silent no-op |
+
+Locally the equivalent is:
+
+```bash
+helico-preprocess structures $RAW $PROCESSED --no-skip-existing --n-workers 32
+```
 
 ## Training on Modal
 

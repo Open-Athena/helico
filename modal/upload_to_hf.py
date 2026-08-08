@@ -125,6 +125,10 @@ def _build_source_json(
             "command": "helico-preprocess all <raw> <processed>",
             "max_resolution": 9.0,
             "token_bonds_format": "sparse",  # sparse since 16c904d
+            # Residue/residue contacts (pyconfind, MarinFold contacts-v1
+            # parameters). Structures preprocessed before this was added carry
+            # no contact fields and train with everything "unknown".
+            "contacts": "pyconfind-v1",
         },
         "fingerprints": {
             "ccd_cache.pkl": _file_sha256(processed_dir / "ccd_cache.pkl"),

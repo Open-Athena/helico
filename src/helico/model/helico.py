@@ -42,7 +42,9 @@ from .features import (
     build_relpe_feats,
     build_s_inputs,
     build_msa_raw,
+    build_contact_onehot,
 )
+from helico.data import NUM_CONTACT_STATES
 
 class Helico(nn.Module):
     """Complete Helico model."""
@@ -62,6 +64,12 @@ class Helico(nn.Module):
         self.linear_zinit2 = linear_no_bias(config.d_single, config.d_pair)        # 384->128
         self.trunk_relpe = RelativePositionEncoding(r_max=32, s_max=2, c_z=config.d_pair)
         self.linear_token_bond = linear_no_bias(1, config.d_pair)                  # 1->128
+        # Three-state contact matrix -> pair. Zero-init makes this an exact
+        # no-op at step 0, so a checkpoint trained without contacts loads and
+        # behaves identically until the projection learns.
+        self.linear_contact = linear_no_bias(
+            NUM_CONTACT_STATES, config.d_pair, zeros_init=True
+        )                                                                          # 3->128
 
         # Recycling (zero-initialized)
         self.layernorm_s = LayerNorm(config.d_single)
@@ -119,8 +127,16 @@ class Helico(nn.Module):
         if token_bonds is not None:
             z_init = z_init + self.linear_token_bond(token_bonds.unsqueeze(-1).to(z_init.dtype))
 
+        # Residue/residue contacts. Injected into z_init, which is re-added at
+        # the top of every recycling iteration, so the signal reaches the
+        # template, MSA, Pairformer, distogram, diffusion and confidence paths.
+        if self.config.use_contacts:
+            contact_onehot = build_contact_onehot(batch, z_init.dtype)
+            if contact_onehot is not None:
+                z_init = z_init + self.linear_contact(contact_onehot)
+
         # 3. Recycling loop
-        msa_raw, msa_mask = build_msa_raw(batch)
+        msa_raw, msa_mask = build_msa_raw(batch) if self.config.use_msa else (None, None)
         n_cycles = self.config.n_cycles
 
         s = torch.zeros_like(s_init)
@@ -129,10 +145,11 @@ class Helico(nn.Module):
         for cycle in range(n_cycles):
             z = z_init + self.linear_z_cycle(self.layernorm_z_cycle(z))
             z = z + self.template_embedder(batch, z)
-            z = self.msa_module(
-                msa_raw, z, s_inputs, msa_mask, pair_mask,
-                msa_chunk_size=(None if self.training else 2048),
-            )
+            if self.config.use_msa:
+                z = self.msa_module(
+                    msa_raw, z, s_inputs, msa_mask, pair_mask,
+                    msa_chunk_size=(None if self.training else 2048),
+                )
             s = s_init + self.linear_s(self.layernorm_s(s))
             s, z = self.pairformer(s, z, mask=mask, pair_mask=pair_mask)
 
@@ -275,10 +292,14 @@ class Helico(nn.Module):
         token_bonds = batch.get("token_bonds")
         if token_bonds is not None:
             z_init = z_init + self.linear_token_bond(token_bonds.unsqueeze(-1).to(z_init.dtype))
+        if self.config.use_contacts:
+            contact_onehot = build_contact_onehot(batch, z_init.dtype)
+            if contact_onehot is not None:
+                z_init = z_init + self.linear_contact(contact_onehot)
         t_embed = _sync_time() - t0
 
         # Recycling
-        msa_raw, msa_mask = build_msa_raw(batch)
+        msa_raw, msa_mask = build_msa_raw(batch) if self.config.use_msa else (None, None)
         s = torch.zeros_like(s_init)
         z = torch.zeros_like(z_init)
         actual_cycles = n_cycles if n_cycles is not None else self.config.n_cycles
@@ -289,10 +310,11 @@ class Helico(nn.Module):
             t_c0 = _sync_time()
             z = z_init + self.linear_z_cycle(self.layernorm_z_cycle(z))
             z = z + self.template_embedder(batch, z)
-            z = self.msa_module(
-                msa_raw, z, s_inputs, msa_mask, pair_mask,
-                msa_chunk_size=(None if self.training else 2048),
-            )
+            if self.config.use_msa:
+                z = self.msa_module(
+                    msa_raw, z, s_inputs, msa_mask, pair_mask,
+                    msa_chunk_size=(None if self.training else 2048),
+                )
             s = s_init + self.linear_s(self.layernorm_s(s))
             s, z = self.pairformer(s, z, mask=mask, pair_mask=pair_mask)
             cycle_times.append(_sync_time() - t_c0)

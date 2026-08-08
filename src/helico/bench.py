@@ -30,6 +30,7 @@ from helico.data import (
     parse_ccd,
     parse_mmcif,
     tokenize_sequences,
+    tokenize_structure,
 )
 from helico.model import Helico, HelicoConfig
 from helico.train import coords_to_pdb, run_inference
@@ -363,6 +364,117 @@ def structure_to_chains(structure: Structure) -> list[dict]:
     return chains
 
 
+# Loaded lazily on first oracle-contact use; the parse costs ~3.4 s.
+_ROTAMER_LIBRARY = None
+
+
+def oracle_contact_state(
+    gt_structure: Structure,
+    predicted: TokenizedStructure,
+    rotamer_library,
+) -> torch.Tensor | None:
+    """Contacts from the ground-truth structure, indexed by predicted-token.
+
+    **This leaks the answer.** It measures how well the model *realizes* a
+    structure given that structure's own contact map, which is an upper bound
+    on a predicted-contact pipeline — not structure prediction. Any metric
+    computed with it must be reported as "oracle contacts" and is not
+    comparable to AF3/Protenix numbers. See
+    ``.agents/project/20260806_contact_conditioned_folding.md`` §8.3.
+
+    Index mapping: ``structure_to_chains`` derives each input sequence from the
+    ground-truth structure's *resolved* residues in order, so the k-th protein
+    residue of chain C in the predicted tokenization is the k-th protein
+    residue of chain C in the ground truth. That positional correspondence is
+    exact by construction — no sequence alignment needed — but it is checked
+    per position and the whole thing is abandoned if identity is poor, since a
+    silent misalignment would scramble every contact.
+
+    Returns the ``(N_tok, N_tok)`` 3-state matrix, or None if contacts could
+    not be computed.
+    """
+    from helico.contacts import compute_contacts
+    from helico.data import CONTACT_UNKNOWN
+
+    try:
+        gt_tokenized = tokenize_structure(gt_structure, ccd=None)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"oracle contacts: ground-truth tokenization failed: {e}")
+        return None
+
+    def _protein_residues_by_chain(tokens):
+        """chain_id -> [token_idx] for standard protein residue tokens, in order."""
+        out: dict[str, list[int]] = {}
+        for ti, tok in enumerate(tokens):
+            if tok.token_type <= 20:
+                out.setdefault(tok.chain_idx, []).append(ti)
+        return out
+
+    gt_by_chain = _protein_residues_by_chain(gt_tokenized.tokens)
+    pred_by_chain = _protein_residues_by_chain(predicted.tokens)
+
+    # Chains are emitted in the same order on both sides, so pair them by the
+    # sorted chain_idx sequence rather than by id (the predicted tokenization
+    # renumbers chains after crystallization aids are dropped).
+    gt_chains = sorted(gt_by_chain)
+    pred_chains = sorted(pred_by_chain)
+    if len(gt_chains) != len(pred_chains):
+        logger.warning(
+            f"oracle contacts: chain-count mismatch "
+            f"(gt {len(gt_chains)} vs predicted {len(pred_chains)}); skipping"
+        )
+        return None
+
+    gt_to_pred: dict[int, int] = {}
+    matched = total = 0
+    for gt_c, pred_c in zip(gt_chains, pred_chains):
+        gt_toks, pred_toks = gt_by_chain[gt_c], pred_by_chain[pred_c]
+        for gt_ti, pred_ti in zip(gt_toks, pred_toks):
+            gt_to_pred[gt_ti] = pred_ti
+            total += 1
+            if gt_tokenized.tokens[gt_ti].res_name == predicted.tokens[pred_ti].res_name:
+                matched += 1
+
+    identity = matched / total if total else 0.0
+    if identity < 0.9:
+        logger.warning(
+            f"oracle contacts: residue identity {identity:.2f} across {total} mapped "
+            f"positions is too low to trust; skipping"
+        )
+        return None
+
+    try:
+        edges, eligible = compute_contacts(gt_tokenized.tokens, rotamer_library)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"oracle contacts: pyconfind failed: {e}")
+        return None
+
+    # Re-index onto the predicted tokenization, then densify with the same
+    # rules to_features() uses so the matrix means exactly what training saw.
+    pred_eligible = [gt_to_pred[t] for t in eligible if t in gt_to_pred]
+    pred_edges = [
+        (min(gt_to_pred[i], gt_to_pred[j]), max(gt_to_pred[i], gt_to_pred[j]))
+        for i, j in edges
+        if i in gt_to_pred and j in gt_to_pred
+    ]
+    if not pred_eligible:
+        return None
+
+    n_tok = predicted.n_tokens
+    chain_indices = torch.tensor([t.chain_idx for t in predicted.tokens], dtype=torch.long)
+    res_indices = torch.tensor([t.res_idx for t in predicted.tokens], dtype=torch.long)
+    state = TokenizedStructure._build_contact_state(
+        n_tok, chain_indices, res_indices, pred_eligible, pred_edges
+    )
+    n_contacts = int((state == 2).sum()) // 2
+    logger.info(
+        f"oracle contacts: {n_contacts} contacts over {len(pred_eligible)} residues "
+        f"({n_contacts / max(len(pred_eligible), 1):.2f}/res), identity {identity:.3f}"
+    )
+    _ = CONTACT_UNKNOWN  # documented state constant; matrix defaults to it
+    return state
+
+
 # ============================================================================
 # Prediction pipeline
 # ============================================================================
@@ -383,12 +495,16 @@ def predict_target(
     msa_cache_dir: Path | None = None,
     n_cycles: int | None = None,
     verbose_timing: bool = False,
+    oracle_contacts_from: Structure | None = None,
 ) -> tuple[TokenizedStructure, dict[str, torch.Tensor]] | None:
     """Run Helico inference on a target defined by chain dicts.
 
     Args:
         msa_features: Pre-computed MSA features. When provided, skips loading
             from msa_dir / msa_server / tar. Use for tests or when MSA is already available.
+        oracle_contacts_from: Ground-truth Structure to derive contacts from.
+            **Leaks the answer** — see :func:`oracle_contact_state`. Without it
+            the model runs with everything "unknown", i.e. ab initio.
 
     Mirrors infer_main() logic from train.py.
     Returns (tokenized, results_dict) or None if target exceeds max_tokens.
@@ -404,6 +520,19 @@ def predict_target(
         return None
 
     features = tokenized.to_features()
+
+    # Oracle contacts, when requested. tokenize_sequences has no ground-truth
+    # coordinates, so contacts must come from the reference structure and be
+    # re-indexed onto these tokens.
+    if oracle_contacts_from is not None:
+        from helico.contacts import load_rotamer_library
+
+        global _ROTAMER_LIBRARY
+        if _ROTAMER_LIBRARY is None:
+            _ROTAMER_LIBRARY = load_rotamer_library()
+        state = oracle_contact_state(oracle_contacts_from, tokenized, _ROTAMER_LIBRARY)
+        if state is not None:
+            features["contact_state"] = state
 
     # Add batch dimension
     batch = {k: v.unsqueeze(0) if isinstance(v, torch.Tensor) else v for k, v in features.items()}
@@ -1102,6 +1231,7 @@ def run_benchmark(
     n_cycles: int | None = None,
     cutoff_date: str | None = None,
     pdb_ids: list[str] | None = None,
+    oracle_contacts: bool = False,
 ):
     """Run the full FoldBench benchmark.
 
@@ -1236,6 +1366,7 @@ def run_benchmark(
                             msa_server_url=msa_server_url,
                             msa_cache_dir=foldbench_dir / "foldbench-msas-server",
                             n_cycles=n_cycles,
+                            oracle_contacts_from=gt_for_chains if oracle_contacts else None,
                         )
                         if pred_result is None:
                             too_large = True
@@ -1429,6 +1560,12 @@ def main():
                         help="Only include targets released after this date, YYYY-MM-DD (default: 2024-01-01)")
     parser.add_argument("--pdb-ids", type=str, default=None,
                         help="Comma-separated pdb_ids to restrict to (for debugging)")
+    parser.add_argument("--oracle-contacts", action="store_true",
+                        help="Condition on contacts derived from the ground-truth "
+                             "structure. THIS LEAKS THE ANSWER: results measure "
+                             "structure realization given the true contact map, not "
+                             "structure prediction, and are NOT comparable to "
+                             "AF3/Protenix numbers. Report them as 'oracle contacts'.")
     args = parser.parse_args()
 
     if args.checkpoint is None and args.protenix is None:
@@ -1510,6 +1647,7 @@ def main():
         n_cycles=args.n_cycles,
         cutoff_date=args.cutoff_date,
         pdb_ids=[p.strip() for p in args.pdb_ids.split(",")] if args.pdb_ids else None,
+        oracle_contacts=args.oracle_contacts,
     )
 
 

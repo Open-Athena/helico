@@ -6,13 +6,39 @@ preprocesses on a beefy container, writes directly to the helico-train-data
 Volume. Total runtime target: ~1-1.5h vs 11h local→Modal upload.
 
 Usage:
-    modal run modal/preprocess_on_modal.py
+    modal run --detach modal/preprocess_on_modal.py
+
+**Use --detach.** A plain `modal run` creates an *ephemeral* app tied to the
+client process: if the terminal (or agent session) that launched it exits, the
+app is torn down and the remaining work is lost. This is a multi-hour job, so
+it needs to outlive its launcher. A 2026-08-06 run was killed at ~95% this way.
+
+Volume writes are flushed as they happen rather than only at the explicit
+`data_volume.commit()`, so an interrupted run leaves the pickles it already
+wrote intact — but `build_manifest` never runs, so `manifest.json` keeps its
+previous (still valid) contents and the un-reached structures keep their old
+pickles.
 
 Env vars:
     HELICO_SKIP_DOWNLOAD=1   # skip the raw-data download step (reuse existing /raw)
     HELICO_SKIP_PREPROCESS=1 # skip the preprocess step (download-only)
     HELICO_MAX_RES=9.0       # resolution cutoff passed to preprocess
     HELICO_N_WORKERS=32      # override preprocess worker count
+    HELICO_NO_SKIP_EXISTING=1  # reprocess structures that already have a pickle.
+                               # REQUIRED after a schema change (e.g. adding
+                               # residue/residue contacts) — otherwise an
+                               # already-populated structures/ dir makes the
+                               # whole step a silent no-op.
+    HELICO_REQUIRE_CONTACTS=1  # skip a structure only if its pickle already has
+                               # contacts. Makes a contacts migration resumable:
+                               # re-running processes only what is still missing.
+    HELICO_STEP=all          # "all" or "structures". Use "structures" to redo
+                             # only the tokenize+pickle+manifest step, reusing
+                             # the existing CCD cache and MSA tar indices.
+
+Re-preprocess after a schema change, reusing raw data already on the Volume:
+    HELICO_SKIP_DOWNLOAD=1 HELICO_STEP=structures HELICO_NO_SKIP_EXISTING=1 \
+        modal run modal/preprocess_on_modal.py
 """
 
 import os
@@ -36,6 +62,14 @@ image = (
         "torch>=2.10,<2.11",  # see gh#3
         "huggingface_hub>=0.20",
         "tqdm",
+        "pyconfind>=0.6",  # residue/residue contacts
+    )
+    # Warm the rotamer-library cache at build time. Otherwise the first worker
+    # to need it downloads from GitHub mid-run, which is both a failure mode
+    # hours into a long job and a race across concurrent workers.
+    .run_commands(
+        "python -c 'from pyconfind import cached_rotamer_library;"
+        " print(cached_rotamer_library())'"
     )
     .add_local_dir(str(ROOT / "src"), remote_path="/root/helico/src")
     .add_local_file(str(ROOT / "pyproject.toml"), remote_path="/root/helico/pyproject.toml")
@@ -81,7 +115,15 @@ def _run(cmd: list[str] | str, cwd: str | None = None, env: dict | None = None) 
     volumes={DATA_ROOT: data_volume},
     ephemeral_disk=600 * 1024,  # Modal min is 512 GiB
 )
-def run_remote(skip_download: bool, skip_preprocess: bool, max_res: float, n_workers: int) -> dict:
+def run_remote(
+    skip_download: bool,
+    skip_preprocess: bool,
+    max_res: float,
+    n_workers: int,
+    no_skip_existing: bool = False,
+    step: str = "all",
+    require_contacts: bool = False,
+) -> dict:
     """Download raw data into the Volume and run helico-preprocess all."""
     os.makedirs(RAW_DIR, exist_ok=True)
     os.makedirs(PROCESSED_DIR, exist_ok=True)
@@ -117,11 +159,19 @@ def run_remote(skip_download: bool, skip_preprocess: bool, max_res: float, n_wor
 
     # Run preprocess. The data.py fix from commit 16c904d stores token_bonds
     # sparse, so worker RSS stays bounded.
+    # "structures" reruns only the tokenize+pickle+manifest step, reusing the
+    # existing ccd_cache.pkl and MSA tar indices. That is what a schema change
+    # like adding contacts needs — "all" would additionally re-parse the 473 MB
+    # CCD and re-index 219 GB of MSA tars for no benefit.
     cmd = [
-        "helico-preprocess", "all", RAW_DIR, PROCESSED_DIR,
+        "helico-preprocess", step, RAW_DIR, PROCESSED_DIR,
         "--max-resolution", str(max_res),
         "--n-workers", str(n_workers),
     ]
+    if no_skip_existing:
+        cmd.append("--no-skip-existing")
+    if require_contacts:
+        cmd.append("--require-contacts")
     _run(cmd)
     data_volume.commit()
     print("[preprocess] committed volume")
@@ -144,5 +194,11 @@ def main():
     skip_preprocess = os.environ.get("HELICO_SKIP_PREPROCESS") == "1"
     max_res = float(os.environ.get("HELICO_MAX_RES", "9.0"))
     n_workers = int(os.environ.get("HELICO_N_WORKERS", "32"))
-    result = run_remote.remote(skip_download, skip_preprocess, max_res, n_workers)
+    no_skip_existing = os.environ.get("HELICO_NO_SKIP_EXISTING") == "1"
+    step = os.environ.get("HELICO_STEP", "all")
+    require_contacts = os.environ.get("HELICO_REQUIRE_CONTACTS") == "1"
+    result = run_remote.remote(
+        skip_download, skip_preprocess, max_res, n_workers, no_skip_existing,
+        step, require_contacts,
+    )
     print(result)

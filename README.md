@@ -95,6 +95,23 @@ HELICO_TRAIN_GPU=H100:1 HELICO_TRAIN_MAX_STEPS=500 HELICO_TRAIN_CROP=256 \
     HELICO_TRAIN_RUN_NAME=proof-v1 modal run modal/train.py
 ```
 
+### Contact conditioning
+
+Helico can fold from a residue/residue contact matrix
+([pyconfind](https://github.com/timodonnell/pyconfind), using
+[MarinFold](https://github.com/Open-Athena/MarinFold) `contacts-v1`
+parameters) instead of MSAs, so a MarinFold contact predictor can drive it.
+The matrix is three-state — contact / no-contact / unknown — and training
+samples a conditioning level per example, spanning ab initio to fully
+specified. See [Contact conditioning](TRAINING.md#contact-conditioning) and the
+design doc at
+[`.agents/project/20260806_contact_conditioned_folding.md`](.agents/project/20260806_contact_conditioned_folding.md).
+
+```bash
+HELICO_TRAIN_N_BLOCKS=8 HELICO_TRAIN_NO_MSA=1 \
+    HELICO_TRAIN_RUN_NAME=contacts-depth8 modal run modal/train.py
+```
+
 ## Inference
 
 Helico supports three input modes for inference: protein sequences, YAML input files, and mmCIF structures.

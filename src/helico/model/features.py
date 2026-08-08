@@ -25,6 +25,7 @@ Feature-naming crosswalk
   atom_name_chars    →  f^ref_atom_name_chars
   ref_charge         →  f^ref_charge (arcsinh-transformed)
   atom_mask          →  f^ref_mask
+  contact_state      →  3-state residue/residue contacts (Helico-specific)
 """
 
 from __future__ import annotations
@@ -92,6 +93,21 @@ def build_relpe_feats(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]
         "entity_id": batch["entity_id"],
         "sym_id": batch["sym_id"],
     }
+
+
+def build_contact_onehot(
+    batch: dict[str, torch.Tensor],
+    dtype: torch.dtype,
+) -> torch.Tensor | None:
+    """One-hot the 3-state contact matrix, or ``None`` when it is absent.
+
+    ``contact_state`` is ``(B, N, N)`` uint8 with 0=unknown, 1=no-contact,
+    2=contact (``helico.data.CONTACT_*``). Returns ``(B, N, N, 3)``.
+    """
+    contact_state = batch.get("contact_state")
+    if contact_state is None:
+        return None
+    return F.one_hot(contact_state.long(), 3).to(dtype)
 
 
 def build_s_inputs(

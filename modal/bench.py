@@ -17,6 +17,10 @@ PROTENIX_CKPT_PATH = "/root/helico/checkpoints/" + PROTENIX_URL.rsplit("/", 1)[-
 # Modal decorator params are static — configure via env vars before `modal run`
 N_WORKERS = int(os.environ.get("HELICO_BENCH_WORKERS", "4"))
 GPU_TYPE = os.environ.get("HELICO_BENCH_GPU", "H100")
+# Condition on contacts derived from the ground-truth structure. THIS LEAKS THE
+# ANSWER — results measure structure realization given the true contact map,
+# not structure prediction, and are not comparable to AF3/Protenix numbers.
+ORACLE_CONTACTS = os.environ.get("HELICO_BENCH_ORACLE_CONTACTS", "0") == "1"
 
 # Predictor image: GPU model inference. Ships with cuequivariance (pinned
 # to 0.8.x — 0.10 broke bench inference with cuDNN-frontend errors) and
@@ -196,15 +200,22 @@ class Predictor:
                     f"checkpoint {ckpt_path} is not a Helico checkpoint "
                     f"(missing 'model_state_dict'; keys={list(state.keys())[:5]})"
                 )
-            # Pull the two shape-defining HelicoConfig fields from the
-            # saved TrainConfig dict; fall back to defaults if absent.
+            # Rebuild HelicoConfig from the saved TrainConfig dict. Take every
+            # field the two share, not a hardcoded subset: this used to pull
+            # only the two shape-defining fields, so any other config field
+            # (diffusion_pair_source, use_contacts, use_msa, ...) silently
+            # reverted to its default and the bench ran a *different model*
+            # than the checkpoint specified.
             saved_cfg = state.get("config") or {}
-            config = HelicoConfig(
-                n_pairformer_blocks=saved_cfg.get("n_pairformer_blocks", 48),
-                n_diffusion_token_blocks=saved_cfg.get("n_diffusion_token_blocks", 24),
-            )
-            print(f"Helico config: n_pairformer_blocks={config.n_pairformer_blocks}, "
+            overrides = {
+                k: v for k, v in saved_cfg.items() if hasattr(HelicoConfig, k)
+            }
+            config = HelicoConfig(**overrides)
+            print(f"Helico config from checkpoint ({len(overrides)} fields): "
+                  f"n_pairformer_blocks={config.n_pairformer_blocks}, "
                   f"n_diffusion_token_blocks={config.n_diffusion_token_blocks}, "
+                  f"use_contacts={config.use_contacts}, use_msa={config.use_msa}, "
+                  f"diffusion_pair_source={config.diffusion_pair_source}, "
                   f"step={state.get('step', '?')}")
             self.model = Helico(config)
             self.model.load_state_dict(state["model_state_dict"])
@@ -283,6 +294,7 @@ class Predictor:
                     msa_server_url=msa_server_url,
                     msa_cache_dir=server_cache_dir,
                     n_cycles=n_cycles,
+                    oracle_contacts_from=gt_structure if ORACLE_CONTACTS else None,
                 )
                 if pred_result is None:
                     return {"pdb_id": pdb_id, "category": category, "status": "too_large"}
