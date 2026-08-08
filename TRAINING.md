@@ -17,6 +17,16 @@ helico-download --data-dir /data/helico
 
 Override the default data location with the `HELICO_DATA_DIR` env var.
 
+Processed data is published to HuggingFace as **versioned snapshots**:
+`processed/<snapshot_id>/` holds the manifest, MSA indices and the structures
+split-tar, and `processed/latest.json` names the current snapshot per source
+type. `helico-download` resolves `latest.json`, fetches from that snapshot, and
+lands everything in the flat local layout below. Pin an older snapshot with
+`helico-download --snapshot pdb-2026-04-22`.
+
+Current snapshot: **`pdb-2026-08-08`** — 236,326 structures with pyconfind
+contacts (83.4 GB in 4 tar chunks), `git_sha` fa40683.
+
 Processed data in `<data-dir>/processed/` (hosted on HuggingFace):
 
 | File | Size | Description |

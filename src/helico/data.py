@@ -11,6 +11,7 @@ import multiprocessing
 import os
 import pickle
 import re
+import shutil
 import tarfile
 import tempfile
 from dataclasses import dataclass, field
@@ -3370,15 +3371,40 @@ def preprocess_main():
 # ============================================================================
 
 # Small files that can be downloaded individually
-_PROCESSED_FILES = [
-    "processed/ccd_cache.pkl",
-    "processed/manifest.json.gz",
-    "processed/rcsb_raw_msa_index.pkl",
-    "processed/openfold_raw_msa_index.pkl",
+# Per-snapshot files, fetched from processed/<snapshot_id>/ and landed flat
+# under <data-dir>/processed/. ccd_cache.pkl is shared across snapshots and
+# lives at processed/ root instead.
+_SNAPSHOT_FILES = [
+    "manifest.json.gz",
+    "rcsb_raw_msa_index.pkl",
+    "openfold_raw_msa_index.pkl",
 ]
 
-# Split tar prefix for large directories
-_PROCESSED_SPLIT_TARS = ["processed/structures.tar"]
+# structures/ is published as split-tar chunks (structures.tar.00, .01, ...)
+# rather than 236K individual files.
+_STRUCTURES_TAR = "structures.tar"
+
+
+def resolve_hf_snapshot(source_type: str = "pdb") -> str | None:
+    """Resolve ``processed/latest.json`` on HF to a snapshot id.
+
+    The published layout is versioned: metadata and structures live under
+    ``processed/<snapshot_id>/``, and ``processed/latest.json`` names the
+    current snapshot per source type. Returns None when the repo predates that
+    layout, so callers can fall back to the flat one.
+    """
+    from huggingface_hub import hf_hub_download
+
+    try:
+        path = hf_hub_download(
+            repo_id=HF_REPO, repo_type="dataset", filename="processed/latest.json",
+        )
+        with open(path) as f:
+            latest = json.load(f)
+        return latest.get("sources", {}).get(source_type)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Could not resolve latest.json ({e}); assuming flat layout")
+        return None
 
 
 def _reassemble_split_tar(data_dir: Path, prefix: str, extract: bool = True) -> None:
@@ -3459,6 +3485,12 @@ def download_main() -> None:
         action="store_true",
         help="Don't extract split tars after downloading",
     )
+    parser.add_argument(
+        "--snapshot",
+        type=str,
+        default=None,
+        help="Pin a specific snapshot id (default: whatever processed/latest.json names)",
+    )
     args = parser.parse_args()
 
     data_dir = args.data_dir or _default_data_dir()
@@ -3480,23 +3512,57 @@ def download_main() -> None:
         logger.info("Done. CCD cache downloaded.")
         return
 
-    # Download individual files
-    for f in _PROCESSED_FILES:
-        _download(f)
+    # ccd_cache is shared across snapshots and already lives at processed/.
+    _download("processed/ccd_cache.pkl")
 
-    # Download split tar parts
+    # Everything else is versioned under processed/<snapshot_id>/. Resolve it,
+    # then land the files in the *flat* local layout (<data-dir>/processed/...)
+    # that _processed_dir() and the datasets expect — the snapshot id is a
+    # publishing concern, not something the training code should know about.
+    snapshot = args.snapshot or resolve_hf_snapshot()
+    if snapshot:
+        logger.info(f"Using snapshot {snapshot}")
+        remote_prefix = f"processed/{snapshot}"
+    else:
+        # Legacy flat layout (pre-snapshot repos).
+        logger.info("No snapshot found; using flat layout")
+        remote_prefix = "processed"
+
+    local_processed = data_dir / "processed"
+    local_processed.mkdir(parents=True, exist_ok=True)
+
+    def _download_into_processed(remote_name: str) -> Path:
+        """Download <remote_prefix>/<remote_name> to <data-dir>/processed/."""
+        remote = f"{remote_prefix}/{remote_name}"
+        logger.info(f"Downloading {remote}...")
+        src = hf_hub_download(repo_id=HF_REPO, filename=remote, repo_type="dataset")
+        dest = local_processed / remote_name
+        # copy (not move): src is in the HF cache and may be a symlink into it
+        shutil.copyfile(src, dest)
+        return dest
+
+    for name in _SNAPSHOT_FILES:
+        try:
+            _download_into_processed(name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Could not download {name}: {e}")
+
+    # Split-tar structures
     all_repo_files = list_repo_files(repo_id=HF_REPO, repo_type="dataset")
-    for prefix in _PROCESSED_SPLIT_TARS:
-        parts = sorted(f for f in all_repo_files if f.startswith(prefix + "."))
-        if not parts:
-            logger.warning(f"No split parts found for {prefix} in HF repo")
-            continue
+    tar_prefix = f"{remote_prefix}/{_STRUCTURES_TAR}"
+    parts = sorted(f for f in all_repo_files if f.startswith(tar_prefix + "."))
+    if not parts:
+        logger.warning(
+            f"No structures.tar parts under {remote_prefix} — the snapshot has no "
+            f"structures. Training data will be missing."
+        )
+    else:
+        logger.info(f"Downloading {len(parts)} structures.tar parts...")
         for part in parts:
-            _download(part)
+            _download_into_processed(part.split("/")[-1])
         if not args.no_extract:
-            _reassemble_split_tar(data_dir, prefix)
+            _reassemble_split_tar(local_processed, _STRUCTURES_TAR)
 
-    # Decompress manifest
     _decompress_manifest(data_dir)
 
     logger.info(f"Download complete. Data is at {data_dir}")
