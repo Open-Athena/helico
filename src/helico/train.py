@@ -437,9 +437,18 @@ def _run_validation_pass(
 ) -> dict[str, float]:
     """Run up to val_samples val batches at one conditioning level.
 
-    Uses an SDPA backend context that allows fallback to math attention —
-    cuDNN flash-attn rejects some val structure shapes with "No valid
-    execution plans built", which crashed the very first val sweep.
+    Some val structure shapes still make cuDNN's flash-attn kernel abort. The
+    RuntimeError path below recovers the CUDA context and ends the sweep, but
+    the failure can also arrive as a SIGABRT from the C++ layer, which no
+    Python except clause can catch — that kills the whole (DDP) run. Observed
+    on the 2026-08-08 depth sweep: the depth-16 arm died at its step-500 val.
+    Mitigate by validating less often; the real fix is the collate_fn token
+    padding (see AGENTS.md), which evidently does not cover every shape.
+
+    NOTE: an earlier docstring here claimed this function installs an SDPA
+    backend context allowing a math-attention fallback. It does not, and never
+    did — `sdpa_kernel` appears nowhere in the codebase. That approach was
+    abandoned (AGENTS.md records the monkey-patch that silently did nothing).
     """
     base_model.eval()
     if contact_spec is not None and hasattr(val_dataset, "contact_conditioning"):
