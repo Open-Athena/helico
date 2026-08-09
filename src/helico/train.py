@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import datetime
 import json
 import logging
 import os
@@ -87,6 +88,12 @@ class TrainConfig:
     # Validation (rank 0 only; 0 disables)
     val_every: int = 0
     val_samples: int = 32
+    # Hard wall-clock cap for one val sweep (all conditioning levels together).
+    # Validation runs on rank 0 while every other rank waits inside a
+    # collective; if it overruns NCCL's watchdog they abort and kill the run.
+    # Capping the sweep is the guard that actually binds — it bounds the work
+    # regardless of dataset speed, structure size or level count.
+    val_max_seconds: float = 420.0
 
     # EMA
     ema_decay: float = 0.999
@@ -416,10 +423,18 @@ def _run_validation(
                                     config.val_samples, None, "")
     levels = VAL_CONTACT_LEVELS
     per_level = max(1, config.val_samples // len(levels))
+    deadline = time.time() + config.val_max_seconds
     result: dict[str, float] = {}
     for suffix, spec in levels.items():
+        if time.time() >= deadline:
+            logger.warning(
+                f"[val] wall-clock budget ({config.val_max_seconds:.0f}s) exhausted; "
+                f"skipping level '{suffix or 'full'}' and any after it"
+            )
+            break
         result.update(_run_validation_pass(
             base_model, val_dataset, config, device, dtype, per_level, spec, suffix,
+            deadline=deadline,
         ))
     return result
 
@@ -434,6 +449,7 @@ def _run_validation_pass(
     val_samples: int,
     contact_spec: dict | None,
     suffix: str,
+    deadline: float | None = None,
 ) -> dict[str, float]:
     """Run up to val_samples val batches at one conditioning level.
 
@@ -472,6 +488,12 @@ def _run_validation_pass(
         n_skipped = 0
         for i, batch in enumerate(loader):
             if n_attempted >= val_samples:
+                break
+            if deadline is not None and time.time() >= deadline:
+                logger.warning(
+                    f"[val] budget exhausted after {n_attempted} samples at level "
+                    f"'{suffix or 'full'}' — reporting a partial mean"
+                )
                 break
             n_attempted += 1
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
@@ -541,7 +563,14 @@ def train(
 
     # DDP setup
     if config.distributed:
-        dist.init_process_group("nccl")
+        # NCCL's watchdog defaults to 10 minutes. Validation runs on rank 0
+        # only while every other rank blocks on the next gradient all-reduce,
+        # so a val sweep longer than that trips the watchdog and every waiting
+        # rank aborts with SIGABRT ("Invalid access of peer GPU memory over
+        # nvlink"), taking the run down. That killed all five arms of the
+        # 2026-08-08 depth sweep. The wall-clock cap in _run_validation is the
+        # primary guard; this raises the ceiling so the cap is what binds.
+        dist.init_process_group("nccl", timeout=datetime.timedelta(hours=2))
         rank = dist.get_rank()
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         device = torch.device(f"cuda:{local_rank}")
@@ -808,6 +837,15 @@ def train(
                 logger.info(f"[val] step {step} | {msg}")
                 if wandb_run is not None:
                     wandb_run.log(val_metrics, step=step)
+
+            # Re-sync after rank-0-only work. Without this the other ranks sit
+            # inside a collective (with its watchdog running) rather than at an
+            # explicit rendezvous, which is what turned a slow val sweep into a
+            # hard abort. Must be called by *every* rank, so it lives outside
+            # the rank == 0 guards above.
+            if (config.distributed and config.val_every > 0 and step > 0
+                    and step % config.val_every == 0 and val_dataset is not None):
+                dist.barrier()
 
             # Checkpointing
             if step % config.save_every == 0 and step > 0 and rank == 0:
