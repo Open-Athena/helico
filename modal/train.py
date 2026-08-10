@@ -19,6 +19,7 @@ Configure via env vars before `modal run`:
     HELICO_TRAIN_NO_CONTACTS=0             # 1 = disable contact conditioning
     HELICO_TRAIN_NO_MSA=0                  # 1 = MSA-free
     HELICO_TRAIN_CONTACT_CONDITIONING=sampled  # "sampled" or "oracle"
+    HELICO_TRAIN_CONTACT_LR_MULT=1.0       # LR multiplier for linear_contact only
     HELICO_TRAIN_RESUME=               # /ckpts/<run>/step_<N>.pt to resume
     HELICO_TRAIN_PROTENIX_INIT=1       # warm-start from Protenix v1 weights
     HELICO_TRAIN_CUTOFF=2021-09-30     # train = release_date < this (AF3/Protenix/OF3 shared cutoff)
@@ -124,6 +125,7 @@ TRAIN_ARGS = {
     "no_contacts": os.environ.get("HELICO_TRAIN_NO_CONTACTS", "0") == "1",
     "no_msa": os.environ.get("HELICO_TRAIN_NO_MSA", "0") == "1",
     "contact_conditioning": os.environ.get("HELICO_TRAIN_CONTACT_CONDITIONING", "sampled"),
+    "contact_lr_multiplier": _env_float("HELICO_TRAIN_CONTACT_LR_MULT", 1.0),
     "resume_from": os.environ.get("HELICO_TRAIN_RESUME", ""),
     "protenix_init": os.environ.get("HELICO_TRAIN_PROTENIX_INIT", "1") == "1",
     "train_cutoff": os.environ.get("HELICO_TRAIN_CUTOFF", "2021-09-30"),
@@ -211,6 +213,7 @@ def train_remote(args: dict) -> dict:
         "--diffusion-pair-source", args["diffusion_pair_source"],
         "--n-blocks", str(args["n_blocks"]),
         "--contact-conditioning", args["contact_conditioning"],
+        "--contact-lr-multiplier", str(args["contact_lr_multiplier"]),
         "--checkpoint-dir", str(run_ckpt_dir),
         "--train-cutoff", args["train_cutoff"],
         "--val-cutoff-start", args["val_cutoff_start"],

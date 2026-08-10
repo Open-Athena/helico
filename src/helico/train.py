@@ -118,6 +118,17 @@ class TrainConfig:
     # "sampled" = random level each example (training), "oracle" = leave the
     # ground-truth matrix untouched. Validation always pins fixed levels.
     contact_conditioning: str = "sampled"
+    # LR multiplier for the contact pathway (Helico.linear_contact) only.
+    #
+    # linear_contact is zero-initialised, so it must travel from exactly zero
+    # before contacts can influence anything, while the rest of the trunk is
+    # warm-started and already near a solution. Worse, grad_clip is a *global*
+    # norm over all parameters: with total norms around 1e4 against a clip of
+    # 1.0, every gradient is scaled by ~1e-4, so the projection barely moves.
+    # Two independent measurements (the paired val curve and a paired FoldBench
+    # comparison) showed the 2026-08-10 run never learned to use contacts.
+    # Scaling this one small (d_pair x 3) tensor's LR attacks that directly.
+    contact_lr_multiplier: float = 1.0
 
     def get_torch_dtype(self) -> torch.dtype:
         return {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[self.dtype]
@@ -654,8 +665,24 @@ def train(
         model = DDP(model, device_ids=[device], find_unused_parameters=True)
 
     # Optimizer (skip frozen params so AdamW state doesn't grow uselessly).
+    # Two groups so the contact pathway can run at its own LR; `lr_scale` is
+    # re-applied every step by the scheduler below, which would otherwise
+    # overwrite the per-group LR with a single value.
+    contact_params, other_params = [], []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        (contact_params if "linear_contact" in name else other_params).append(param)
+    groups = [{"params": other_params, "lr_scale": 1.0}]
+    if contact_params:
+        groups.append({"params": contact_params, "lr_scale": config.contact_lr_multiplier})
+        logger.info(
+            f"contact pathway: {sum(p.numel() for p in contact_params)} params at "
+            f"{config.contact_lr_multiplier}x LR "
+            f"({config.lr * config.contact_lr_multiplier:.2e} peak)"
+        )
     optimizer = torch.optim.AdamW(
-        [p for p in model.parameters() if p.requires_grad],
+        groups,
         lr=config.lr,
         weight_decay=config.weight_decay,
         betas=(0.9, 0.999),
@@ -770,7 +797,7 @@ def train(
             # staging below is unaffected.
             current_lr = get_lr(step, config)
             for param_group in optimizer.param_groups:
-                param_group["lr"] = current_lr
+                param_group["lr"] = current_lr * param_group.get("lr_scale", 1.0)
 
             # Update crop size if changed
             if stage.get("crop_size") != dataset.crop_size:
@@ -838,6 +865,16 @@ def train(
                 # Snapshot hard quality metrics on the most recent batch
                 # (cheap, run only on log steps).
                 quality = _eval_quality_metrics(outputs, batch)
+                # Is the contact pathway actually moving? linear_contact starts
+                # at exactly zero, so its weight norm is a direct read on
+                # whether it is learning at all — the mechanism the LR
+                # multiplier targets. A flat ~0 norm means the LR is still too
+                # small; a growing norm with a flat val gain means the signal
+                # is being learned but is not useful, which is a different
+                # (and more interesting) result.
+                contact_w = getattr(base_model, "linear_contact", None)
+                contact_norm = float(contact_w.weight.detach().norm()) if contact_w is not None else None
+
                 logger.info(
                     f"Step {step} | Loss: {avg_loss:.4f} | Diff: {avg_diff:.4f}"
                     + (f" | Dist: {avg_dist:.4f}" if avg_dist is not None else "")
@@ -848,6 +885,7 @@ def train(
                     + (f" | pLDDT: {quality['plddt']:.1f}" if "plddt" in quality else "")
                     + (f" | GradNorm: {avg_grad:.3f}" if avg_grad is not None else "")
                     + f" | LR: {current_lr:.2e} | GPU: {peak_gb:.1f}G | Tokens/s: {throughput:.0f}"
+                    + (f" | ContactW: {contact_norm:.4f}" if contact_norm is not None else "")
                 )
                 if wandb_run is not None:
                     log_payload = {
@@ -872,6 +910,8 @@ def train(
                         log_payload["train/gdt_ts"] = quality["gdt_ts"]
                     if "plddt" in quality:
                         log_payload["train/plddt"] = quality["plddt"]
+                    if contact_norm is not None:
+                        log_payload["train/contact_weight_norm"] = contact_norm
                     wandb_run.log(log_payload, step=step)
                 running_loss = 0.0
                 running_diff = 0.0
@@ -1049,6 +1089,11 @@ def main():
     parser.add_argument("--no-msa", action="store_true",
                         help="Run MSA-free. The MSA channels of s_inputs arrive zeroed, "
                              "so the diffusion/atom modules stay warm-startable.")
+    parser.add_argument("--contact-lr-multiplier", type=float, default=1.0,
+                        help="LR multiplier for Helico.linear_contact only. The projection "
+                             "is zero-init and global grad clipping shrinks every update, so "
+                             "it barely moves at 1x; raise this to let contacts actually be "
+                             "learned.")
     parser.add_argument("--contact-conditioning", type=str, default="sampled",
                         choices=["sampled", "oracle"],
                         help="'sampled' masks and corrupts contacts per example (training); "
@@ -1115,6 +1160,7 @@ def main():
         use_contacts=not args.no_contacts,
         use_msa=not args.no_msa,
         contact_conditioning=args.contact_conditioning,
+        contact_lr_multiplier=args.contact_lr_multiplier,
     )
 
     model_config = HelicoConfig(
