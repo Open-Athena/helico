@@ -757,6 +757,81 @@ contacts off and on, paired per target. Rank by the contacts-off score, take
 the failures as the "MSA usually required" set, and report paired deltas with
 counts — not means, given the noise floor above.
 
+## 10c. The contact pathway could not learn (2026-08-10)
+
+### What was wrong
+
+Everything before this point — the depth sweep and the 15,000-step run — was
+measuring a model that ignored contacts, because `linear_contact` never left
+its zero initialisation.
+
+`linear_contact` is deliberately zero-init so that enabling contacts is an
+exact no-op on a warm-started checkpoint (§7.1). But at the shared LR of 5e-5
+it then has to travel from *exactly* zero while the rest of the trunk is
+already near a good solution. Adding `train/contact_weight_norm` made this
+visible immediately: at 1x the projection's norm after 50 steps extrapolates
+to ~0.0014, against ~1.0 for the sibling projections feeding `z_init`.
+
+`--contact-lr-multiplier` puts the projection in its own AdamW param group.
+At 1000x its norm reaches ~55 within 500 steps and then **plateaus** rather
+than diverging — it finds a scale and settles.
+
+### Result: the conditioning curve appears
+
+`val/lddt_hard` on the paired validation subset, 48 blocks, MSA-free:
+
+| step | 0% | 50% | 100% | gain |
+|---|---|---|---|---|
+| 500 | 0.648 | 0.736 | 0.831 | +0.184 |
+| 1000 | 0.652 | 0.757 | 0.769 | +0.117 |
+| 1500 | 0.675 | 0.768 | 0.820 | +0.145 |
+
+Monotone in conditioning level at every point, and — unlike every earlier
+apparent signal — it survives repeat validation. At 1x the same measurement
+gave a mean of +0.016 (t=1.33) drifting toward zero.
+
+### The MSA gap, and what fraction contacts close
+
+Three-way paired FoldBench on 31 protein-containing targets (identical
+targets, 3 samples, 6 cycles):
+
+| arm | mean lddt |
+|---|---|
+| Helico, contacts off (single-sequence) | 0.644 |
+| Helico, contacts on (1x checkpoint) | 0.642 |
+| **Protenix v1 + MSA** | **0.840** |
+
+**MSA gap = +0.195 +/- 0.017 (t=12.2)** — a well-resolved effect, which also
+demonstrates the instrument can detect a real difference when one exists. On
+the 1x checkpoint contacts closed -1% of it, as expected for a pathway pinned
+at zero. The in-training +0.145 would correspond to ~74% closure if it holds
+on FoldBench; that measurement is pending.
+
+**Empirical null.** pyconfind is protein-only, so on `monomer_rna` /
+`monomer_dna` targets `oracle_contact_state` returns None and both arms get
+byte-identical input. Those 11 targets give a run-to-run noise floor of
+sd 0.031, range [-0.008, +0.084] — three of the six largest apparent "gains"
+in the first analysis were nucleic-acid targets, i.e. provably not caused by
+contacts. Any future contact claim must clear this null.
+
+### On the LR multiplier
+
+100x initially looked like a failure regime (gain -0.069 then -0.029) and was
+stopped early. Its final validation, which landed as it was being killed,
+read **+0.109** with the weight norm at 30 and still climbing toward 1000x's
+55. So 100x was converging to the same behaviour, just slower: the **weight
+norm** appears to be what matters and the LR only sets how fast it is reached.
+The "100x sits in a bad intermediate regime" story was wrong.
+
+### Caveat that governs how these numbers may be reported
+
+These are **oracle contacts**, computed from the ground-truth structure. If
+contacts close most of the MSA gap, the supportable claim is "an accurate
+contact predictor could substitute for alignments" — not that alignments have
+been replaced. Protenix's MSAs are genuinely available at inference; ours are
+not. Conversely the Helico model has ~3k steps against Protenix's full
+training, so a shortfall would not be conclusive either.
+
 ## 11. Decisions taken
 
 Answered by the user on 2026-08-06:
