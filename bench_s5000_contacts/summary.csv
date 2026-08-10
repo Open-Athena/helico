@@ -1,0 +1,10 @@
+category,n_total,n_predicted,success_pct,mean_lddt,mean_dockq
+interface_antibody_antigen,7,0,0.0,0.0,nan
+interface_protein_dna,7,0,0.0,0.0,nan
+interface_protein_ligand,7,0,0.0,0.0,nan
+interface_protein_peptide,7,0,0.0,0.0,nan
+interface_protein_protein,7,0,0.0,0.0,nan
+interface_protein_rna,7,0,0.0,0.0,nan
+monomer_dna,4,0,nan,0.0,nan
+monomer_protein,7,0,nan,0.0,nan
+monomer_rna,7,0,nan,0.0,nan

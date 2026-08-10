@@ -46,6 +46,18 @@ predictor_image = (
         "huggingface_hub>=0.20",
         "requests",
         "tqdm",
+        # Needed by helico.contacts for --oracle-contacts. Predictor.setup
+        # creates a venv but then imports helico from /root/helico/src using
+        # the *container* python, so anything helico imports must be in this
+        # list. Without it every oracle-contacts target failed with
+        # "No module named 'pyconfind'" while the run still reported success.
+        "pyconfind>=0.6",
+    )
+    # Warm the rotamer-library cache at build time so oracle-contact scoring
+    # does not download it per worker mid-run.
+    .run_commands(
+        "python -c 'from pyconfind import cached_rotamer_library;"
+        " print(cached_rotamer_library())'"
     )
     # Protenix checkpoint baked into image (1.4 GB, cached by Modal)
     # curl with retries + progress dots — wget -q hangs silently on stalls
