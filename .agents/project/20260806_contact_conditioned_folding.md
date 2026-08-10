@@ -832,6 +832,41 @@ been replaced. Protenix's MSAs are genuinely available at inference; ours are
 not. Conversely the Helico model has ~3k steps against Protenix's full
 training, so a shortfall would not be conclusive either.
 
+## 10d. Depth: the "shallow trunk" premise does not survive (2026-08-10)
+
+Five matched validation points per arm, all MSA-free, contact LR 1000x unless
+noted:
+
+| arm | mean `@contacts100` | mean gain | t |
+|---|---|---|---|
+| **d48 @ 1000x** | **0.815** | **+0.139** | **11.3** |
+| d48 @ 3000x | 0.782 | +0.091 | 4.4 |
+| d8 @ 1000x | 0.655 | +0.071 | 5.1 |
+| d16 @ 1000x | 0.658 | +0.061 | 4.4 |
+
+Depth 48 wins on both absolute quality and contact gain; d8 and d16 are
+indistinguishable from each other. §1's proposal to "shrink the trunk from 48
+Pairformer blocks to a few" is **not supported** — the contact matrix does not
+remove the need for trunk depth, consistent with §3.5's finding that extracting
+geometry from contacts needs a decoder with real capacity.
+
+**Unresolved confound.** Every arm warm-starts from Protenix's 48 blocks, so d8
+retains 8/48 of the trunk and d48 retains all of it. The shallow arms were
+still climbing steeply when they stopped (d8: 0.47 -> 0.72 over 3000 steps), so
+part of the ~0.16 deficit is recoverable training rather than missing capacity.
+This measures warm-start retention at least as much as depth. A from-scratch
+sweep is the only way to separate them, and is the honest version of the
+experiment.
+
+**Multiplier.** 1000x beats 3000x over five points (+0.139 vs +0.091). An
+earlier reading that they "converge, no clear winner" came from two points and
+was wrong. 100x reaches similar behaviour but far more slowly (it was still
+climbing at +0.109 when stopped), consistent with the projection's weight norm
+— not the LR — being what matters, with the LR setting only how fast that norm
+is reached.
+
+**Practical upshot: keep 48 blocks.**
+
 ## 11. Decisions taken
 
 Answered by the user on 2026-08-06:
