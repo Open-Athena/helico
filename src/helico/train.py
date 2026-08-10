@@ -415,6 +415,11 @@ def _contact_conditioning_spec(config: TrainConfig) -> str | dict | None:
 # work (see .agents/project/20260806_contact_conditioned_folding.md §8.1).
 # The config.val_samples budget is split across levels, so sweeping them costs
 # no more than single-level validation did.
+# Seed for the validation subset permutation. Constant so that every
+# conditioning level and every validation step evaluate identical structures,
+# making val/*_gain a paired comparison.
+_VAL_SUBSET_SEED = 20260810
+
 VAL_CONTACT_LEVELS: dict[str, dict] = {
     # 0% of the matrix defined — ab initio, no contact information at all.
     "@contacts0": {"mode": "none"},
@@ -513,10 +518,20 @@ def _run_validation_pass(
     if contact_spec is not None and hasattr(val_dataset, "contact_conditioning"):
         val_dataset.contact_conditioning = contact_spec
     try:
+        # Fixed-seed shuffle: every conditioning level, at every validation
+        # step, must see the SAME structures in the same order.
+        #
+        # With an unseeded shuffle each level drew a different random subset, so
+        # the level-to-level difference carried target-difficulty variance —
+        # which dwarfs the conditioning effect (validating one unchanged model
+        # swung +/-0.18 lddt between sweeps). Pairing removes that source
+        # entirely: val/*_gain becomes a within-structure difference, and the
+        # curve over steps tracks the model rather than the sample.
         loader = torch.utils.data.DataLoader(
             val_dataset,
             batch_size=config.batch_size,
             shuffle=True,
+            generator=torch.Generator().manual_seed(_VAL_SUBSET_SEED),
             num_workers=min(2, config.num_workers),
             collate_fn=collate_fn,
             pin_memory=True,
