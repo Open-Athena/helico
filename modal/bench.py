@@ -20,6 +20,12 @@ GPU_TYPE = os.environ.get("HELICO_BENCH_GPU", "H100")
 # Condition on contacts derived from the ground-truth structure. THIS LEAKS THE
 # ANSWER — results measure structure realization given the true contact map,
 # not structure prediction, and are not comparable to AF3/Protenix numbers.
+# NOTE: this is evaluated twice — once locally, and again when Modal imports
+# this module *inside the container*, where HELICO_BENCH_ORACLE_CONTACTS is not
+# set unless we put it there. Reading it as a bare global meant Predictor.predict
+# always saw False: the bench ran without contacts while reporting success, with
+# no error and no warning. The value is baked into predictor_image below so both
+# sides agree.
 ORACLE_CONTACTS = os.environ.get("HELICO_BENCH_ORACLE_CONTACTS", "0") == "1"
 
 # Predictor image: GPU model inference. Ships with cuequivariance (pinned
@@ -50,6 +56,10 @@ predictor_image = (
         f"-o {PROTENIX_CKPT_PATH} {PROTENIX_URL} && "
         f"ls -lh {PROTENIX_CKPT_PATH}"
     )
+    # Propagate the oracle-contacts switch into the container: module-level
+    # os.environ reads happen again on the remote import, where the launching
+    # shell's env does not exist.
+    .env({"HELICO_BENCH_ORACLE_CONTACTS": "1" if ORACLE_CONTACTS else "0"})
     # Project code last (changes most frequently)
     .add_local_dir(str(ROOT / "src"), remote_path="/root/helico/src")
     .add_local_file(str(ROOT / "pyproject.toml"), remote_path="/root/helico/pyproject.toml")
@@ -262,6 +272,9 @@ class Predictor:
             gt_path = _find_gt_path(gt_dir, pdb_id)
             gt_structure = parse_mmcif(gt_path, max_resolution=float("inf"))
             assert gt_structure is not None, f"Failed to parse ground truth: {gt_path}"
+            logger.info(
+                f"[{pdb_id}] oracle_contacts={'ON' if ORACLE_CONTACTS else 'OFF'}"
+            )
             chains = structure_to_chains(gt_structure)
 
             # Multi-seed sampling: published FoldBench protocol uses 5 seeds
@@ -295,6 +308,7 @@ class Predictor:
                     msa_cache_dir=server_cache_dir,
                     n_cycles=n_cycles,
                     oracle_contacts_from=gt_structure if ORACLE_CONTACTS else None,
+                    # logged so the log always states which mode actually ran
                 )
                 if pred_result is None:
                     return {"pdb_id": pdb_id, "category": category, "status": "too_large"}

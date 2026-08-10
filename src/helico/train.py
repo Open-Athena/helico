@@ -324,6 +324,25 @@ def load_checkpoint(
 # ============================================================================
 
 @torch.no_grad()
+def _align_pred_to_gt(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    """Slice a (B*N_d, ...) prediction down to one sample per batch row.
+
+    With n_diffusion_samples > 1 (gh#6) the diffusion module returns B*N_d
+    predictions against B ground-truth rows. Handing both straight to
+    smooth_lddt_loss lets them broadcast: the numerator then sums N_d samples
+    while the denominator counts one batch row's pairs, inflating the reported
+    lDDT by ~N_d. That is why val/lddt has been logging values above 1 (2-5
+    with N_d=8) — a metric-only bug, since smooth_lddt_loss is not part of the
+    training objective. _eval_quality_metrics already does this slicing; the
+    lDDT call sites did not.
+    """
+    if pred.shape[0] != gt.shape[0] and gt.shape[0] > 0:
+        n_d = pred.shape[0] // gt.shape[0]
+        if n_d > 1:
+            return pred[::n_d]
+    return pred
+
+
 def _eval_quality_metrics(outputs: dict, batch: dict) -> dict[str, float]:
     """Compute Tier-1 structural quality metrics from a forward pass.
 
@@ -397,11 +416,21 @@ def _contact_conditioning_spec(config: TrainConfig) -> str | dict | None:
 # The config.val_samples budget is split across levels, so sweeping them costs
 # no more than single-level validation did.
 VAL_CONTACT_LEVELS: dict[str, dict] = {
-    "": {"mode": "full", "eps_fp": 0.0, "eps_fn": 0.0},       # perfect contacts
-    "@none": {"mode": "none"},                                 # ab initio
-    "@half": {"mode": "pair-subset", "reveal": 0.5, "eps_fp": 0.0, "eps_fn": 0.0},
-    "@noisy": {"mode": "full", "eps_fp": 0.2, "eps_fn": 0.2},  # realistic predictor
+    # 0% of the matrix defined — ab initio, no contact information at all.
+    "@contacts0": {"mode": "none"},
+    # 50% of eligible pairs defined (contact or no-contact), rest unknown.
+    "@contacts50": {"mode": "pair-subset", "reveal": 0.5, "eps_fp": 0.0, "eps_fn": 0.0},
+    # 100% defined and correct — the ceiling.
+    "@contacts100": {"mode": "full", "eps_fp": 0.0, "eps_fn": 0.0},
+    # 100% defined but corrupted (20% false positives + 20% false negatives),
+    # standing in for what a real contact predictor would supply.
+    "@contacts100noisy": {"mode": "full", "eps_fp": 0.2, "eps_fn": 0.2},
 }
+
+# The headline curve: these three differ only in how much of the contact matrix
+# is revealed, so plotting them together shows whether the model uses contacts
+# at all and how gracefully it degrades.
+VAL_HEADLINE_LEVELS = ("@contacts0", "@contacts50", "@contacts100")
 
 
 @torch.no_grad()
@@ -414,9 +443,13 @@ def _run_validation(
 ) -> dict[str, float]:
     """Run validation, sweeping fixed contact-conditioning levels.
 
-    Metrics are suffixed by level (``val/lddt``, ``val/lddt@none``, …); the
-    unsuffixed keys are the perfect-contact level, so existing dashboards keep
-    working.
+    Every metric is suffixed by level — ``val/lddt_hard@contacts0``,
+    ``@contacts50``, ``@contacts100``, ``@contacts100noisy``. Nothing is
+    reported unsuffixed, so a plot can never silently mix levels.
+
+    Also emits ``val/<metric>_gain`` = (100% contacts − 0% contacts), the
+    headline quantity: positive means the model is actually exploiting the
+    contact matrix, ~0 means it is ignoring it.
     """
     if not getattr(config, "use_contacts", True):
         return _run_validation_pass(base_model, val_dataset, config, device, dtype,
@@ -436,6 +469,16 @@ def _run_validation(
             base_model, val_dataset, config, device, dtype, per_level, spec, suffix,
             deadline=deadline,
         ))
+
+    # Contact gain: how much full conditioning buys over none. This is the
+    # number the whole redesign turns on, so log it directly rather than
+    # leaving it to be eyeballed off three curves.
+    lo, hi = VAL_HEADLINE_LEVELS[0], VAL_HEADLINE_LEVELS[-1]
+    for metric in ("lddt_hard", "gdt_ts", "rmsd"):
+        a, b = result.get(f"val/{metric}{hi}"), result.get(f"val/{metric}{lo}")
+        if a is not None and b is not None:
+            # rmsd improves downward, so flip its sign to keep "higher is better"
+            result[f"val/{metric}_gain"] = (b - a) if metric == "rmsd" else (a - b)
     return result
 
 
@@ -526,7 +569,8 @@ def _run_validation_pass(
             sums["total_loss"] += total; counts["total_loss"] += 1
             if "x_denoised" in outputs:
                 lddt = 1.0 - float(smooth_lddt_loss(
-                    outputs["x_denoised"].float(), batch["atom_coords"].float(),
+                    _align_pred_to_gt(outputs["x_denoised"], batch["atom_coords"]).float(),
+                    batch["atom_coords"].float(),
                     batch.get("atom_mask"),
                 ).item())
                 sums["lddt"] += lddt; counts["lddt"] += 1
@@ -758,7 +802,7 @@ def train(
             if "x_denoised" in outputs:
                 with torch.no_grad():
                     lddt_val = 1.0 - smooth_lddt_loss(
-                        outputs["x_denoised"].float(),
+                        _align_pred_to_gt(outputs["x_denoised"], batch["atom_coords"]).float(),
                         batch["atom_coords"].float(),
                         batch.get("atom_mask"),
                     ).item()
@@ -1126,7 +1170,7 @@ def main():
                 msa_dir=msa_dir,
                 filter_fn=lambda m: bool(m.release_date) and val_start <= m.release_date <= val_end,
                 # Overwritten per level by _run_validation; pinned, never sampled.
-                contact_conditioning=VAL_CONTACT_LEVELS[""],
+                contact_conditioning=VAL_CONTACT_LEVELS["@contacts100"],
             )
             logger.info(f"Validation dataset: {len(val_dataset)} structures "
                         f"({val_start} ≤ release_date ≤ {val_end})")
