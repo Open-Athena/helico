@@ -690,6 +690,73 @@ scaffolded as a numbered experiment against a GitHub issue.
 
 ---
 
+## 10b. Results and infrastructure findings (2026-08-08/10)
+
+### The depth sweep was inconclusive
+
+Five arms (2/4/8/16/48 blocks, MSA-free, 5000 steps, ~$796). Mean
+`val/lddt_hard` per arm, averaged over all validation points:
+
+| arm | full | @none | full − none |
+|---|---|---|---|
+| d2 | 0.590 | 0.547 | +0.043 |
+| d4 | 0.635 | 0.614 | +0.021 |
+| d8 | 0.618 | 0.638 | −0.020 |
+| d16 | 0.628 | 0.670 | −0.043 |
+| d48 | **0.716** | 0.707 | +0.009 |
+
+Mean effect **+0.002**, sign inconsistent across arms. Step-to-step SD was
+~0.08 — roughly 2x any conditioning difference — and `@noisy` frequently beat
+full conditioning, which a model genuinely using contacts would not do.
+
+Three candidate explanations, unseparated: `@none` is already 0.55–0.71 so the
+warm start leaves little headroom; 5000 steps at LR 5e-5 with grad norms of
+1e4–1e5 against a clip of 1.0 means nearly every update was fully clipped, and
+`linear_contact` starts at exactly zero; and n=16 validation batches cannot
+resolve a ±0.04 effect. Depth is separately confounded — d48 inherits all 48
+Protenix blocks while d2 keeps two, so the sweep partly measures *how much warm
+start each arm retained*.
+
+**The noise floor, measured directly.** Three consecutive validations of one
+unchanged model gave full-vs-none gaps of −0.025, +0.179, −0.114 at n=8 per
+level. Any effect below ~0.2 lddt is unmeasurable at that sample size.
+
+### Infrastructure bugs found (all pre-existing unless noted)
+
+- **DDP validation killed every run.** Validation is rank-0-only with no
+  barrier, so other ranks waited inside a gradient all-reduce with NCCL's
+  10-minute watchdog running; overrunning it aborts them all. Sweeping four
+  conditioning levels made this far likelier (*my regression*). Fixed with a
+  `val_max_seconds` cap, a 2h NCCL timeout, and a post-validation barrier.
+  Caveat: d4/d8/d16b/d48 all died at *exactly* step 4675 despite different
+  cadences, which suggests a data-dependent CUDA fault as well; unreproduced.
+- **lDDT inflated by `n_diffusion_samples`.** `smooth_lddt_loss` broadcast
+  `(B*N_d, N, 3)` predictions against `(B, N, 3)` truth, summing N_d samples
+  over a one-row denominator. Reported lDDT of 2–7 for a [0,1] metric; exactly
+  8.0x at N_d=8. Metric-only. Confirmed fixed in-run: `LDDT` and `LDDT_h`, from
+  independent code paths, now agree (0.240 vs 0.241).
+- **Oracle contacts silently off in the benchmark.** `modal/bench.py` read
+  `HELICO_BENCH_ORACLE_CONTACTS` as a module global; Modal re-imports the
+  module inside the container where the launching env does not exist, so it was
+  always False. The bench ran without contacts and reported success — the
+  contacts-on and contacts-off arms would have been byte-identical. Now baked
+  into the image env, with a per-target `oracle_contacts=ON/OFF` log line.
+- **`uv run modal` resolved to the anaconda binary**, which cannot import
+  helico. Harmless for train/upload (their entrypoints don't import it), fatal
+  for bench. Fixed by installing modal into the venv.
+
+### Current experiment
+
+`contacts-48b-v2`: 48 blocks, MSA-free, contact-conditioned, 15000 steps on
+8xH100 (~20.5h, ~$650), warm-started from Protenix. Validation every 500 steps
+at 200 samples reports `val/{lddt_hard,gdt_ts,rmsd}@contacts{0,50,100}` plus
+`@contacts100noisy` and a `_gain` (100% − 0%) series.
+
+Planned eval: two full FoldBench runs on the final checkpoint with oracle
+contacts off and on, paired per target. Rank by the contacts-off score, take
+the failures as the "MSA usually required" set, and report paired deltas with
+counts — not means, given the noise floor above.
+
 ## 11. Decisions taken
 
 Answered by the user on 2026-08-06:
