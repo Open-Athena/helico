@@ -1091,6 +1091,65 @@ Every MSA-derived key the model reads: `msa`, `msa_profile`, `deletion_matrix`,
 are not a route: the data pipeline never emits template features and
 `TemplateEmbedder` runs Protenix's dummy-template recipe.
 
+## 10h. The validation set is sequence-contaminated (2026-08-11)
+
+Prompted by a simple question: is the MSA-free run's `val/lddt@contacts0` (0.680)
+much higher than the Protenix single-sequence baseline (0.329)? It looked far
+too high for a model with no alignment of any kind, right after we had removed a
+feature measured at +0.311 on FoldBench.
+
+It was not a leak. The same `step_500.pt` scores:
+
+| | val `@contacts0` | FoldBench, contacts off |
+| --- | --- | --- |
+| contacts-msafree-01 step 500 | **0.680** | **0.289** |
+| Protenix, single sequence | — | 0.329 |
+
+On a common benchmark the MSA-free model is *below* single-sequence Protenix
+(-0.038 +/- 0.013, t=-2.96) — as expected at step 500 with 1000 warmup steps.
+
+### Cause: the date split does not deduplicate sequences
+
+The AF3-convention split is purely temporal (train < 2021-09-30, val
+2022-05-01..2023-01-12). The PDB re-deposits the same protein constantly —
+mutants, different ligands, different conditions — so a date cutoff removes
+almost no sequence redundancy. Measured against the 236k-entry manifest:
+
+- **38.2%** of validation structures have at least one chain sequence appearing
+  *verbatim* in the training set (3,708 of 9,716)
+- **18.4%** have *every* chain sequence verbatim in training
+
+That is exact string matching; real homology overlap at, say, 30% identity would
+be far higher.
+
+So `val/lddt@contacts0` largely measures recall of memorised folds. For a
+structure whose exact sequence was in training, the model does not need
+conservation signal to place the backbone — which is exactly why deleting the
+MSA profile moved FoldBench by +0.311 and the validation number not at all.
+
+### What this invalidates, and what survives
+
+**Invalidated:** every *absolute* validation number in this document, including
+the c0/c50/c100 curves quoted in 10c and 10e. They are inflated by memorisation
+and must not carry a headline claim.
+
+**Survives:** between-level comparisons. All conditioning levels score the
+identical structures under `_VAL_SUBSET_SEED`, so `c100 - c0` and the shape of
+the conditioning curve remain paired and meaningful. FoldBench remains the
+number of record and is unaffected — its targets are curated against exactly
+this redundancy.
+
+### Not fixed
+
+Deduplicating the validation set against training by sequence is the right fix,
+but it changes every recorded validation number and would break comparability
+with the run currently in flight. Deferred by decision; do it as a separate
+change after `contacts-msafree-01` finishes.
+
+**Generalisable lesson:** a temporal split is not a redundancy split. Any
+held-out set built by date needs an explicit sequence-identity filter against
+train before its absolute numbers mean anything.
+
 ## 11. Decisions taken
 
 Answered by the user on 2026-08-06:

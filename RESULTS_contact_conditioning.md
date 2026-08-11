@@ -224,6 +224,35 @@ checkpoints showed training was still helping — does not survive. Those
 checkpoints came from different runs, and the effect is smaller than the
 run-to-run spread.
 
+## The validation set is sequence-contaminated
+
+Use FoldBench numbers, not validation numbers, for anything absolute.
+
+The train/val split is purely temporal (train < 2021-09-30, val
+2022-05-01..2023-01-12, the AF3 convention). That removes almost no sequence
+redundancy, because the PDB constantly re-deposits the same protein. Measured
+against the 236k-entry manifest:
+
+- **38.2%** of validation structures have a chain sequence appearing *verbatim*
+  in training
+- **18.4%** have every chain verbatim in training
+
+Consequence, measured on one checkpoint:
+
+| | val `@contacts0` | FoldBench, contacts off |
+| --- | --- | --- |
+| `contacts-msafree-01` step 500 | 0.680 | 0.289 |
+| Protenix, single sequence | — | 0.329 |
+
+The validation number is largely recall of memorised folds: given a sequence
+seen in training, the model does not need conservation signal to place the
+backbone. That is why removing the MSA profile cost +0.311 on FoldBench and
+nothing at all on validation.
+
+Between-level comparisons still hold — all conditioning levels score identical
+structures under a fixed seed, so the conditioning *curve* is paired and
+meaningful. It is the absolute values that are inflated.
+
 ## Conditioning schedule and noise model
 
 What training samples per example ([`contacts.py`](src/helico/contacts.py)):
