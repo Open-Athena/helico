@@ -113,7 +113,8 @@ class Helico(nn.Module):
         atom_mask = atom_mask.float()
 
         # 1. Input embedding -> s_inputs (B, N_tok, 449)
-        s_inputs = build_s_inputs(self.input_embedder, batch, ref_charge, ref_features, atom_mask)
+        s_inputs = build_s_inputs(self.input_embedder, batch, ref_charge, ref_features,
+                                  atom_mask, use_msa=self.config.use_msa)
 
         # 2. Trunk initialization
         s_init = self.linear_sinit(s_inputs)
@@ -282,7 +283,8 @@ class Helico(nn.Module):
         atom_mask = atom_mask.float()
 
         # Build s_inputs
-        s_inputs = build_s_inputs(self.input_embedder, batch, ref_charge, ref_features, atom_mask)
+        s_inputs = build_s_inputs(self.input_embedder, batch, ref_charge, ref_features,
+                                  atom_mask, use_msa=self.config.use_msa)
 
         # Trunk init
         s_init = self.linear_sinit(s_inputs)

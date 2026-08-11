@@ -116,12 +116,20 @@ def build_s_inputs(
     ref_charge: torch.Tensor,
     ref_features: torch.Tensor,
     atom_mask: torch.Tensor,
+    use_msa: bool = True,
 ) -> torch.Tensor:
     """Run InputFeatureEmbedder (AF3 Alg 2) on the batch.
 
     Extracts the per-token scalars (restype one-hot, MSA profile,
     deletion_mean) and concatenates with the atom-encoded per-token
     features. Returns (B, N_tok, c_s_inputs=449).
+
+    ``profile`` and ``deletion_mean`` are MSA-derived: they carry per-column
+    conservation from the alignment. They live in ``s_inputs``, *outside* the
+    MSA module, so gating the module alone does not make a model MSA-free --
+    which is exactly the bug this argument exists to prevent. With
+    ``use_msa=False`` they are zeroed, so no alignment-derived signal reaches
+    the model by any route.
     """
     B, N_tok = batch["token_types"].shape
     device = batch["token_types"].device
@@ -131,13 +139,16 @@ def build_s_inputs(
     # Table 13 32-class encoding (handles RNA/DNA correctly)
     restype = F.one_hot(batch["restype"], 32).to(dtype)
 
-    profile = batch.get("msa_profile",
-                        torch.zeros(B, N_tok, 32, device=device, dtype=dtype))
-
-    deletion_mean = batch.get("deletion_mean",
-                              torch.zeros(B, N_tok, 1, device=device, dtype=dtype))
-    if deletion_mean.dim() == 2:
-        deletion_mean = deletion_mean.unsqueeze(-1)
+    if use_msa:
+        profile = batch.get("msa_profile",
+                            torch.zeros(B, N_tok, 32, device=device, dtype=dtype))
+        deletion_mean = batch.get("deletion_mean",
+                                  torch.zeros(B, N_tok, 1, device=device, dtype=dtype))
+        if deletion_mean.dim() == 2:
+            deletion_mean = deletion_mean.unsqueeze(-1)
+    else:
+        profile = torch.zeros(B, N_tok, 32, device=device, dtype=dtype)
+        deletion_mean = torch.zeros(B, N_tok, 1, device=device, dtype=dtype)
 
     return input_embedder(
         ref_pos=batch["ref_coords"],

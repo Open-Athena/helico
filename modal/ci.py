@@ -41,7 +41,8 @@ image = (
 app = modal.App("helico-ci", image=image)
 
 
-@app.function(gpu=["A10", "L40S", "A100", "H100"], timeout=600)
+@app.function(gpu=["A10", "L40S", "A100", "H100"], timeout=600,
+              env={"HELICO_CI_PYTEST_ARGS": __import__("os").environ.get("HELICO_CI_PYTEST_ARGS", "")})
 def run_tests():
     import subprocess
     subprocess.run("cd /root/helico && uv venv --python 3.11", check=True, shell=True)
@@ -55,4 +56,7 @@ def run_tests():
         check=True, shell=True,
     )
     subprocess.run("cd /root/helico && uv pip install -e '.[dev,bench]'", check=True, shell=True)
-    subprocess.run(["uv", "run", "pytest", "-v", "--tb=short"], check=True, cwd="/root/helico")
+    import os
+    extra = os.environ.get("HELICO_CI_PYTEST_ARGS", "").split()
+    subprocess.run(["uv", "run", "pytest", "-v", "--tb=short", *extra],
+                   check=True, cwd="/root/helico")

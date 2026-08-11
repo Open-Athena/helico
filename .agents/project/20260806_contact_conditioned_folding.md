@@ -1025,6 +1025,72 @@ an empty `release_date`, and there is **zero** overlap between the 49 FoldBench
 target PDB ids and the 168,102 train-eligible structures (FoldBench targets are
 all 7z/8x depositions). Not the explanation.
 
+## 10g. `use_msa=False` did not disable MSAs (2026-08-11)
+
+Found by pulling on the observation that Helico with contacts *withheld* (0.616)
+was beating true single-sequence Protenix (0.327) by a wide margin. It was not
+adaptation. It was a leak.
+
+`use_msa` gated `MSAModule` only. `msa_profile` and `deletion_mean` live in
+`s_inputs` and were read unconditionally by `build_s_inputs`. Both sides fed
+them real data:
+
+- `train.py` globs `processed_dir` for `*_msa_index.pkl` and loads whatever it
+  finds, regardless of `--no-msa`. Every run log shows
+  `Loading MSA tar index from .../rcsb_raw_msa_index.pkl`.
+- `modal/bench.py` sets `msa_server_url = "https://api.colabfold.com"`
+  unconditionally, so every bench arm except `HELICO_BENCH_SINGLE_SEQ=1` pulled
+  the FoldBench server MSAs.
+
+What the profile contains: for each residue, `counts / total` over the 32 AF3
+restype classes across up to 512 aligned homologs, plus `deletion_mean`. That is
+a PSSM — conservation, tolerated substitutions, gap structure. First-order only;
+co-evolution is second-order and lives in the MSA module's joint statistics.
+
+Measured cost at step_8000 (n=27 paired):
+
+| | with profile | MSA-free | Δ |
+| --- | --- | --- | --- |
+| contacts withheld | 0.622 | 0.311 | **+0.311 +/- 0.021** (t=14.9) |
+| contacts given | 0.853 | 0.841 | +0.012 +/- 0.013 (t=0.9, n.s.) |
+
+Three consequences:
+
+1. **The anomaly resolves.** MSA-free contacts-withheld (0.311) is now slightly
+   *below* zero-shot single-sequence Protenix (0.329), -0.018 +/- 0.008. Nothing
+   left to explain.
+2. **The contact effect was understated.** Off->on is +0.530 +/- 0.028 (t=19.1,
+   26/27) MSA-free, versus +0.234 with the leak, because the profile was
+   propping up the withheld arm.
+3. **Contacts subsume the profile.** +0.012 (n.s.) when contacts are given.
+   Explicit contacts state directly what conservation only implies.
+
+### The fix, and why the test is shaped the way it is
+
+`build_s_inputs` takes `use_msa` and zeroes `profile`/`deletion_mean` when
+false; both `Helico.forward` call sites forward `self.config.use_msa`.
+
+`TestNoMSALeak` poisons *every* MSA-derived batch key at once and asserts the
+trunk is unchanged — an audit that catches future features rather than the ones
+already known.
+
+The first version of that test was flaky (~50% failure). It compared one clean
+forward pass against one poisoned pass, but the trunk is nondeterministic
+(cuEquivariance, ~0.03 max-abs between identical passes), so when the gate works
+both numbers are draws from the same distribution and the comparison is a coin
+flip. Measured separation: a real dependency moves the pair repr by 5.1 against
+a 0.03 noise floor, ~160x. The tests now average k=3 passes per group and
+compare against a noise floor measured the same way. **Any invariance assertion
+in this repo needs a measured noise floor, not an exact comparison.**
+
+### The audit
+
+Every MSA-derived key the model reads: `msa`, `msa_profile`, `deletion_matrix`,
+`deletion_mean`, `cluster_msa`, `cluster_profile`, `cluster_deletion_mean`,
+`has_msa`. After the fix all are gated. Templates were checked separately and
+are not a route: the data pipeline never emits template features and
+`TemplateEmbedder` runs Protenix's dummy-template recipe.
+
 ## 11. Decisions taken
 
 Answered by the user on 2026-08-06:

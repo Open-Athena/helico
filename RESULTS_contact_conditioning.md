@@ -40,49 +40,46 @@ contact predictor.
 
 ## Headline result
 
-**Given the true contact map, the model matches Protenix-with-MSAs.**
+**Given the true contact map, a genuinely MSA-free model matches
+Protenix-with-MSAs.**
 
 ![Accuracy of contact-conditioned folding](.agents/project/figures/contact_conditioning_accuracy.png)
 
-FoldBench, 28 protein targets scored by every arm (paired — same targets, same
-scoring pipeline):
+FoldBench, 27 protein targets scored by every arm (paired — same targets, same
+scoring pipeline). Helico rows are MSA-free: no alignment, no conservation
+profile.
 
-| Arm | lDDT | |
-| --- | --- | --- |
-| Protenix v1, single sequence | 0.327 | zero-shot |
-| **Helico, contacts all-unknown** | **0.616** | fine-tuned |
-| Protenix v1, with MSAs | 0.835 | zero-shot |
-| **Helico, contacts given (100%)** | **0.850** | fine-tuned |
+| Arm | lDDT |
+| --- | --- |
+| Protenix v1, single sequence | 0.329 |
+| **Helico, contacts all-unknown** | **0.311** |
+| Protenix v1, with MSAs | 0.837 |
+| **Helico, contacts given (100%)** | **0.841** |
 
 Paired differences:
 
 | Comparison | Δ lDDT | t | improved |
 | --- | --- | --- | --- |
-| Helico: contacts off → on | **+0.234 ± 0.021** | 11.0 | 28/28 |
-| Helico contacts-on vs Protenix + MSA | +0.016 ± 0.014 | 1.1 (n.s.) | 21/28 |
-| Protenix: single sequence → +MSA | +0.508 ± 0.023 | 21.9 | 28/28 |
+| Helico: contacts off → on | **+0.530 ± 0.028** | 19.1 | 26/27 |
+| Helico contacts-on vs Protenix + MSA | +0.004 ± 0.026 | 0.2 | 17/27 |
+| Protenix: single sequence → +MSA | +0.508 ± 0.024 | 21.2 | 27/27 |
 
-Read together: MSAs are worth +0.508 lDDT to Protenix on these targets, and
-contact conditioning lands the model at the same place — the residual gap to
-Protenix+MSA is not statistically distinguishable from zero. Starting from the
-warm start at 0.244, the contacts-given arm reaches 0.820 within 1000 steps of
-fine-tuning (see [Training progress](#training-progress)).
+MSAs are worth +0.508 lDDT to Protenix on these targets. Oracle contacts recover
+that from a model with no alignment at all, and the residual gap to
+Protenix+MSA is not distinguishable from zero.
 
-Controls that make the effect credible:
+Controls:
 
 - **Empirical null.** 11 nucleic-acid-only targets have no protein contacts, so
-  the two arms are identical by construction. Measured difference: +0.0004
-  (sd 0.026) — the pipeline invents nothing.
-- **Negative control.** An otherwise identical run whose contact pathway could
-  not learn (see below) closed −1% of the gap through the same pipeline.
-- **Zero-init no-op.** At step 0 the two arms differ by +0.0045 ± 0.0047
-  (t=0.96) — no contact information reaches the model before training.
-
-**Do not compare the two fine-tuned rows against the two zero-shot rows.**
-Helico's contacts-withheld arm (0.616) beats zero-shot single-sequence Protenix
-(0.327) by +0.289, but that is the expected payoff of fine-tuning a model for
-the regime it is evaluated in, not evidence about contacts. The comparison that
-isolates contacts is off-vs-on at the *same* checkpoint.
+  the two arms are identical by construction. Measured: +0.0004 (sd 0.026).
+- **Zero-init no-op.** At step 0 the arms differ by +0.004 ± 0.005 (t=0.9) — no
+  contact information reaches the model before training.
+- **Dead contact pathway.** A run whose contact projection never learned shows
+  contacts off→on of +0.003 ± 0.003 (t=1.1, n.s.), so oracle contacts leak
+  nothing through any route other than `linear_contact`.
+- **No benchmark overlap.** 0 of 236,326 manifest entries lack a `release_date`,
+  and 0 of the 49 FoldBench targets appear among the 168,102 train-eligible
+  structures.
 
 ## Two bugs that mattered
 
@@ -97,6 +94,41 @@ The fix is a per-parameter-group learning-rate multiplier
 (`--contact-lr-multiplier=1000`); the contact weight norm then climbs to ~55 and
 plateaus. `train/contact_weight_norm` is now logged every step so a dead
 pathway is visible immediately rather than after a week of runs.
+
+### `use_msa=False` did not disable MSAs
+
+`use_msa` gated the MSA *module*. But `msa_profile` and `deletion_mean` — the
+per-column conservation profile and insertion rate — live in `s_inputs`,
+outside that module, and `build_s_inputs` read them unconditionally. Both
+training ([`train.py`](src/helico/train.py) globbed the MSA tar indices
+regardless of the flag) and benchmarking
+([`modal/bench.py`](modal/bench.py) set `msa_server_url` unconditionally)
+supplied them from real alignments.
+
+So every "MSA-free" number before this fix was produced by a model receiving a
+PSSM-style profile: for each residue, the frequency of all 32 residue classes
+across up to 512 homologs, plus the mean insertion count. That encodes
+conservation, tolerated substitutions, and gap structure — enough on its own for
+secondary-structure and burial prediction. It does *not* contain co-evolution,
+which is second-order and lives in the alignment's joint statistics.
+
+Measured cost of the leak at step_8000:
+
+| | with profile | MSA-free | Δ |
+| --- | --- | --- | --- |
+| contacts withheld | 0.622 | 0.311 | **+0.311 ± 0.021** (t=14.9) |
+| contacts given | 0.853 | 0.841 | +0.012 ± 0.013 (t=0.9, n.s.) |
+
+Two consequences. The apparent contact effect was understated — off→on is
++0.530 MSA-free, not +0.234 — because the profile was propping up the
+contacts-withheld arm. And once the true contact map is supplied, the profile
+adds nothing: contacts subsume the first-order conservation signal.
+
+The fix gates `profile`/`deletion_mean` on `use_msa` in `build_s_inputs`, with
+both `Helico.forward` call sites forwarding `config.use_msa`.
+`TestNoMSALeak` poisons every MSA-derived batch key at once and asserts the
+trunk output is unchanged, so a future feature that reintroduces alignment
+information fails the suite.
 
 ### "Single sequence" meant three different things
 
@@ -132,6 +164,10 @@ favours the 48-block arm. A from-scratch sweep is still open.
 
 These matter, and none of them are resolved yet.
 
+0. **Trained with the profile.** The checkpoint above was *trained* with the
+   MSA profile present and only *evaluated* without it, so the MSA-free numbers
+   carry a train/test mismatch working against them. A retrain under the gate
+   is pending.
 1. **Oracle contacts.** Contacts are computed from the ground-truth structure,
    so they leak the answer. This measures *structure realisation given a
    correct contact map*, not structure prediction. It is the right first
@@ -142,14 +178,15 @@ These matter, and none of them are resolved yet.
    sweep over false-positive/false-negative rates that has not been run.
 2. **Warm start.** All runs initialise from Protenix v1, which was trained with
    MSAs. The model is being adapted, not trained from scratch.
-3. **Fine-tuned vs zero-shot.** The Helico rows are fine-tuned for the no-MSA
-   regime; the Protenix rows are zero-shot. Cross-comparisons between the two
-   groups conflate "contacts help" with "fine-tuning helps". Only the
-   same-checkpoint contacts off-vs-on comparison isolates contacts.
-4. **The MSA module still exists.** `use_msa=False` removes the MSA *input*;
+3. **Fine-tuned vs zero-shot.** The Helico rows are fine-tuned; the Protenix
+   rows are zero-shot. Only the same-checkpoint contacts off-vs-on comparison
+   isolates contacts.
+4. **The noise model is not yet realistic.** See
+   [Conditioning schedule](#conditioning-schedule-and-noise-model).
+5. **The MSA module still exists.** `use_msa=False` removes the MSA *input*;
    the module is still constructed (~3M dead parameters). Deliberate for now, to
    keep warm starting simple.
-5. **The 8000-step point is from a different run** than the 0-3000
+6. **The 8000-step point is from a different run** than the 0-3000
    trajectory, so it is not directly comparable to it. See
    [Training progress](#training-progress).
 
@@ -186,6 +223,50 @@ An earlier claim in this work — that a +0.013 FoldBench gain between two
 checkpoints showed training was still helping — does not survive. Those
 checkpoints came from different runs, and the effect is smaller than the
 run-to-run spread.
+
+## Conditioning schedule and noise model
+
+What training samples per example ([`contacts.py`](src/helico/contacts.py)):
+
+| mode | share | what it does |
+| --- | --- | --- |
+| `none` | 15% | everything unknown |
+| `full` | 15% | every eligible pair specified |
+| `pair-subset` | 35% | reveal a fraction of *pairs*, rest unknown |
+| `contact-list` | 35% | reveal a fraction of *contacts*; unlisted pairs become absent or unknown on a coin flip |
+
+`reveal ~ U(0,1)`; false-positive and false-negative rates `eps_fp, eps_fn ~
+U(0, 0.3)` independently, both expressed as a fraction of revealed contacts.
+
+Known problems with this, in rough priority order:
+
+1. **False positives land where a predictor cannot produce them.** The FP
+   candidate set is every non-contact pair in the upper triangle, unrestricted.
+   Measured on a synthetic complex: **~40% of injected FPs are structurally
+   impossible** — 8.7% at `|i-j| < 6` (which the pipeline filters out of the
+   true set) and 31% on non-protein tokens (pyconfind only emits protein
+   side-chain contacts). The model can learn to discount exactly those, so its
+   apparent robustness to noise is inflated. FPs should be drawn from the same
+   eligible region as true contacts, and preferentially from near-miss pairs
+   (CB-CB just beyond the contact threshold) rather than uniformly.
+2. **`eps_fp` and `eps_fn` are independent.** Real predictors move along a
+   precision/recall tradeoff; independent uniforms spend mass on corners that
+   do not occur. They should be sampled from a curve, and the range should be
+   set from MarinFold's measured operating point rather than an arbitrary 0.3.
+3. **`@contacts50` is not "half the information".** `pair-subset` at 0.5
+   specifies half of *all pairs* — and since contacts are ~0.1% of pairs, that
+   asserts a very large number of true negatives. This is why the 50% level
+   tracks close to 100% rather than sitting midway. A contact-list partial
+   (reveal half the contacts, rest unknown) is the more meaningful "partial".
+4. **Revealed contacts are a uniform random subset.** A predictor finds
+   high-confidence contacts preferentially. pyconfind already returns a
+   *degree* per contact, currently thresholded and discarded — weighting reveal
+   probability by degree would model this.
+5. **Errors are independent.** Real predictor errors are spatially correlated;
+   a mispredicted region gets many wrong contacts at once.
+6. **No validation level matches a real operating point.** Levels are 0/50/100
+   and 100-with-20%-noise. One level pinned to MarinFold's measured precision
+   and recall would track deployment readiness directly.
 
 ## Reproducing
 

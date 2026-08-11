@@ -62,10 +62,15 @@ CAT_MARKER = {
 REQUIRED = [
     "bench_m1000_off", "bench_m1000_on",
     "bench_s8000_off", "bench_s8000_on",
-    "bench_protenix_msa", "bench_protenix_nomsa", "bench_protenix_singleseq",
+    "bench_protenix_msa", "bench_protenix_nomsa",
 ]
 OPTIONAL = ["bench_t1000_on", "bench_t1000_off",
             "bench_t2000_on", "bench_t2000_off", "bench_step0_on"]
+# Genuinely MSA-free arms: benched with HELICO_BENCH_SINGLE_SEQ=1, so the
+# per-token conservation profile is a query one-hot rather than real alignment
+# statistics. Everything else on this list received the profile.
+REQUIRED += ["bench_s8000_off_trueMSAfree", "bench_s8000_on_trueMSAfree",
+             "bench_protenix_singleseq"]
 
 C_ON, C_OFF = "#1b5e9c", "#b8452f"
 C_MSA, C_NOMSA = "#2e7d32", "#7a7a7a"
@@ -118,65 +123,52 @@ def fetch_val_history():
 
 
 def panel_trajectory(ax, mean, arms, keys, n):
-    """Accuracy vs training step, with the Protenix reference lines."""
+    """Conditioning vs accuracy, with and without the MSA profile in s_inputs."""
     ax.axhline(mean["bench_protenix_msa"], color=C_MSA, ls="--", lw=1.6, zorder=1)
     ax.axhline(mean["bench_protenix_singleseq"], color=C_NOMSA, ls="--", lw=1.6, zorder=1)
     ax.annotate(f"Protenix + MSA  ({mean['bench_protenix_msa']:.3f})",
-                xy=(0.5, mean["bench_protenix_msa"]), xycoords=("axes fraction", "data"),
-                ha="center", va="top", fontsize=9, color=C_MSA, fontweight="bold")
-    ax.annotate(f"Protenix, single sequence, zero-shot  ({mean['bench_protenix_singleseq']:.3f})",
-                xy=(0.70, mean["bench_protenix_singleseq"]), xycoords=("axes fraction", "data"),
-                ha="center", va="bottom", fontsize=9, color=C_NOMSA, fontweight="bold")
+                xy=(0.99, mean["bench_protenix_msa"]), xycoords=("axes fraction", "data"),
+                ha="right", va="bottom", fontsize=9, color=C_MSA, fontweight="bold", zorder=6,
+                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85))
+    ax.annotate(f"Protenix, single seq  ({mean['bench_protenix_singleseq']:.3f})",
+                xy=(0.99, mean["bench_protenix_singleseq"]), xycoords=("axes fraction", "data"),
+                ha="right", va="bottom", fontsize=9, color=C_NOMSA, fontweight="bold", zorder=6,
+                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85))
 
-    # Within-run trajectory: contacts-lrmult1000, steps 0 -> 3000.
-    traj_on = [(0, mean.get("bench_step0_on", mean["bench_protenix_nomsa"])),
-               (1000, mean.get("bench_t1000_on")), (2000, mean.get("bench_t2000_on")),
-               (3000, mean["bench_m1000_on"])]
-    traj_off = [(0, mean["bench_protenix_nomsa"]),
-                (1000, mean.get("bench_t1000_off")), (2000, mean.get("bench_t2000_off")),
-                (3000, mean["bench_m1000_off"])]
-    traj_on = [(s, v) for s, v in traj_on if v is not None]
-    traj_off = [(s, v) for s, v in traj_off if v is not None]
+    groups = [("contacts\nwithheld", "bench_s8000_off_trueMSAfree", "bench_s8000_off"),
+              ("contacts\ngiven (100%)", "bench_s8000_on_trueMSAfree", "bench_s8000_on")]
+    xs = [0.0, 1.0]
+    w = 0.17
+    for x, (_lab, free_key, leak_key) in zip(xs, groups):
+        free, leak = mean[free_key], mean[leak_key]
+        ax.bar(x - w / 1.6, free, width=w, color=C_ON, zorder=3)
+        ax.bar(x + w / 1.6, leak, width=w, color=C_ON, alpha=0.32, zorder=3,
+               hatch="//", edgecolor="white")
+        for xx, v in ((x - w / 1.6, free), (x + w / 1.6, leak)):
+            ax.annotate(f"{v:.3f}", (xx, v), textcoords="offset points", xytext=(0, 4),
+                        ha="center", fontsize=9, fontweight="bold", color="0.15")
+        ax.annotate("", xy=(x, max(free, leak) + 0.075), xytext=(x, min(free, leak) + 0.075),
+                    arrowprops=dict(arrowstyle="<->", color="0.35", lw=1.2))
+        ax.annotate(f"Δ {leak - free:+.3f}", xy=(x, (free + leak) / 2 + 0.075),
+                    xytext=(9, 0), textcoords="offset points", ha="left", va="center",
+                    fontsize=9, color="0.25")
 
-    ax.plot([s for s, _ in traj_on], [v for _, v in traj_on], "-o", color=C_ON,
-            lw=1.8, ms=8, zorder=3, label="contacts given (100%)")
-    ax.plot([s for s, _ in traj_off], [v for _, v in traj_off], "-s", color=C_OFF,
-            lw=1.8, ms=7, zorder=3, label="no contacts (all unknown)")
+    import matplotlib.patches as mpatches
+    ax.legend(handles=[
+        mpatches.Patch(facecolor=C_ON, label="MSA-free (query-only profile)"),
+        mpatches.Patch(facecolor=C_ON, alpha=0.32, hatch="//", edgecolor="white",
+                       label="with MSA conservation profile"),
+    ], loc="upper left", fontsize=9, framealpha=0.95)
 
-    # Different run -> drawn detached, with a break in the x axis implied by the gap.
-    ax.plot([8000], [mean["bench_s8000_on"]], "o", color=C_ON, ms=9,
-            mfc="white", mew=2.2, zorder=3)
-    ax.plot([8000], [mean["bench_s8000_off"]], "s", color=C_OFF, ms=8,
-            mfc="white", mew=2.2, zorder=3)
-    ax.annotate("step 8000\n(different run)", xy=(8000, mean["bench_s8000_off"]),
-                xytext=(0, -30), textcoords="offset points", ha="center",
-                fontsize=8.5, color="0.35")
-
-    for s, v in traj_on:
-        ax.annotate(f"{v:.3f}", (s, v), textcoords="offset points", xytext=(0, 10),
-                    ha="center", fontsize=8.5, color=C_ON, fontweight="bold")
-    for s, v in traj_off:
-        if s == 0:
-            continue  # coincides with the contacts-on label at step 0
-        ax.annotate(f"{v:.3f}", (s, v), textcoords="offset points", xytext=(0, -16),
-                    ha="center", fontsize=8.5, color=C_OFF, fontweight="bold")
-
-    if "bench_step0_on" in mean:
-        gap = abs(mean["bench_step0_on"] - mean["bench_protenix_nomsa"])
-        ax.annotate(f"step 0 = warm start,\nMSA module disabled\n(Δ between arms = {gap:.4f})",
-                    xy=(0, mean["bench_protenix_nomsa"]), xytext=(20, 54),
-                    textcoords="offset points", ha="left", fontsize=8.5, color="0.3",
-                    arrowprops=dict(arrowstyle="->", color="0.5", lw=1))
-
-    ax.set_xlim(-600, 9000)
-    ax.set_ylim(0.13, 0.95)
-    ax.set_xticks([0, 1000, 2000, 3000, 8000])
-    ax.set_xlabel("training step")
+    ax.set_xticks(xs)
+    ax.set_xticklabels([g[0] for g in groups])
+    ax.set_xlim(-0.45, 1.95)
+    ax.set_ylim(0, 1.08)
     ax.set_ylabel("FoldBench lDDT")
-    ax.set_title(f"A. FoldBench lDDT vs training step\n"
-                 f"{n} paired protein targets", fontsize=11, loc="left")
-    ax.legend(loc="lower right", fontsize=9, framealpha=0.95)
-    ax.grid(alpha=0.25, ls=":")
+    ax.set_title(f"A. Effect of the MSA conservation profile\n"
+                 f"step_8000 checkpoint, {n} paired protein targets",
+                 fontsize=11, loc="left")
+    ax.grid(alpha=0.25, ls=":", axis="y")
 
 
 def panel_scatter(ax, arms, keys, n):
@@ -190,17 +182,18 @@ def panel_scatter(ax, arms, keys, n):
         if not ks:
             continue
         ax.scatter([arms["bench_protenix_msa"][k] for k in ks],
-                   [arms["bench_s8000_on"][k] for k in ks],
+                   [arms["bench_s8000_on_trueMSAfree"][k] for k in ks],
                    marker=CAT_MARKER[cat], s=58, color=C_ON, alpha=0.85,
                    edgecolors="white", linewidths=0.8, zorder=3,
                    label=CAT_LABEL[cat])
     # Same targets with contacts withheld, to show where the model falls back to.
     ax.scatter([arms["bench_protenix_msa"][k] for k in keys],
-               [arms["bench_s8000_off"][k] for k in keys],
+               [arms["bench_s8000_off_trueMSAfree"][k] for k in keys],
                marker="x", s=34, color=C_OFF, alpha=0.55, zorder=2,
                label="same targets, contacts withheld")
 
-    m, se, t, up = paired_stats(arms["bench_protenix_msa"], arms["bench_s8000_on"], keys)
+    m, se, t, up = paired_stats(arms["bench_protenix_msa"],
+                                arms["bench_s8000_on_trueMSAfree"], keys)
     ax.annotate(f"above y=x: {up}/{n} targets\nmean Δ = {m:+.3f} ± {se:.3f}  (t={t:.1f})",
                 xy=(0.035, 0.965), xycoords="axes fraction", va="top", fontsize=9,
                 bbox=dict(boxstyle="round,pad=0.45", fc="white", ec="0.75", alpha=0.95))
@@ -209,9 +202,9 @@ def panel_scatter(ax, arms, keys, n):
     ax.set_ylim(0.3, 1.0)
     ax.set_aspect("equal")
     ax.set_xlabel("Protenix + MSA  lDDT")
-    ax.set_ylabel("Helico + contacts  lDDT")
+    ax.set_ylabel("Helico + contacts, MSA-free  lDDT")
     ax.set_title(f"B. Per-target lDDT: contacts vs MSA\n"
-                 f"step_8000 checkpoint, {n} paired protein targets",
+                 f"MSA-free, step_8000 checkpoint, {n} paired protein targets",
                  fontsize=11, loc="left")
     ax.legend(loc="lower right", fontsize=7.8, framealpha=0.95)
     ax.grid(alpha=0.25, ls=":")
@@ -228,7 +221,8 @@ def panel_validation(bx, hist):
     bx.set_xlabel("training step")
     bx.set_ylabel("validation lDDT")
     bx.set_title("C. Validation lDDT vs training step\n"
-                 "50 held-out structures, 4 independent restarts", fontsize=11, loc="left")
+                 "50 held-out structures; pre-fix run, MSA profile present",
+                 fontsize=11, loc="left")
     bx.legend(loc=(0.03, 0.49), fontsize=8.5, framealpha=0.95)
     bx.grid(alpha=0.25, ls=":")
     bx.text(0.985, 0.03, "separate lines are independent restarts\nof the same config",
