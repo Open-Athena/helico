@@ -435,8 +435,11 @@ _VAL_SUBSET_SEED = 20260810
 VAL_CONTACT_LEVELS: dict[str, dict] = {
     # 0% of the matrix defined — ab initio, no contact information at all.
     "@contacts0": {"mode": "none"},
-    # 50% of eligible pairs defined (contact or no-contact), rest unknown.
-    "@contacts50": {"mode": "pair-subset", "reveal": 0.5, "eps_fp": 0.0, "eps_fn": 0.0},
+    # Half the true contacts listed, rest unknown — a partial top-k list with no
+    # errors. Was `pair-subset`, which specifies half of *all pairs*; since
+    # contacts are ~0.1% of pairs that asserted an enormous number of true
+    # negatives and behaved much closer to full conditioning than to half of it.
+    "@contacts50": {"mode": "contact-list", "reveal": 0.5, "eps_fp": 0.0, "eps_fn": 0.0},
     # 100% defined and correct — the ceiling.
     "@contacts100": {"mode": "full", "eps_fp": 0.0, "eps_fn": 0.0},
     # 100% defined but corrupted (20% false positives + 20% false negatives),
