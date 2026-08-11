@@ -32,6 +32,10 @@ ORACLE_CONTACTS = os.environ.get("HELICO_BENCH_ORACLE_CONTACTS", "0") == "1"
 # ablation for a model trained with MSAs, which is exactly the point: it
 # measures what the alignments contribute.
 NO_MSA = os.environ.get("HELICO_BENCH_NO_MSA", "0") == "1"
+# True single-sequence mode: a depth-1 MSA whose one row is the query sequence.
+# The MSA module still runs. This is the fair "no alignments" baseline for a
+# model trained with MSAs -- unlike NO_MSA above, which removes the module.
+SINGLE_SEQ = os.environ.get("HELICO_BENCH_SINGLE_SEQ", "0") == "1"
 
 # Predictor image: GPU model inference. Ships with cuequivariance (pinned
 # to 0.8.x — 0.10 broke bench inference with cuDNN-frontend errors) and
@@ -77,7 +81,8 @@ predictor_image = (
     # os.environ reads happen again on the remote import, where the launching
     # shell's env does not exist.
     .env({"HELICO_BENCH_ORACLE_CONTACTS": "1" if ORACLE_CONTACTS else "0",
-          "HELICO_BENCH_NO_MSA": "1" if NO_MSA else "0"})
+          "HELICO_BENCH_NO_MSA": "1" if NO_MSA else "0",
+          "HELICO_BENCH_SINGLE_SEQ": "1" if SINGLE_SEQ else "0"})
     # Project code last (changes most frequently)
     .add_local_dir(str(ROOT / "src"), remote_path="/root/helico/src")
     .add_local_file(str(ROOT / "pyproject.toml"), remote_path="/root/helico/pyproject.toml")
@@ -328,8 +333,9 @@ class Predictor:
                     target_name=pdb_id,
                     n_samples=n_samples,
                     max_tokens=max_tokens,
-                    msa_server_url=msa_server_url,
+                    msa_server_url=None if SINGLE_SEQ else msa_server_url,
                     msa_cache_dir=server_cache_dir,
+                    single_sequence=SINGLE_SEQ,
                     n_cycles=n_cycles,
                     oracle_contacts_from=gt_structure if ORACLE_CONTACTS else None,
                     # logged so the log always states which mode actually ran

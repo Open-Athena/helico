@@ -62,7 +62,7 @@ CAT_MARKER = {
 REQUIRED = [
     "bench_m1000_off", "bench_m1000_on",
     "bench_s8000_off", "bench_s8000_on",
-    "bench_protenix_msa", "bench_protenix_nomsa",
+    "bench_protenix_msa", "bench_protenix_nomsa", "bench_protenix_singleseq",
 ]
 OPTIONAL = ["bench_t1000_on", "bench_t1000_off",
             "bench_t2000_on", "bench_t2000_off", "bench_step0_on"]
@@ -120,12 +120,12 @@ def fetch_val_history():
 def panel_trajectory(ax, mean, arms, keys, n):
     """Accuracy vs training step, with the Protenix reference lines."""
     ax.axhline(mean["bench_protenix_msa"], color=C_MSA, ls="--", lw=1.6, zorder=1)
-    ax.axhline(mean["bench_protenix_nomsa"], color=C_NOMSA, ls="--", lw=1.6, zorder=1)
+    ax.axhline(mean["bench_protenix_singleseq"], color=C_NOMSA, ls="--", lw=1.6, zorder=1)
     ax.annotate(f"Protenix + MSA  ({mean['bench_protenix_msa']:.3f})",
                 xy=(0.5, mean["bench_protenix_msa"]), xycoords=("axes fraction", "data"),
                 ha="center", va="top", fontsize=9, color=C_MSA, fontweight="bold")
-    ax.annotate(f"Protenix, single sequence  ({mean['bench_protenix_nomsa']:.3f})",
-                xy=(0.38, mean["bench_protenix_nomsa"]), xycoords=("axes fraction", "data"),
+    ax.annotate(f"Protenix, single sequence, zero-shot  ({mean['bench_protenix_singleseq']:.3f})",
+                xy=(0.70, mean["bench_protenix_singleseq"]), xycoords=("axes fraction", "data"),
                 ha="center", va="bottom", fontsize=9, color=C_NOMSA, fontweight="bold")
 
     # Within-run trajectory: contacts-lrmult1000, steps 0 -> 3000.
@@ -163,8 +163,8 @@ def panel_trajectory(ax, mean, arms, keys, n):
 
     if "bench_step0_on" in mean:
         gap = abs(mean["bench_step0_on"] - mean["bench_protenix_nomsa"])
-        ax.annotate(f"step 0: Δ = {gap:.4f}",
-                    xy=(0, mean["bench_protenix_nomsa"]), xytext=(14, 34),
+        ax.annotate(f"step 0 = warm start,\nMSA module disabled\n(Δ between arms = {gap:.4f})",
+                    xy=(0, mean["bench_protenix_nomsa"]), xytext=(20, 54),
                     textcoords="offset points", ha="left", fontsize=8.5, color="0.3",
                     arrowprops=dict(arrowstyle="->", color="0.5", lw=1))
 
@@ -264,7 +264,10 @@ def main():
     for a, b, lab in [
         ("bench_s8000_off", "bench_s8000_on", "contacts off -> on @ step_8000"),
         ("bench_protenix_msa", "bench_s8000_on", "helico contacts-on vs Protenix+MSA"),
-        ("bench_protenix_nomsa", "bench_protenix_msa", "Protenix: single-seq -> +MSA"),
+        ("bench_protenix_singleseq", "bench_protenix_msa", "Protenix: single-seq -> +MSA"),
+        ("bench_protenix_nomsa", "bench_protenix_singleseq", "Protenix: lesion -> true single-seq"),
+        ("bench_protenix_singleseq", "bench_s8000_off",
+         "helico c0 (fine-tuned) vs Protenix single-seq (zero-shot)"),
     ]:
         m, se, t, up = paired_stats(arms[a], arms[b], keys)
         print(f"  {lab:38s} {m:+.4f} +/- {se:.4f}  t={t:+.2f}  {up}/{n} up")

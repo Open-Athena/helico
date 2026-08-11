@@ -479,6 +479,56 @@ def oracle_contact_state(
 # Prediction pipeline
 # ============================================================================
 
+def single_sequence_msa(restype: torch.Tensor) -> dict[str, torch.Tensor]:
+    """MSA features for true single-sequence mode: depth 1, row 0 = the query.
+
+    This is what "single sequence" means for an AF3-family model. The MSA
+    module still runs; it simply has no homologs to draw on.
+
+    Contrast with the two other things called "no MSA" here, which are NOT
+    equivalent and should not be reported as a single-sequence baseline:
+
+    - :func:`empty_msa` feeds a depth-1 row of *gaps* -- a sequence of nothing,
+      not the query.
+    - ``HelicoConfig.use_msa=False`` skips the MSA module entirely. For a model
+      trained with MSAs that is a lesion, and it scores far below true
+      single-sequence mode.
+
+    Args:
+        restype: ``(1, N_tok)`` Protenix 32-class index per token.
+    """
+    from helico.data import AF3_NUM_MSA_CLASSES
+
+    if restype.ndim != 2 or restype.shape[0] != 1:
+        raise ValueError(f"expected restype of shape (1, N_tok), got {tuple(restype.shape)}")
+    return {
+        "msa": restype.unsqueeze(1).clone(),  # (1, 1, N_tok)
+        "msa_profile": torch.nn.functional.one_hot(restype[0], AF3_NUM_MSA_CLASSES)
+        .to(torch.float32)
+        .unsqueeze(0),
+        "deletion_matrix": torch.zeros(1, 1, restype.shape[1]),
+        "deletion_mean": torch.zeros(1, restype.shape[1]),
+        "has_msa": torch.ones(1),
+    }
+
+
+def empty_msa(n_tok: int) -> dict[str, torch.Tensor]:
+    """Placeholder MSA features for when no alignment is available at all.
+
+    A depth-1 row of gaps, flagged ``has_msa=0``. See :func:`single_sequence_msa`
+    for why this is not a single-sequence baseline.
+    """
+    from helico.data import AF3_NUM_MSA_CLASSES
+
+    return {
+        "msa_profile": torch.zeros(1, n_tok, AF3_NUM_MSA_CLASSES),
+        "msa": torch.full((1, 1, n_tok), AF3_NUM_MSA_CLASSES - 1, dtype=torch.long),
+        "deletion_matrix": torch.zeros(1, 1, n_tok),
+        "deletion_mean": torch.zeros(1, n_tok),
+        "has_msa": torch.zeros(1),
+    }
+
+
 def predict_target(
     model: Helico,
     chains: list[dict],
@@ -489,6 +539,7 @@ def predict_target(
     device: str = "cuda",
     dtype: torch.dtype = torch.bfloat16,
     msa_features: MSAFeatures | None = None,
+    single_sequence: bool = False,
     msa_tar_indices: list[TarIndex] | None = None,
     msa_dir: Path | None = None,
     msa_server_url: str | None = None,
@@ -800,14 +851,10 @@ def predict_target(
         batch["deletion_matrix"] = raw_del.unsqueeze(0)
         batch["deletion_mean"] = deletion_mean.unsqueeze(0)
         batch["has_msa"] = torch.ones(1)
+    elif single_sequence:
+        batch.update(single_sequence_msa(batch["restype"]))
     else:
-        batch["msa_profile"] = torch.zeros(1, n_tok, AF3_NUM_MSA_CLASSES)
-        batch["msa"] = torch.full(
-            (1, 1, n_tok), AF3_NUM_MSA_CLASSES - 1, dtype=torch.long,
-        )
-        batch["deletion_matrix"] = torch.zeros(1, 1, n_tok)
-        batch["deletion_mean"] = torch.zeros(1, n_tok)
-        batch["has_msa"] = torch.zeros(1)
+        batch.update(empty_msa(n_tok))
 
     results = run_inference(
         model, batch, n_samples=n_samples, device=device, dtype=dtype,
@@ -1228,6 +1275,7 @@ def run_benchmark(
     msa_tar_indices: list[TarIndex] | None = None,
     msa_dir: Path | None = None,
     msa_server_url: str | None = None,
+    single_sequence: bool = False,
     n_cycles: int | None = None,
     cutoff_date: str | None = None,
     pdb_ids: list[str] | None = None,
@@ -1361,10 +1409,11 @@ def run_benchmark(
                             max_tokens=max_tokens,
                             device=device,
                             dtype=dtype,
-                            msa_tar_indices=msa_tar_indices,
-                            msa_dir=msa_dir,
-                            msa_server_url=msa_server_url,
+                            msa_tar_indices=None if single_sequence else msa_tar_indices,
+                            msa_dir=None if single_sequence else msa_dir,
+                            msa_server_url=None if single_sequence else msa_server_url,
                             msa_cache_dir=foldbench_dir / "foldbench-msas-server",
+                            single_sequence=single_sequence,
                             n_cycles=n_cycles,
                             oracle_contacts_from=gt_for_chains if oracle_contacts else None,
                         )
@@ -1560,6 +1609,11 @@ def main():
                         help="Only include targets released after this date, YYYY-MM-DD (default: 2024-01-01)")
     parser.add_argument("--pdb-ids", type=str, default=None,
                         help="Comma-separated pdb_ids to restrict to (for debugging)")
+    parser.add_argument("--single-sequence", action="store_true",
+                        help="Score with a depth-1 MSA whose one row is the query "
+                             "sequence. The MSA module still runs -- this is the "
+                             "fair no-alignments baseline, unlike disabling the "
+                             "module outright.")
     parser.add_argument("--oracle-contacts", action="store_true",
                         help="Condition on contacts derived from the ground-truth "
                              "structure. THIS LEAKS THE ANSWER: results measure "
@@ -1647,6 +1701,7 @@ def main():
         n_cycles=args.n_cycles,
         cutoff_date=args.cutoff_date,
         pdb_ids=[p.strip() for p in args.pdb_ids.split(",")] if args.pdb_ids else None,
+        single_sequence=args.single_sequence,
         oracle_contacts=args.oracle_contacts,
     )
 

@@ -628,3 +628,79 @@ class TestConditioningSampler:
                 saw_rich = True
         assert saw_none, "never sampled the ab initio level"
         assert saw_rich, "never sampled a near-fully-specified level"
+
+
+class TestSingleSequenceMode:
+    """bench.single_sequence_msa: depth-1 MSA whose one row is the query.
+
+    Three different things get called "no MSA" in this codebase and they are
+    not interchangeable:
+
+      1. ``single_sequence_msa`` — depth-1 MSA, row 0 = query. The MSA module
+         runs. This is the fair no-alignments baseline.
+      2. ``empty_msa`` — depth-1 MSA of *gaps*. A sequence of nothing.
+      3. ``HelicoConfig.use_msa=False`` — the MSA module never runs. A lesion.
+
+    Reporting (3) as a single-sequence baseline understated Protenix badly and
+    made a fine-tuned model look like it beat a baseline it was never compared
+    against. These tests pin the distinction.
+    """
+
+    def _restype(self, pdb_id, ccd):
+        from helico.bench import structure_to_chains
+        from helico.data import tokenize_sequences
+
+        gt = parse_mmcif(_pdb_path(pdb_id))
+        tokenized = tokenize_sequences(structure_to_chains(gt), ccd)
+        return tokenized.to_features()["restype"].unsqueeze(0)
+
+    def test_query_row_is_the_query(self, ccd):
+        """The single MSA row must BE the query sequence, not gaps."""
+        from helico.bench import single_sequence_msa
+        from helico.data import AF3_MSA_GAP
+
+        restype = self._restype("1UBQ", ccd)
+        feats = single_sequence_msa(restype)
+
+        assert feats["msa"].shape == (1, 1, restype.shape[1]), "depth must be 1"
+        assert torch.equal(feats["msa"][0, 0], restype[0])
+        # A protein chain must not come out all-gap — that is failure mode (2).
+        assert not (feats["msa"][0, 0] == AF3_MSA_GAP).all()
+        assert float(feats["has_msa"][0]) == 1.0
+
+    def test_profile_is_query_one_hot(self, ccd):
+        from helico.bench import single_sequence_msa
+
+        restype = self._restype("1UBQ", ccd)
+        prof = single_sequence_msa(restype)["msa_profile"][0]
+        assert torch.allclose(prof.sum(-1), torch.ones(prof.shape[0]))
+        assert torch.equal(prof.argmax(-1), restype[0])
+
+    def test_differs_from_empty_msa(self, ccd):
+        """The two depth-1 paths must not produce the same features."""
+        from helico.bench import empty_msa, single_sequence_msa
+        from helico.data import AF3_MSA_GAP
+
+        restype = self._restype("1UBQ", ccd)
+        single = single_sequence_msa(restype)
+        empty = empty_msa(restype.shape[1])
+
+        assert (empty["msa"][0, 0] == AF3_MSA_GAP).all()
+        assert not torch.equal(single["msa"], empty["msa"])
+        assert float(empty["has_msa"][0]) == 0.0
+        assert not torch.equal(single["msa_profile"], empty["msa_profile"])
+
+    def test_deletion_features_are_zero(self, ccd):
+        """No homologs means no insertions relative to the query."""
+        from helico.bench import single_sequence_msa
+
+        feats = single_sequence_msa(self._restype("1UBQ", ccd))
+        assert float(feats["deletion_matrix"].abs().max()) == 0.0
+        assert float(feats["deletion_mean"].abs().max()) == 0.0
+
+    def test_rejects_unbatched_restype(self):
+        """Shape confusion here would silently mis-scatter the query row."""
+        from helico.bench import single_sequence_msa
+
+        with pytest.raises(ValueError, match="shape"):
+            single_sequence_msa(torch.tensor([0, 5, 12]))

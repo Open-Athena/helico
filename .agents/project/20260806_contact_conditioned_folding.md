@@ -978,6 +978,53 @@ run name, not the launcher log.**
 Silver lining: those restarts are the replicates that made correction 1
 detectable at all.
 
+## 10f. "Single sequence" meant three different things (2026-08-11)
+
+Prompted by the observation that Helico with contacts *withheld* (0.616) was
+beating what I had labelled Protenix single-sequence (0.244) — a suspicious
+result, since the contacts-withheld arm should be a strictly weaker model.
+
+It was a bad baseline. Three configurations were all being called "no MSA":
+
+| | what it does | Protenix v1 lDDT |
+| --- | --- | --- |
+| `single_sequence_msa` | depth-1 MSA, row 0 = query; module runs | **0.327** |
+| `empty_msa` | depth-1 MSA of *gaps*; module runs | — |
+| `use_msa=False` | MSA module never runs | 0.244 |
+
+I had used the third. For a model whose pairformer was trained expecting an MSA
+update every recycling iteration, deleting the module is a lesion, not a starved
+input. Corrected: **+0.0823 +/- 0.0216 (t=3.80), 24/28 targets** higher under
+true single-sequence mode. MSAs are therefore worth +0.508 (not +0.590) to
+Protenix on this target set.
+
+`single_sequence_msa` and `empty_msa` are now named functions sitting next to
+each other in `bench.py` with the distinction documented, and
+`HELICO_BENCH_SINGLE_SEQ=1` selects the correct one.
+
+### The gap does not disappear, and that is fine
+
+Helico contacts-withheld (0.616) still beats corrected zero-shot single-sequence
+Protenix (0.327) by +0.289 +/- 0.024. The lesion explains only ~28% of the
+original gap. The rest is ordinary adaptation: Helico's contacts-withheld arm is
+*fine-tuned* for the no-MSA regime over 8000 steps, Protenix is zero-shot. The
+trajectory shows exactly this — the contacts-withheld arm goes 0.244 -> 0.557 in
+the first 1000 steps, which is the model learning to cope without the module.
+
+The lesson for reporting: **fine-tuned and zero-shot arms must not be compared
+across.** The only comparison that isolates contacts is off-vs-on at the same
+checkpoint. The figure and writeup now label each arm accordingly.
+
+### Leakage was ruled out separately
+
+Before landing on the lesion explanation I checked the obvious alternative, that
+fine-tuning data overlapped the benchmark. The training filter is
+`release_date < 2021-09-30 if release_date else True` — that `else True` would
+admit any undated structure. In the 236,326-entry manifest, **zero** entries have
+an empty `release_date`, and there is **zero** overlap between the 49 FoldBench
+target PDB ids and the 168,102 train-eligible structures (FoldBench targets are
+all 7z/8x depositions). Not the explanation.
+
 ## 11. Decisions taken
 
 Answered by the user on 2026-08-06:
