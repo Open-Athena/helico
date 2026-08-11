@@ -933,6 +933,28 @@ replicates, never two checkpoints from different runs.
 Unaffected: the headline contacts on/off comparison is same-checkpoint and
 paired, so it does not depend on any of this.
 
+### A real within-run trajectory, and a step-0 control
+
+`contacts-lrmult1000` kept `step_1000.pt` and `step_2000.pt`, so the early
+trajectory can be benched within a single run rather than across runs:
+
+| step | contacts given | contacts withheld |
+| --- | --- | --- |
+| 0 | 0.249 | 0.244 |
+| 1000 | 0.820 | 0.557 |
+| 2000 | 0.832 | 0.592 |
+| 3000 | 0.837 | 0.560 |
+
+Almost all of the gain is in the first 1000 steps. Note the contacts-withheld
+arm is non-monotone (0.592 at 2000, 0.560 at 3000) *within one run*, which is a
+useful reminder of how noisy single FoldBench points are.
+
+Step 0 is the warm start (Protenix v1 + `use_msa=False`), where the zero-init
+contact projection should make conditioning an exact no-op. Benching both arms
+there gives **+0.0045 +/- 0.0047, t=0.96** — consistent with zero. That is a
+direct check that the warm start is lossless and that no contact information
+reaches the model through a path other than `linear_contact`.
+
 ### Correction 2: three restarts silently discarded all progress
 
 `contacts-m1000-long` produced four W&B runs, not one:

@@ -64,7 +64,9 @@ Paired differences:
 
 Read together: MSAs are worth +0.590 lDDT to Protenix on these targets, and
 contact conditioning lands the model at the same place — the residual gap to
-Protenix+MSA is not statistically distinguishable from zero.
+Protenix+MSA is not statistically distinguishable from zero. Starting from the
+warm start at 0.244, the contacts-given arm reaches 0.820 within 1000 steps of
+fine-tuning (see [Training progress](#training-progress)).
 
 Controls that make the effect credible:
 
@@ -114,21 +116,42 @@ These matter, and none of them are resolved yet.
 3. **The MSA module still exists.** `use_msa=False` removes the MSA *input*;
    the module is still constructed (~3M dead parameters). Deliberate for now, to
    keep warm starting simple.
-4. **Training progress is unresolved.** See below.
+4. **The 8000-step point is from a different run** than the 0-3000
+   trajectory, so it is not directly comparable to it. See
+   [Training progress](#training-progress).
 
-## Training progress: gains stop around step 5000
+## Training progress
 
-Panel B is the only *within-run* progress signal available, because the two
-benchmarked checkpoints in panel A come from different training runs. It shows
-a clear gain from step 3000 → ~4000–5000, then a plateau: averaged over the two
-runs with full coverage, validation lDDT at 100% conditioning goes 0.759 (3000)
-→ 0.795 (4000) → 0.801 (5000) → 0.805 (8000). Independent restarts at matched
-steps differ by up to 0.029, so the 5000 → 8000 movement is inside the noise
-floor.
+Panel A is a single run (`contacts-lrmult1000`), so it is a real trajectory.
+Step 0 is the warm start itself — Protenix v1 weights with `use_msa=False` and
+the contact projection still at its zero initialisation.
 
-An earlier claim in this work — that a +0.013 FoldBench gain between the two
+| step | contacts given | contacts withheld |
+| --- | --- | --- |
+| 0 | 0.249 | 0.244 |
+| 1000 | 0.820 | 0.557 |
+| 2000 | 0.832 | 0.592 |
+| 3000 | 0.837 | 0.560 |
+| 8000 *(different run)* | 0.850 | 0.616 |
+
+Almost all of the movement happens in the first 1000 steps; steps 1000 → 3000
+add +0.017 with contacts given.
+
+**Step 0 doubles as a control.** The contact projection is zero-initialised, so
+conditioning should be an exact no-op there and the two arms should coincide.
+Measured difference: **+0.0045 ± 0.0047 (t=0.96)** — consistent with zero. The
+warm start is lossless and the pipeline is not leaking contact information
+through some other path.
+
+The in-training validation (panel C) covers steps 3000–9000 on a different
+evaluation set and is flat over that range: averaged across the two runs with
+full coverage, lDDT at 100% conditioning goes 0.759 (3000) → 0.795 (4000) →
+0.801 (5000) → 0.805 (8000), while independent restarts at matched steps differ
+by up to 0.029.
+
+An earlier claim in this work — that a +0.013 FoldBench gain between two
 checkpoints showed training was still helping — does not survive. Those
-checkpoints are from different runs, and the effect is smaller than the
+checkpoints came from different runs, and the effect is smaller than the
 run-to-run spread.
 
 ## Reproducing
