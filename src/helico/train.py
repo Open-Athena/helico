@@ -1206,16 +1206,23 @@ def main():
         manifest = load_manifest(manifest_path)
         logger.info(f"Manifest has {len(manifest)} structures")
 
-        # Load MSA tar indices if available
+        # Load MSA tar indices if available. Skipped entirely under --no-msa:
+        # the model gates every MSA-derived feature, but not loading the data in
+        # the first place means an MSA-free run cannot regress into a leaky one
+        # if that gate is ever weakened. It also saves the index load and the
+        # per-example MSA assembly, which are pure waste in this mode.
         msa_tar_indices: list[TarIndex] = []
-        for idx_name in ["rcsb_msa_index.pkl", "rcsb_raw_msa_index.pkl",
-                         "openfold_msa_index.pkl", "openfold_raw_msa_index.pkl"]:
-            idx_path = processed_dir / idx_name
-            if idx_path.exists():
-                logger.info(f"Loading MSA tar index from {idx_path}...")
-                msa_tar_indices.append(load_tar_index(idx_path))
-
-        msa_dir = Path(args.msa_dir) if args.msa_dir else None
+        msa_dir = None
+        if args.no_msa:
+            logger.info("--no-msa: skipping MSA indices; no alignment data will be loaded")
+        else:
+            for idx_name in ["rcsb_msa_index.pkl", "rcsb_raw_msa_index.pkl",
+                             "openfold_msa_index.pkl", "openfold_raw_msa_index.pkl"]:
+                idx_path = processed_dir / idx_name
+                if idx_path.exists():
+                    logger.info(f"Loading MSA tar index from {idx_path}...")
+                    msa_tar_indices.append(load_tar_index(idx_path))
+            msa_dir = Path(args.msa_dir) if args.msa_dir else None
 
         # Create training dataset with date-based filter (AF3 convention).
         train_cutoff = args.train_cutoff

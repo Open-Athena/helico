@@ -837,3 +837,32 @@ class TestValidationLevels:
             rs.append(tp / n_true)
         assert abs(sum(ps) / len(ps) - MARINFOLD_PRECISION) < 0.06
         assert abs(sum(rs) / len(rs) - MARINFOLD_RECALL) < 0.06
+
+
+class TestNoMsaSkipsMsaLoading:
+    """--no-msa must not even load alignment data.
+
+    The model gates every MSA-derived feature (see TestNoMSALeak), but a run
+    that still loads MSAs is one weakened gate away from leaking again -- which
+    is exactly how the profile leak survived: `use_msa=False` was assumed to
+    mean "no MSAs anywhere" while the loader ignored it entirely.
+    """
+
+    def test_arg_gates_the_loader(self):
+        """The MSA index loop must be inside the `else` of the no_msa branch."""
+        import inspect
+
+        from helico import train as train_mod
+
+        src = inspect.getsource(train_mod)
+        head, _, tail = src.partition("if args.no_msa:")
+        assert tail, "expected a --no-msa branch guarding MSA index loading"
+        # The loader must appear after the branch opens, not before it.
+        assert "Loading MSA tar index" not in head, (
+            "MSA indices are loaded before the --no-msa check, so an MSA-free "
+            "run still reads alignment data"
+        )
+        guarded, _, rest = tail.partition("\n        # Create training dataset")
+        assert "Loading MSA tar index" in guarded, (
+            "MSA index loading moved out of the branch it should sit in"
+        )
