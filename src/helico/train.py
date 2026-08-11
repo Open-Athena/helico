@@ -18,6 +18,7 @@ import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 
+from helico.contacts import MARINFOLD_PRECISION, MARINFOLD_RECALL
 from helico.data import (
     HelicoDataset,
     LazyHelicoDataset,
@@ -441,6 +442,13 @@ VAL_CONTACT_LEVELS: dict[str, dict] = {
     # 100% defined but corrupted (20% false positives + 20% false negatives),
     # standing in for what a real contact predictor would supply.
     "@contacts100noisy": {"mode": "full", "eps_fp": 0.2, "eps_fn": 0.2},
+    # MarinFold's actual output: a truncated top-k list at ~60% precision and
+    # ~60% recall. This is the level that tracks deployment readiness — the
+    # others bracket it. Pinned to the constants in helico.contacts so the two
+    # move together when the predictor improves.
+    "@contactsMarinFold": {"mode": "contact-list",
+                           "precision": MARINFOLD_PRECISION,
+                           "recall": MARINFOLD_RECALL},
 }
 
 # The headline curve: these three differ only in how much of the contact matrix

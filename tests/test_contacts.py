@@ -604,15 +604,28 @@ class TestConditioningSampler:
         b = sample_conditioning(contact_state, generator=torch.Generator().manual_seed(7))
         assert torch.equal(a, b)
 
-    def test_never_asserts_outside_known_region(self, contact_state):
-        """Conditioning may only ever weaken knowledge, never invent a knowable pair."""
+    @pytest.mark.parametrize("eps_fp", [0.0, 0.3, 1.5])
+    def test_never_asserts_outside_known_region(self, contact_state, eps_fp):
+        """Conditioning may only ever weaken knowledge, never invent a knowable pair.
+
+        Parametrised over eps_fp because the original version pinned it to 0 and
+        so only ever exercised the clean path — while the bug it was meant to
+        catch lived in the false-positive injector, which sampled the whole
+        upper triangle. ~40% of injected contacts landed on non-protein tokens
+        or at |i-j| < MIN_SEQ_SEPARATION, where no real predictor can emit one.
+        """
         unknown = contact_state == CONTACT_UNKNOWN
         for mode in ["full", "pair-subset", "contact-list"]:
             g = torch.Generator().manual_seed(13)
             out = sample_conditioning(
-                contact_state, generator=g, mode=mode, reveal=0.7, eps_fp=0.0, eps_fn=0.0
+                contact_state, generator=g, mode=mode, reveal=0.7,
+                eps_fp=eps_fp, eps_fn=0.0,
             )
-            assert bool((out[unknown] == CONTACT_UNKNOWN).all()), mode
+            leaked = out[unknown] != CONTACT_UNKNOWN
+            assert not bool(leaked.any()), (
+                f"{mode} asserted {int(leaked.sum())} pairs outside the eligible "
+                f"region at eps_fp={eps_fp}"
+            )
 
     def test_mode_mixture_includes_both_extremes(self, contact_state):
         """The sampled default must reach all-unknown and near-full conditioning."""
@@ -704,3 +717,123 @@ class TestSingleSequenceMode:
 
         with pytest.raises(ValueError, match="shape"):
             single_sequence_msa(torch.tensor([0, 5, 12]))
+
+
+class TestPredictorOperatingPoint:
+    """Conditioning must be able to reproduce MarinFold's actual output.
+
+    MarinFold emits a truncated top-k contact list at roughly 60% precision and
+    60% recall (2026-08). Two things follow, and both were previously wrong:
+
+    - An unlisted pair means "did not make the cut", not "not a contact", so
+      the sampler must never assert ABSENT in this mode.
+    - 60% precision needs eps_fp = (1-p)/p = 0.667, far outside the old
+      U(0, 0.3) sampling range — the model was never trained near the
+      operating point it has to work at.
+    """
+
+    def _measure(self, contact_state, **kwargs):
+        n_true = int((contact_state == CONTACT_PRESENT).sum()) // 2
+        precisions, recalls = [], []
+        for seed in range(60):
+            g = torch.Generator().manual_seed(4000 + seed)
+            out = sample_conditioning(contact_state, generator=g, **kwargs)
+            asserted = out == CONTACT_PRESENT
+            n_asserted = int(asserted.sum()) // 2
+            if not n_asserted:
+                continue
+            tp = int((asserted & (contact_state == CONTACT_PRESENT)).sum()) // 2
+            precisions.append(tp / n_asserted)
+            recalls.append(tp / n_true)
+        return sum(precisions) / len(precisions), sum(recalls) / len(recalls)
+
+    @pytest.mark.parametrize("precision,recall", [(0.6, 0.6), (0.8, 0.5), (1.0, 1.0)])
+    def test_realises_the_requested_operating_point(self, contact_state, precision, recall):
+        got_p, got_r = self._measure(contact_state, mode="contact-list",
+                                     precision=precision, recall=recall)
+        assert abs(got_p - precision) < 0.06, f"precision {got_p:.3f} != {precision}"
+        assert abs(got_r - recall) < 0.06, f"recall {got_r:.3f} != {recall}"
+
+    def test_top_k_list_never_asserts_absence(self, contact_state):
+        """Unlisted pairs are unknown, not absent — the list is truncated."""
+        for seed in range(30):
+            g = torch.Generator().manual_seed(seed)
+            out = sample_conditioning(contact_state, generator=g, mode="contact-list")
+            assert not bool((out == CONTACT_ABSENT).any()), (
+                "contact-list asserted an absence; a truncated top-k list "
+                "cannot distinguish 'not a contact' from 'did not fit'"
+            )
+
+    def test_sampled_precision_covers_marinfold(self, contact_state):
+        """The default sampling range must include the real operating point."""
+        from helico.contacts import MARINFOLD_PRECISION
+
+        seen_at_or_below = False
+        for seed in range(200):
+            g = torch.Generator().manual_seed(9000 + seed)
+            out = sample_conditioning(contact_state, generator=g, mode="contact-list")
+            asserted = out == CONTACT_PRESENT
+            n_asserted = int(asserted.sum()) // 2
+            if not n_asserted:
+                continue
+            tp = int((asserted & (contact_state == CONTACT_PRESENT)).sum()) // 2
+            if tp / n_asserted <= MARINFOLD_PRECISION + 0.02:
+                seen_at_or_below = True
+                break
+        assert seen_at_or_below, (
+            f"never sampled a conditioning as noisy as precision "
+            f"{MARINFOLD_PRECISION}; the model would not be trained for it"
+        )
+
+    def test_precision_recall_roundtrip(self):
+        from helico.contacts import conditioning_from_precision_recall
+
+        reveal, eps_fp, eps_fn = conditioning_from_precision_recall(0.6, 0.6)
+        assert reveal == pytest.approx(0.6)
+        assert eps_fp == pytest.approx(2 / 3, abs=1e-6)
+        assert eps_fn == 0.0
+        with pytest.raises(ValueError, match="precision"):
+            conditioning_from_precision_recall(0.0, 0.5)
+        with pytest.raises(ValueError, match="recall"):
+            conditioning_from_precision_recall(0.5, 1.5)
+
+
+class TestValidationLevels:
+    """Every pinned validation level must be a valid conditioning spec.
+
+    The levels are splatted straight into sample_conditioning as kwargs, so a
+    typo'd key is a TypeError thousands of steps into a run rather than at
+    import. This catches it at test time.
+    """
+
+    def test_all_levels_are_accepted(self, contact_state):
+        from helico.train import VAL_CONTACT_LEVELS
+
+        for name, spec in VAL_CONTACT_LEVELS.items():
+            g = torch.Generator().manual_seed(3)
+            out = sample_conditioning(contact_state, generator=g, **spec)
+            assert out.shape == contact_state.shape, name
+            assert torch.equal(out, out.T), f"{name} broke symmetry"
+
+    def test_marinfold_level_matches_the_constants(self, contact_state):
+        from helico.contacts import MARINFOLD_PRECISION, MARINFOLD_RECALL
+        from helico.train import VAL_CONTACT_LEVELS
+
+        spec = VAL_CONTACT_LEVELS["@contactsMarinFold"]
+        assert spec["precision"] == MARINFOLD_PRECISION
+        assert spec["recall"] == MARINFOLD_RECALL
+
+        n_true = int((contact_state == CONTACT_PRESENT).sum()) // 2
+        ps, rs = [], []
+        for seed in range(40):
+            g = torch.Generator().manual_seed(seed)
+            out = sample_conditioning(contact_state, generator=g, **spec)
+            asserted = out == CONTACT_PRESENT
+            n = int(asserted.sum()) // 2
+            if not n:
+                continue
+            tp = int((asserted & (contact_state == CONTACT_PRESENT)).sum()) // 2
+            ps.append(tp / n)
+            rs.append(tp / n_true)
+        assert abs(sum(ps) / len(ps) - MARINFOLD_PRECISION) < 0.06
+        assert abs(sum(rs) / len(rs) - MARINFOLD_RECALL) < 0.06

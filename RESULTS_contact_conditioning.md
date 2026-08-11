@@ -233,40 +233,50 @@ What training samples per example ([`contacts.py`](src/helico/contacts.py)):
 | `none` | 15% | everything unknown |
 | `full` | 15% | every eligible pair specified |
 | `pair-subset` | 35% | reveal a fraction of *pairs*, rest unknown |
-| `contact-list` | 35% | reveal a fraction of *contacts*; unlisted pairs become absent or unknown on a coin flip |
+| `contact-list` | 35% | MarinFold-shaped: a truncated top-k contact list |
 
-`reveal ~ U(0,1)`; false-positive and false-negative rates `eps_fp, eps_fn ~
-U(0, 0.3)` independently, both expressed as a fraction of revealed contacts.
+MarinFold's operating point (2026-08) is **~60% precision, ~60% recall**, output
+as a truncated top-k list. Three things were wrong for that and are now fixed:
 
-Known problems with this, in rough priority order:
+1. **False positives landed where a predictor cannot produce them.** The FP
+   candidate set was the whole upper triangle. Measured: **~40% of injected FPs
+   were structurally impossible** — 8.7% at `|i-j| < 6` (filtered out of the
+   true set) and 31% on non-protein tokens (pyconfind emits protein side-chain
+   contacts only). That gave the model a free "this one is fake" cue that will
+   not exist at deployment. FPs are now restricted to the eligible region;
+   measured impossible FPs after the fix: **0**.
+2. **A top-k list cannot assert absence.** `contact-list` previously flipped a
+   coin and marked all unlisted eligible pairs ABSENT half the time. With
+   truncation, an unlisted pair means "did not make the cut", which is
+   uninformative — asserting millions of true negatives the predictor never
+   claimed. Unlisted pairs now stay unknown.
+3. **The noise range never reached the real operating point.** `eps_fp` counts
+   false contacts relative to revealed ones, so precision `p` needs
+   `eps_fp = (1-p)/p`. At p=0.6 that is **0.667**, well outside the old
+   `U(0, 0.3)` — which corresponds to precision ≥ 0.77. The model had never
+   been trained anywhere near where it has to work. `contact-list` now samples
+   a precision in `[0.4, 1.0]` and derives `eps_fp`.
 
-1. **False positives land where a predictor cannot produce them.** The FP
-   candidate set is every non-contact pair in the upper triangle, unrestricted.
-   Measured on a synthetic complex: **~40% of injected FPs are structurally
-   impossible** — 8.7% at `|i-j| < 6` (which the pipeline filters out of the
-   true set) and 31% on non-protein tokens (pyconfind only emits protein
-   side-chain contacts). The model can learn to discount exactly those, so its
-   apparent robustness to noise is inflated. FPs should be drawn from the same
-   eligible region as true contacts, and preferentially from near-miss pairs
-   (CB-CB just beyond the contact threshold) rather than uniformly.
-2. **`eps_fp` and `eps_fn` are independent.** Real predictors move along a
-   precision/recall tradeoff; independent uniforms spend mass on corners that
-   do not occur. They should be sampled from a curve, and the range should be
-   set from MarinFold's measured operating point rather than an arbitrary 0.3.
-3. **`@contacts50` is not "half the information".** `pair-subset` at 0.5
-   specifies half of *all pairs* — and since contacts are ~0.1% of pairs, that
-   asserts a very large number of true negatives. This is why the 50% level
-   tracks close to 100% rather than sitting midway. A contact-list partial
-   (reveal half the contacts, rest unknown) is the more meaningful "partial".
-4. **Revealed contacts are a uniform random subset.** A predictor finds
-   high-confidence contacts preferentially. pyconfind already returns a
-   *degree* per contact, currently thresholded and discarded — weighting reveal
-   probability by degree would model this.
-5. **Errors are independent.** Real predictor errors are spatially correlated;
-   a mispredicted region gets many wrong contacts at once.
-6. **No validation level matches a real operating point.** Levels are 0/50/100
-   and 100-with-20%-noise. One level pinned to MarinFold's measured precision
-   and recall would track deployment readiness directly.
+`conditioning_from_precision_recall(p, r)` converts an operating point into
+`(reveal, eps_fp, eps_fn)`; recall loss folds into `reveal` because a top-k list
+has no separate "reported but wrong" channel. A new validation level
+`@contactsMarinFold` is pinned to the constants, so the tracked curve includes
+the deployment condition rather than only bracketing it.
+
+Remaining known gaps, not yet addressed:
+
+- **`@contacts50` is not "half the information".** `pair-subset` at 0.5
+  specifies half of *all pairs*, and since contacts are ~0.1% of pairs that
+  asserts a very large number of true negatives. This is why the 50% level
+  tracks close to 100% rather than sitting midway.
+- **Revealed contacts are a uniform random subset.** A predictor finds
+  high-confidence contacts first. pyconfind returns a *degree* per contact,
+  currently thresholded and discarded — weighting reveal probability by degree
+  would model this.
+- **Errors are independent.** Real predictor errors are spatially correlated.
+- **False positives are uniform within the eligible region.** Real ones
+  concentrate near true contacts (near-miss pairs just beyond the distance
+  threshold).
 
 ## Reproducing
 

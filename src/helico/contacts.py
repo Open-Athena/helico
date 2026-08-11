@@ -50,8 +50,43 @@ MIN_CONTACT_DEGREE = 0.001
 # in :func:`compute_contacts`.
 MIN_SEQ_SEPARATION = 6
 
+# MarinFold's operating point as of 2026-08: precision ~= recall ~= 0.6, output
+# is a truncated top-k contact list. Training samples around and above this so
+# the model covers today's predictor and the better one we expect later.
+MARINFOLD_PRECISION = 0.6
+MARINFOLD_RECALL = 0.6
+# Lower bound on sampled precision. p=0.4 gives eps_fp=1.5 — more false contacts
+# than true ones — which brackets the current 0.6 comfortably from below.
+MIN_SAMPLED_PRECISION = 0.4
+
 # helico token_types 0..20 are the standard protein residues (20 AAs + UNK).
 MAX_PROTEIN_TOKEN_TYPE = 20
+
+
+def conditioning_from_precision_recall(
+    precision: float, recall: float
+) -> tuple[float, float, float]:
+    """``(reveal, eps_fp, eps_fn)`` reproducing a predictor at this operating point.
+
+    MarinFold emits a *truncated top-k* list, so a true contact is missing
+    because it did not make the cut — there is no separate "reported but wrong"
+    channel. All recall loss therefore folds into ``reveal`` and ``eps_fn``
+    stays 0.
+
+    ``eps_fp`` counts false contacts relative to the *revealed* ones, so with
+    all recall loss in ``reveal``:
+
+        precision = revealed / (revealed + eps_fp * revealed)
+                  = 1 / (1 + eps_fp)          =>  eps_fp = (1 - p) / p
+
+    At p=0.6 that is eps_fp=0.667 — well outside the old U(0, 0.3) sampling
+    range, so the model was never trained anywhere near MarinFold's precision.
+    """
+    if not 0.0 < precision <= 1.0:
+        raise ValueError(f"precision must be in (0, 1], got {precision}")
+    if not 0.0 <= recall <= 1.0:
+        raise ValueError(f"recall must be in [0, 1], got {recall}")
+    return recall, (1.0 - precision) / precision, 0.0
 
 
 def sample_conditioning(
@@ -61,6 +96,8 @@ def sample_conditioning(
     reveal: float | None = None,
     eps_fp: float | None = None,
     eps_fn: float | None = None,
+    precision: float | None = None,
+    recall: float | None = None,
 ) -> "Any":
     """Mask and corrupt a 3-state contact matrix for training.
 
@@ -127,7 +164,10 @@ def sample_conditioning(
         return (m | m.T).to(device)
 
     if reveal is None:
-        reveal = 1.0 if mode == "full" else _rand()
+        if recall is not None:
+            reveal = recall
+        else:
+            reveal = 1.0 if mode == "full" else _rand()
 
     if mode in ("full", "pair-subset"):
         keep = known if mode == "full" else (known & _sym_mask(reveal))
@@ -135,12 +175,29 @@ def sample_conditioning(
     else:  # contact-list
         is_contact = contact_state == CONTACT_PRESENT
         listed = is_contact & _sym_mask(reveal)
-        # Unlisted known pairs: complete list (absent) or truncated list (unknown).
-        if _rand() < 0.5:
-            out[known] = CONTACT_ABSENT
+        # MarinFold emits a truncated top-k list, so an unlisted pair means
+        # "did not make the cut" — which carries no information either way.
+        # Marking those ABSENT (as an earlier version did on a coin flip) would
+        # assert millions of true negatives the predictor never claimed.
         out[listed] = CONTACT_PRESENT
 
     # --- corruption -------------------------------------------------------
+    # For contact-list (the MarinFold-shaped mode) the noise level is drawn as a
+    # precision, so the sampled range is anchored to a real operating point
+    # rather than to an arbitrary epsilon cap. The old U(0, 0.3) on eps_fp
+    # corresponds to precision >= 0.77 and never reached MarinFold's 0.6.
+    if precision is not None or recall is not None:
+        p_ = MARINFOLD_PRECISION if precision is None else precision
+        r_ = MARINFOLD_RECALL if recall is None else recall
+        _, eps_fp_pr, eps_fn_pr = conditioning_from_precision_recall(p_, r_)
+        eps_fp = eps_fp_pr if eps_fp is None else eps_fp
+        eps_fn = eps_fn_pr if eps_fn is None else eps_fn
+    elif mode == "contact-list":
+        if eps_fp is None:
+            p_ = MIN_SAMPLED_PRECISION + _rand() * (1.0 - MIN_SAMPLED_PRECISION)
+            eps_fp = (1.0 - p_) / p_
+        if eps_fn is None:
+            eps_fn = 0.0  # recall loss is already modelled by `reveal`
     if eps_fn is None:
         eps_fn = _rand() * 0.3
     if eps_fp is None:
@@ -164,7 +221,14 @@ def sample_conditioning(
     # of pairs, so a per-pair rate would swamp the true signal many times over.
     n_fp = int(round(eps_fp * n_revealed))
     if n_fp > 0:
-        candidates = (out != CONTACT_PRESENT) & torch.triu(
+        # Restricted to `known`: the eligible region. Outside it a real
+        # predictor structurally cannot emit a contact — pyconfind reports only
+        # protein side-chain contacts, and pairs closer than
+        # MIN_SEQ_SEPARATION are filtered out. Sampling the full upper triangle
+        # put ~40% of false positives on ligand/nucleic tokens or at
+        # |i-j| < 6, giving the model a free "this one is fake" cue that will
+        # not exist at deployment.
+        candidates = known & (out != CONTACT_PRESENT) & torch.triu(
             torch.ones((n, n), dtype=torch.bool, device=device), diagonal=1
         )
         idx = candidates.nonzero(as_tuple=False)
