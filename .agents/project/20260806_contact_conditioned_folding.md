@@ -867,6 +867,95 @@ is reached.
 
 **Practical upshot: keep 48 blocks.**
 
+## 10e. Closing the loop vs MSAs, and two corrections (2026-08-11)
+
+### The comparison that answers the original question
+
+Protenix v1 was benched twice on the same FoldBench targets: once normally, and
+once with `HELICO_BENCH_NO_MSA=1`, which forces `use_msa=False` on the loaded
+model. That gives the MSA's actual worth on this target set, which is the
+yardstick the whole project is aimed at.
+
+On the 28 protein targets every arm scored (paired):
+
+| Arm | lDDT |
+| --- | --- |
+| Protenix v1, single sequence | 0.244 |
+| Helico, contacts all-unknown | 0.616 |
+| Protenix v1, with MSAs | 0.835 |
+| Helico, contacts given (100%) | 0.850 |
+
+- contacts off -> on: **+0.234 +/- 0.021**, t=11.0, 28/28 improved
+- contacts-on vs Protenix+MSA: +0.016 +/- 0.014, t=1.1 — **not significant**
+- Protenix single-seq -> +MSA: +0.590 +/- 0.015, t=38.9
+
+So the MSA is worth +0.590 lDDT to Protenix here, and oracle contacts put the
+model level with it. Note the asymmetry when quoting this: the Protenix rows are
+genuine predictions, the Helico contacts-on row is conditioned on the answer.
+
+Caveat on the single-sequence number specifically: Protenix was *trained* with
+MSAs, so running it without them is an out-of-distribution ablation. 0.244 is
+"what this model does when you remove something it depends on", not "what a
+well-built single-sequence model achieves". It bounds the MSA's contribution to
+this particular model; it is not a fair single-sequence baseline.
+
+Figure: `.agents/project/figures/contact_conditioning_accuracy.png`, regenerated
+by the script beside it. Reader-facing writeup:
+`RESULTS_contact_conditioning.md`.
+
+### Correction 1: the "training is still helping" claim was cross-run
+
+I reported that FoldBench improved +0.0131 (t=2.49) between the step-3000 and
+step-8000 checkpoints, and read that as evidence to keep training. Checking
+provenance in the bench logs:
+
+- "step 3000" = `/ckpts/contacts-lrmult1000/final.pt` — a **separate** 3k-step run
+- "step 8000" = `/ckpts/contacts-m1000-long/step_8000.pt`
+
+Different training runs, so that difference is not a trajectory. The in-training
+validation, which *is* within-run and paired on a fixed 50-structure subset,
+says gains stop around step 4000-5000:
+
+| step | 3000 | 4000 | 5000 | 6000 | 7000 | 8000 |
+| --- | --- | --- | --- | --- | --- | --- |
+| mean val lDDT @c100 | 0.759 | 0.795 | 0.801 | 0.798 | 0.803 | 0.805 |
+
+Independent restarts at step 3000 give 0.750 / 0.768 / 0.775, and at step 8000
+give 0.815 / 0.796 / 0.787 — a spread of ~0.029, larger than the +0.013 that was
+being read as progress. **Run-to-run variance is the thing to compare against,
+and it was not being measured until restarts accidentally produced replicates.**
+
+This is the same failure mode as the four earlier over-readings in section 10b:
+treating a single unreplicated difference as signal. The generalisable fix is
+that any "is it still improving" claim needs either a within-run trajectory or
+replicates, never two checkpoints from different runs.
+
+Unaffected: the headline contacts on/off comparison is same-checkpoint and
+paired, so it does not depend on any of this.
+
+### Correction 2: three restarts silently discarded all progress
+
+`contacts-m1000-long` produced four W&B runs, not one:
+
+| run | started (UTC) | reached | resumed? |
+| --- | --- | --- | --- |
+| tawpzvgx | 08-10 17:58 | step 8350 | — |
+| i69zyxeo | 08-11 03:08 | step 8350 | no, restarted from warm start |
+| 7q7i0vzf | 08-11 11:32 | step 3950 | no, restarted from warm start |
+| vfie8jlg | 08-11 13:01 | ongoing | yes, from step_8000 |
+
+The auto-resume-from-newest-checkpoint fix (bcae048) landed 08-11 12:58 UTC —
+three minutes before the only attempt that resumed correctly. Runs 2 and 3
+re-trained ground already covered: ~9.8 GPU-hours on 8xH100, roughly $310.
+
+The monitoring was also wrong: it reported "attempts=1" because it counted Modal
+function attempts from a log grep, which does not see a fresh container starting
+a fresh W&B run. **Restart detection should key off the W&B run count for the
+run name, not the launcher log.**
+
+Silver lining: those restarts are the replicates that made correction 1
+detectable at all.
+
 ## 11. Decisions taken
 
 Answered by the user on 2026-08-06:

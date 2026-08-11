@@ -27,6 +27,11 @@ GPU_TYPE = os.environ.get("HELICO_BENCH_GPU", "H100")
 # no error and no warning. The value is baked into predictor_image below so both
 # sides agree.
 ORACLE_CONTACTS = os.environ.get("HELICO_BENCH_ORACLE_CONTACTS", "0") == "1"
+# Force use_msa=False on the loaded model regardless of what its config says.
+# Used to score Protenix in "single sequence mode" — an out-of-distribution
+# ablation for a model trained with MSAs, which is exactly the point: it
+# measures what the alignments contribute.
+NO_MSA = os.environ.get("HELICO_BENCH_NO_MSA", "0") == "1"
 
 # Predictor image: GPU model inference. Ships with cuequivariance (pinned
 # to 0.8.x — 0.10 broke bench inference with cuDNN-frontend errors) and
@@ -71,7 +76,8 @@ predictor_image = (
     # Propagate the oracle-contacts switch into the container: module-level
     # os.environ reads happen again on the remote import, where the launching
     # shell's env does not exist.
-    .env({"HELICO_BENCH_ORACLE_CONTACTS": "1" if ORACLE_CONTACTS else "0"})
+    .env({"HELICO_BENCH_ORACLE_CONTACTS": "1" if ORACLE_CONTACTS else "0",
+          "HELICO_BENCH_NO_MSA": "1" if NO_MSA else "0"})
     # Project code last (changes most frequently)
     .add_local_dir(str(ROOT / "src"), remote_path="/root/helico/src")
     .add_local_file(str(ROOT / "pyproject.toml"), remote_path="/root/helico/pyproject.toml")
@@ -210,7 +216,11 @@ class Predictor:
                 (k.removeprefix("module."), v) for k, v in ptx_sd.items()
             )
             config = infer_protenix_config(ptx_sd)
-            print(f"Inferred Protenix config: d_pair={config.d_pair}, d_msa={config.d_msa}")
+            if NO_MSA:
+                config.use_msa = False
+                print("HELICO_BENCH_NO_MSA=1 -> scoring Protenix in single-sequence mode")
+            print(f"Inferred Protenix config: d_pair={config.d_pair}, d_msa={config.d_msa}, "
+                  f"use_msa={config.use_msa}")
             self.model = Helico(config)
             load_protenix_state_dict(ptx_sd, self.model)
         else:
@@ -233,6 +243,8 @@ class Predictor:
                 k: v for k, v in saved_cfg.items() if hasattr(HelicoConfig, k)
             }
             config = HelicoConfig(**overrides)
+            if NO_MSA:
+                config.use_msa = False
             print(f"Helico config from checkpoint ({len(overrides)} fields): "
                   f"n_pairformer_blocks={config.n_pairformer_blocks}, "
                   f"n_diffusion_token_blocks={config.n_diffusion_token_blocks}, "

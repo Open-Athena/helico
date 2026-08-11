@@ -1,0 +1,154 @@
+# Folding from contacts instead of MSAs — results so far
+
+**Status:** exploratory, results are from a *warm-started* model and use
+**oracle contacts** (derived from the ground-truth structure). See
+[Caveats](#caveats) before quoting any number.
+
+Design doc and full research record:
+[`.agents/project/20260806_contact_conditioned_folding.md`](.agents/project/20260806_contact_conditioned_folding.md).
+
+---
+
+## The question
+
+Helico is an AlphaFold3 clone. AF3-family models lean heavily on multiple
+sequence alignments: strip the MSA and accuracy collapses. MSAs are also the
+expensive, slow, and least biologically satisfying part of the pipeline.
+
+[MarinFold](https://github.com/Open-Athena/MarinFold) predicts residue–residue
+side-chain contacts directly. So: **can a folding model take contacts as input
+instead of an MSA, and reach the same accuracy?**
+
+If yes, the alignment search comes out of the critical path and is replaced by a
+contact predictor.
+
+## What was built
+
+- A three-state token×token contact matrix — `PRESENT` / `ABSENT` / `UNKNOWN` —
+  computed by [pyconfind](https://github.com/Open-Athena/pyconfind) with the
+  exact `contacts-v1` parameters MarinFold uses
+  ([`src/helico/contacts.py`](src/helico/contacts.py)).
+- The matrix is embedded and added into the pair representation `z_init`
+  through a zero-initialised projection, so an untrained contact pathway is an
+  exact no-op and warm starting from a Protenix checkpoint is lossless.
+- Training samples the conditioning level per example — all-unknown, fully
+  specified, and everything between — so one model serves any level of contact
+  knowledge, including none.
+- The MSA input is gated off (`use_msa=False`) for all runs here.
+- Validation reports lDDT at 0%, 50%, 100%, and 100%-with-noise conditioning
+  every validation step.
+
+## Headline result
+
+**Given the true contact map, the model matches Protenix-with-MSAs.**
+
+![Accuracy of contact-conditioned folding](.agents/project/figures/contact_conditioning_accuracy.png)
+
+FoldBench, 28 protein targets scored by every arm (paired — same targets, same
+scoring pipeline):
+
+| Arm | lDDT |
+| --- | --- |
+| Protenix v1, single sequence (no MSA) | 0.244 |
+| **Helico, contacts all-unknown** | **0.616** |
+| Protenix v1, with MSAs | 0.835 |
+| **Helico, contacts given (100%)** | **0.850** |
+
+Paired differences:
+
+| Comparison | Δ lDDT | t | improved |
+| --- | --- | --- | --- |
+| Helico: contacts off → on | **+0.234 ± 0.021** | 11.0 | 28/28 |
+| Helico contacts-on vs Protenix + MSA | +0.016 ± 0.014 | 1.1 (n.s.) | 21/28 |
+| Protenix: single sequence → +MSA | +0.590 ± 0.015 | 38.9 | 28/28 |
+
+Read together: MSAs are worth +0.590 lDDT to Protenix on these targets, and
+contact conditioning lands the model at the same place — the residual gap to
+Protenix+MSA is not statistically distinguishable from zero.
+
+Controls that make the effect credible:
+
+- **Empirical null.** 11 nucleic-acid-only targets have no protein contacts, so
+  the two arms are identical by construction. Measured difference: +0.0004
+  (sd 0.026) — the pipeline invents nothing.
+- **Negative control.** An otherwise identical run whose contact pathway could
+  not learn (see below) closed −1% of the gap through the same pipeline.
+
+## The bug that mattered
+
+The contact projection is zero-initialised, and at the shared learning rate of
+5e-5 **it never moved**. The first ~15k steps of training and the entire depth
+sweep — about $1,100 of compute — measured a model that was ignoring its
+contacts entirely, while reporting plausible-looking losses.
+
+The fix is a per-parameter-group learning-rate multiplier
+(`--contact-lr-multiplier=1000`); the contact weight norm then climbs to ~55 and
+plateaus. `train/contact_weight_norm` is now logged every step so a dead
+pathway is visible immediately rather than after a week of runs.
+
+## What did not hold up
+
+The original proposal was to *also* shrink the trunk — the intuition being that
+explicit contacts do the work the deep pairformer stack was doing implicitly.
+That is wrong, at least under warm start: 48 blocks (0.815 val lDDT, +0.139
+contact gain) beats 8 and 16 blocks (~0.66, ~+0.07) decisively. Explicit
+contacts do not substitute for trunk depth.
+
+This is confounded — every arm inherits Protenix's 48-block weights, which
+favours the 48-block arm. A from-scratch sweep is still open.
+
+## Caveats
+
+These matter, and none of them are resolved yet.
+
+1. **Oracle contacts.** Contacts are computed from the ground-truth structure,
+   so they leak the answer. This measures *structure realisation given a
+   correct contact map*, not structure prediction. It is the right first
+   experiment — it establishes the ceiling — but it is not comparable to
+   published AF3/Protenix numbers, and the Protenix rows in the table above are
+   genuine predictions while the Helico contacts-on row is not. The open
+   question is how much accuracy survives *predicted* contacts, which is a
+   sweep over false-positive/false-negative rates that has not been run.
+2. **Warm start.** All runs initialise from Protenix v1, which was trained with
+   MSAs. The model is being adapted, not trained from scratch.
+3. **The MSA module still exists.** `use_msa=False` removes the MSA *input*;
+   the module is still constructed (~3M dead parameters). Deliberate for now, to
+   keep warm starting simple.
+4. **Training progress is unresolved.** See below.
+
+## Training progress: gains stop around step 5000
+
+Panel B is the only *within-run* progress signal available, because the two
+benchmarked checkpoints in panel A come from different training runs. It shows
+a clear gain from step 3000 → ~4000–5000, then a plateau: averaged over the two
+runs with full coverage, validation lDDT at 100% conditioning goes 0.759 (3000)
+→ 0.795 (4000) → 0.801 (5000) → 0.805 (8000). Independent restarts at matched
+steps differ by up to 0.029, so the 5000 → 8000 movement is inside the noise
+floor.
+
+An earlier claim in this work — that a +0.013 FoldBench gain between the two
+checkpoints showed training was still helping — does not survive. Those
+checkpoints are from different runs, and the effect is smaller than the
+run-to-run spread.
+
+## Reproducing
+
+```bash
+uv run python .agents/project/figures/contact_conditioning_accuracy.py
+```
+
+Benchmark arms (oracle contacts on/off) are produced by `modal/bench.py`:
+
+```bash
+HELICO_BENCH_ORACLE_CONTACTS=1 modal run --detach modal/bench.py --checkpoint /ckpts/<run>/step_8000.pt --output-dir bench_on
+```
+
+Protenix single-sequence uses the same entry point with `HELICO_BENCH_NO_MSA=1`.
+
+## Open questions
+
+1. **How accurate must contacts be?** The sweep over false-positive/false-negative
+   rates that decides whether MarinFold-predicted contacts can drive this.
+2. **Depth from scratch**, to remove the warm-start confound.
+3. **Do partial contacts help proportionally?** 50% conditioning currently sits
+   much closer to 100% than to 0% — worth understanding.
