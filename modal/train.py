@@ -172,6 +172,27 @@ def train_remote(args: dict) -> dict:
     # If warm-starting from Protenix v1 and there's no existing checkpoint,
     # create step_0.pt from Protenix weights so the training loop resumes from it.
     resume_from = args["resume_from"]
+
+    # Prefer this run's own newest checkpoint over whatever was passed in.
+    #
+    # Modal retries the function on infrastructure failures (preemption,
+    # "unhealthy" runner). With a static resume path every retry restarts from
+    # that same fixed step, so a long run can loop forever redoing the same
+    # work: the 2026-08-11 contacts-m1000-long run was preempted three times
+    # and each attempt resumed from step 3000, burning ~10k steps of compute to
+    # advance 1k. Resuming from the newest step_*.pt in the run directory makes
+    # retries actually resume.
+    own = sorted(
+        run_ckpt_dir.glob("step_*.pt"),
+        key=lambda q: int(q.stem.split("_")[1]),
+    )
+    if own:
+        latest = own[-1]
+        if str(latest) != resume_from:
+            print(f"[resume] found {latest.name} in {run_ckpt_dir}; resuming from it "
+                  f"instead of {resume_from or '(none)'}", flush=True)
+        resume_from = str(latest)
+
     if not resume_from and args["protenix_init"]:
         seed_path = run_ckpt_dir / "protenix_v1_seed.pt"
         if not seed_path.exists():
