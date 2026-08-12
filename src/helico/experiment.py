@@ -512,6 +512,9 @@ _TRAIN_ENV_MAPPING = {
     "val_every": "HELICO_TRAIN_VAL_EVERY",
     "val_samples": "HELICO_TRAIN_VAL_SAMPLES",
     "n_diffusion_samples": "HELICO_TRAIN_N_DIFFUSION_SAMPLES",
+    "n_blocks": "HELICO_TRAIN_N_BLOCKS",
+    "diffusion_pair_source": "HELICO_TRAIN_DIFFUSION_PAIR_SOURCE",
+    "contact_conditioning": "HELICO_TRAIN_CONTACT_CONDITIONING",
     "resume": "HELICO_TRAIN_RESUME",
     "train_cutoff": "HELICO_TRAIN_CUTOFF",
     "val_cutoff_start": "HELICO_VAL_START",
@@ -542,6 +545,12 @@ def ensure_training_run(
     val_every: int = 0,
     val_samples: int = 32,
     n_diffusion_samples: int = 8,
+    n_blocks: int = 48,
+    diffusion_pair_source: str = "z",
+    freeze_trunk: bool = False,
+    use_contacts: bool = True,
+    use_msa: bool = True,
+    contact_conditioning: str = "sampled",
     resume: Optional[str] = None,
     protenix_init: bool = True,
     train_cutoff: str = "2021-09-30",
@@ -616,12 +625,19 @@ def ensure_training_run(
     env["HELICO_TRAIN_GPU"] = gpu
     env["HELICO_TRAIN_RUN_NAME"] = run_name
     env["HELICO_TRAIN_PROTENIX_INIT"] = "1" if protenix_init else "0"
+    # Boolean flags are "1"/"0" env vars rather than _TRAIN_ENV_MAPPING entries,
+    # matching how modal/train.py reads them.
+    env["HELICO_TRAIN_FREEZE_TRUNK"] = "1" if freeze_trunk else "0"
+    env["HELICO_TRAIN_NO_CONTACTS"] = "0" if use_contacts else "1"
+    env["HELICO_TRAIN_NO_MSA"] = "0" if use_msa else "1"
     # Map remaining kwargs
     kwargs = {
         "max_steps": max_steps, "crop_size": crop_size, "batch_size": batch_size,
         "lr": lr, "warmup_steps": warmup_steps, "save_every": save_every,
         "log_every": log_every, "val_every": val_every, "val_samples": val_samples,
-        "n_diffusion_samples": n_diffusion_samples, "resume": resume or "",
+        "n_diffusion_samples": n_diffusion_samples, "n_blocks": n_blocks,
+        "diffusion_pair_source": diffusion_pair_source,
+        "contact_conditioning": contact_conditioning, "resume": resume or "",
         "train_cutoff": train_cutoff, "val_cutoff_start": val_cutoff_start,
         "val_cutoff_end": val_cutoff_end, "wandb_project": wandb_project,
     }

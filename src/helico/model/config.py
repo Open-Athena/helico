@@ -41,6 +41,22 @@ class HelicoConfig:
     msa_sample_min_train: int = 1
     msa_sample_min_eval: int = 2048
 
+    # --- Residue/residue contact conditioning ---
+    # A (B, N, N) three-state matrix (unknown / no-contact / contact) from
+    # pyconfind, projected into z_init alongside token_bonds. See
+    # .agents/project/20260806_contact_conditioned_folding.md.
+    #
+    # The projection is zero-initialised, so enabling this on an existing
+    # checkpoint is an exact no-op at step 0 and the model learns to use the
+    # signal from there (same warm-start discipline as gh#9's
+    # _init_distogram_proj_from_z).
+    use_contacts: bool = True
+    # Set False to run MSA-free. The MSA-derived channels of s_inputs
+    # (msa_profile, deletion_mean) then arrive zeroed via the fallbacks in
+    # features.py, which keeps c_s_inputs at 449 so the diffusion and atom
+    # modules stay warm-startable from a Protenix checkpoint.
+    use_msa: bool = True
+
     # --- Pairformer (AF3 Alg 17) ---
     n_pairformer_blocks: int = 48    # AF3 default: 48 blocks
     n_heads_pair: int = 4            # d_pair / 32

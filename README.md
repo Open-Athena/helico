@@ -3,8 +3,54 @@
 [![GPU Tests](https://github.com/Open-Athena/helico/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/Open-Athena/helico/actions/workflows/test.yml)
 [![W&B](https://img.shields.io/badge/W%26B-timodonnell%2Fhelico-FFBE00?logo=weightsandbiases&logoColor=white)](https://wandb.ai/timodonnell/helico)
 [![HF Dataset](https://img.shields.io/badge/🤗%20dataset-helico--data-yellow)](https://huggingface.co/datasets/timodonnell/helico-data)
+[![HF Model](https://img.shields.io/badge/🤗%20model-helico-yellow)](https://huggingface.co/timodonnell/helico)
+[![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Open-Athena/helico/blob/claude/helico-residue-contacts-redesign-4cc1c4/notebooks/helico_contact_conditioned_folding.ipynb)
 
 Our goal is to enable robust experimentation around modeling and data improvements for AlphaFold3-like architectures.
+
+## Folding from contacts instead of MSAs
+
+Helico can fold a protein from a **residue–residue contact map** in place of a
+multiple sequence alignment. Contacts are computed by
+[pyconfind](https://github.com/Open-Athena/pyconfind) with the same
+`contacts-v1` parameters [MarinFold](https://github.com/Open-Athena/MarinFold)
+predicts, so a contact predictor can drive the folding model directly and the
+alignment search comes out of the critical path.
+
+On FoldBench (27 paired protein targets), given contacts at the accuracy a
+current predictor delivers — 60% precision, 60% recall — an MSA-free model
+scores within noise of Protenix-with-MSAs:
+
+| Arm | lDDT |
+| --- | --- |
+| Protenix v1, single sequence | 0.329 |
+| Helico, contacts withheld | 0.316 |
+| **Helico, contacts @ 60% prec / 60% recall** | **0.824** |
+| Helico, oracle contacts | 0.836 |
+| Protenix v1, with MSAs | 0.837 |
+
+Degrading a perfect contact map to 60/60 costs only 0.012 lDDT — the map is
+redundant enough that losing 40% of contacts and adding 40% false ones is nearly
+free.
+
+**These are not end-to-end prediction numbers.** The contacts are derived from
+the ground-truth structure, exactly or degraded with a synthetic noise model
+whose false positives are drawn uniformly. Real predictor errors cluster near
+true contacts and may be harder to reject. Feeding real MarinFold output is
+[issue #11](https://github.com/Open-Athena/helico/issues/11).
+
+Weights: [timodonnell/helico](https://huggingface.co/timodonnell/helico) ·
+Full writeup: [`RESULTS_contact_conditioning.md`](RESULTS_contact_conditioning.md) ·
+Try it: [Colab notebook](https://colab.research.google.com/github/Open-Athena/helico/blob/claude/helico-residue-contacts-redesign-4cc1c4/notebooks/helico_contact_conditioned_folding.ipynb)
+
+```python
+from helico.inference import load_model, contacts_from_pairs, fold
+
+model = load_model()                                    # from the Hub
+contacts = contacts_from_pairs(predicted_pairs, seq_len=len(seq))
+result = fold({"A": seq}, contacts=contacts, model=model)
+open("pred.pdb", "w").write(result.pdb)
+```
 
 ## Key ideas
 
@@ -95,6 +141,24 @@ HELICO_TRAIN_GPU=H100:1 HELICO_TRAIN_MAX_STEPS=500 HELICO_TRAIN_CROP=256 \
     HELICO_TRAIN_RUN_NAME=proof-v1 modal run modal/train.py
 ```
 
+### Contact conditioning
+
+```bash
+HELICO_TRAIN_NO_MSA=1 HELICO_TRAIN_CONTACT_LR_MULT=1000 \
+    HELICO_TRAIN_RUN_NAME=my-run modal run modal/train.py
+```
+
+Training samples a conditioning level per example — nothing known, everything
+known, a partial list, and a truncated top-*k* list at a sampled precision — so
+one model serves any level of contact knowledge including none. The contact
+projection needs `--contact-lr-multiplier=1000`; at the shared learning rate it
+never moves and the model silently ignores its contacts.
+
+See [Contact conditioning](TRAINING.md#contact-conditioning),
+[`RESULTS_contact_conditioning.md`](RESULTS_contact_conditioning.md), and the
+design doc at
+[`.agents/project/20260806_contact_conditioned_folding.md`](.agents/project/20260806_contact_conditioned_folding.md).
+
 ## Inference
 
 Helico supports three input modes for inference: protein sequences, YAML input files, and mmCIF structures.
@@ -116,6 +180,10 @@ helico-infer --protenix checkpoints/protenix_base_default_v1.0.0.pt \
 helico-infer --protenix checkpoints/protenix_base_default_v1.0.0.pt \
     --sequences "A:MKFLILFNIFTG" --output pred.pdb \
     --ccd /path/to/ccd_cache.pkl
+
+# Conditioned on predicted contacts (the MSA-free path)
+helico-infer --checkpoint contacts-msafree-01-step6000.pt \
+    --sequences "A:MKFLILFNIFTG..." --contacts predicted.txt --output pred.pdb
 ```
 
 ### From YAML Input (Protein, RNA, DNA, Ligands)
@@ -179,6 +247,14 @@ Model (one required):
   --checkpoint PATH       Path to Helico checkpoint
   --protenix PATH         Path to Protenix checkpoint (.pt)
 
+Contacts (optional, mutually exclusive):
+  --contacts PATH         Contact list: one "i j" or "chainA i chainB j" per line,
+                          as a contact predictor emits. Unlisted pairs stay unknown.
+  --contacts-from-structure PATH
+                          Derive contacts from an mmCIF with pyconfind. ORACLE —
+                          uses the answer; for reproducing the ceiling, not prediction.
+  --contacts-one-indexed  Residue positions in --contacts count from 1
+
 Options:
   --output PATH           Output PDB file (default: output.pdb)
   --n-samples N           Number of diffusion samples, best by pLDDT is kept (default: 5)
@@ -191,6 +267,31 @@ Options:
 Generates N structure samples and selects the one with the highest mean pLDDT. Outputs per-atom pLDDT scores in the B-factor column of the PDB file.
 
 ### Python API
+
+Folding with contacts — see the
+[Colab notebook](https://colab.research.google.com/github/Open-Athena/helico/blob/claude/helico-residue-contacts-redesign-4cc1c4/notebooks/helico_contact_conditioned_folding.ipynb)
+for a worked example with visualisation:
+
+```python
+from helico.inference import contacts_from_pairs, contacts_from_structure, fold, load_model
+
+model = load_model()                       # timodonnell/helico from the Hub
+
+# From a contact predictor's ranked list (0-indexed residue positions)
+contacts = contacts_from_pairs([(3, 41), (7, 65)], seq_len=len(seq))
+# ...or from a known structure, the oracle condition
+# contacts = contacts_from_structure(tokenized, reference_structure)
+
+result = fold({"A": seq}, contacts=contacts, model=model, n_samples=5)
+print(result.mean_plddt)
+result.write_pdb("pred.pdb")
+```
+
+Unlisted pairs are left *unknown*, never *absent* — a truncated top-n list cannot
+distinguish "not a contact" from "did not make the cut", and the model was trained on
+that convention.
+
+Lower-level model access:
 
 ```python
 from helico import Helico, HelicoConfig

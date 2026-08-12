@@ -15,6 +15,11 @@ Configure via env vars before `modal run`:
     HELICO_TRAIN_N_DIFFUSION_SAMPLES=8 # Diffusion noise samples per trunk forward (gh#6)
     HELICO_TRAIN_DIFFUSION_PAIR_SOURCE=z   # "z" or "distogram_logits" (gh#9)
     HELICO_TRAIN_FREEZE_TRUNK=0            # 1 = freeze trunk, train only diffusion (gh#9)
+    HELICO_TRAIN_N_BLOCKS=48               # Pairformer blocks (contact work sweeps 2/4/8/16)
+    HELICO_TRAIN_NO_CONTACTS=0             # 1 = disable contact conditioning
+    HELICO_TRAIN_NO_MSA=0                  # 1 = MSA-free
+    HELICO_TRAIN_CONTACT_CONDITIONING=sampled  # "sampled" or "oracle"
+    HELICO_TRAIN_CONTACT_LR_MULT=1.0       # LR multiplier for linear_contact only
     HELICO_TRAIN_RESUME=               # /ckpts/<run>/step_<N>.pt to resume
     HELICO_TRAIN_PROTENIX_INIT=1       # warm-start from Protenix v1 weights
     HELICO_TRAIN_CUTOFF=2021-09-30     # train = release_date < this (AF3/Protenix/OF3 shared cutoff)
@@ -116,6 +121,11 @@ TRAIN_ARGS = {
     "n_diffusion_samples": _env_int("HELICO_TRAIN_N_DIFFUSION_SAMPLES", 8),
     "diffusion_pair_source": os.environ.get("HELICO_TRAIN_DIFFUSION_PAIR_SOURCE", "z"),
     "freeze_trunk": os.environ.get("HELICO_TRAIN_FREEZE_TRUNK", "0") == "1",
+    "n_blocks": _env_int("HELICO_TRAIN_N_BLOCKS", 48),
+    "no_contacts": os.environ.get("HELICO_TRAIN_NO_CONTACTS", "0") == "1",
+    "no_msa": os.environ.get("HELICO_TRAIN_NO_MSA", "0") == "1",
+    "contact_conditioning": os.environ.get("HELICO_TRAIN_CONTACT_CONDITIONING", "sampled"),
+    "contact_lr_multiplier": _env_float("HELICO_TRAIN_CONTACT_LR_MULT", 1.0),
     "resume_from": os.environ.get("HELICO_TRAIN_RESUME", ""),
     "protenix_init": os.environ.get("HELICO_TRAIN_PROTENIX_INIT", "1") == "1",
     "train_cutoff": os.environ.get("HELICO_TRAIN_CUTOFF", "2021-09-30"),
@@ -162,6 +172,27 @@ def train_remote(args: dict) -> dict:
     # If warm-starting from Protenix v1 and there's no existing checkpoint,
     # create step_0.pt from Protenix weights so the training loop resumes from it.
     resume_from = args["resume_from"]
+
+    # Prefer this run's own newest checkpoint over whatever was passed in.
+    #
+    # Modal retries the function on infrastructure failures (preemption,
+    # "unhealthy" runner). With a static resume path every retry restarts from
+    # that same fixed step, so a long run can loop forever redoing the same
+    # work: the 2026-08-11 contacts-m1000-long run was preempted three times
+    # and each attempt resumed from step 3000, burning ~10k steps of compute to
+    # advance 1k. Resuming from the newest step_*.pt in the run directory makes
+    # retries actually resume.
+    own = sorted(
+        run_ckpt_dir.glob("step_*.pt"),
+        key=lambda q: int(q.stem.split("_")[1]),
+    )
+    if own:
+        latest = own[-1]
+        if str(latest) != resume_from:
+            print(f"[resume] found {latest.name} in {run_ckpt_dir}; resuming from it "
+                  f"instead of {resume_from or '(none)'}", flush=True)
+        resume_from = str(latest)
+
     if not resume_from and args["protenix_init"]:
         seed_path = run_ckpt_dir / "protenix_v1_seed.pt"
         if not seed_path.exists():
@@ -201,6 +232,9 @@ def train_remote(args: dict) -> dict:
         "--val-samples", str(args["val_samples"]),
         "--n-diffusion-samples", str(args["n_diffusion_samples"]),
         "--diffusion-pair-source", args["diffusion_pair_source"],
+        "--n-blocks", str(args["n_blocks"]),
+        "--contact-conditioning", args["contact_conditioning"],
+        "--contact-lr-multiplier", str(args["contact_lr_multiplier"]),
         "--checkpoint-dir", str(run_ckpt_dir),
         "--train-cutoff", args["train_cutoff"],
         "--val-cutoff-start", args["val_cutoff_start"],
@@ -212,6 +246,10 @@ def train_remote(args: dict) -> dict:
         base_cli += ["--resume", resume_from]
     if args.get("freeze_trunk"):
         base_cli += ["--freeze-trunk"]
+    if args.get("no_contacts"):
+        base_cli += ["--no-contacts"]
+    if args.get("no_msa"):
+        base_cli += ["--no-msa"]
 
     if n_gpus > 1:
         cmd = [

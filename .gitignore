@@ -60,6 +60,7 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
+tests/.pdb_cache/
 cover/
 
 # Translations
@@ -216,3 +217,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Local benchmark output dirs (modal/bench.py --output-dir)
+bench_*/

@@ -1,0 +1,8 @@
+pdb_id,status,n_matched_atoms,lddt,dockq,irmsd,lrmsd,fnat
+8c41-assembly1,oom,,,,,,
+8c41-assembly1,oom,,,,,,
+8c41-assembly1,oom,,,,,,
+8c41-assembly1,oom,,,,,,
+8g8j-assembly1,ok,3755,0.7048070152772843,0.0,nan,nan,0.0
+8g8h-assembly1,ok,3740,0.6912759523661076,0.0,nan,nan,0.0
+8g8h-assembly1,ok,3740,0.6912759523661076,0.0,nan,nan,0.0

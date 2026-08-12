@@ -1,0 +1,8 @@
+pdb_id,status,n_matched_atoms,lddt,dockq,irmsd,lrmsd,fnat
+8iyq-assembly1,oom,,,,,,
+9c69-assembly1,ok,2722,0.44696841660504916,0.13227715533854004,nan,nan,0.22120098039215685
+9c68-assembly1,ok,2760,0.4371581898013015,0.1268448552076601,nan,nan,0.21262458471760795
+9f37-assembly1,too_large,,,,,,
+9f37-assembly1,too_large,,,,,,
+8r0s-assembly1,ok,4330,0.6902127777687825,0.11688351438396243,nan,nan,0.05
+8pnp-assembly1,oom,,,,,,

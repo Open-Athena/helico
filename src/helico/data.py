@@ -11,6 +11,7 @@ import multiprocessing
 import os
 import pickle
 import re
+import shutil
 import tarfile
 import tempfile
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
+
+from helico.contacts import MIN_SEQ_SEPARATION
 
 # ---------------------------------------------------------------------------
 # Paths — data auto-downloads from HuggingFace to ~/.cache/helico/data/
@@ -81,6 +84,14 @@ TOKEN_NUCLEOTIDE = 21    # 21-26 (5 nucleotides + UNK)
 TOKEN_LIGAND_ATOM = 27   # ligand atoms start here
 
 NUM_TOKEN_TYPES = 28 + UNK_ELEM_IDX + 1  # protein + nucleotide + per-element ligand tokens
+
+# Residue/residue contact states (see helico.contacts). UNKNOWN is 0 so that
+# zero-padding a batch, and the absence of the feature entirely, both mean
+# "nothing is asserted about this pair".
+CONTACT_UNKNOWN = 0
+CONTACT_ABSENT = 1
+CONTACT_PRESENT = 2
+NUM_CONTACT_STATES = 3
 
 # AF3 32-class restype encoding (SI §2.8 Table 13).
 # 0-19:  standard amino acids in 3-letter alphabetical order (ALA, ARG, ASN, ...)
@@ -778,6 +789,15 @@ class TokenizedStructure:
     # blew up preprocess workers to 200+GB RSS on ribosomes/capsids. Materialized to
     # dense (N_tok, N_tok) in to_features(). Older pickles may store a Tensor directly.
     token_bonds: list[tuple[int, int]] | torch.Tensor | None = None
+    # pyconfind residue/residue contacts (see helico.contacts), also sparse for the
+    # same reason — contacts run ~1 per residue. `contact_eligible` lists the tokens
+    # pyconfind actually analysed, which is what makes "no contact" (both endpoints
+    # analysed, none found) distinguishable from "unknown" (at least one endpoint is
+    # a ligand, nucleotide or modified residue). Materialized to a 3-state
+    # (N_tok, N_tok) matrix in to_features(). Absent on pickles written before
+    # contacts existed.
+    contact_edges: list[tuple[int, int]] | None = None
+    contact_eligible: list[int] | None = None
 
     @property
     def n_tokens(self) -> int:
@@ -977,7 +997,66 @@ class TokenizedStructure:
                     bonds[ti, tj] = 1.0
                     bonds[tj, ti] = 1.0
                 result["token_bonds"] = bonds
+
+        # getattr rather than attribute access: unpickling a dataclass restores
+        # __dict__ only, so pickles written before contacts existed lack these.
+        eligible = getattr(self, "contact_eligible", None)
+        if eligible is not None:
+            result["contact_state"] = self._build_contact_state(
+                n_tok, chain_indices, res_indices, eligible,
+                getattr(self, "contact_edges", None) or [],
+            )
         return result
+
+    @staticmethod
+    def _build_contact_state(
+        n_tok: int,
+        chain_indices: torch.Tensor,
+        res_indices: torch.Tensor,
+        eligible: list[int],
+        edges: list[tuple[int, int]],
+    ) -> torch.Tensor:
+        """Densify sparse contacts into the 3-state (N_tok, N_tok) matrix.
+
+        States are CONTACT_UNKNOWN / CONTACT_ABSENT / CONTACT_PRESENT. A pair is
+        *known* when pyconfind analysed both endpoints and the pair is far enough
+        apart to have been considered at all:
+
+            known(i,j) = eligible[i] and eligible[j]
+                         and (chain[i] != chain[j] or |res[i]-res[j]| >= MIN_SEQ_SEPARATION)
+
+        The sequence-separation rule is intra-chain only — separation is
+        meaningless across chains, and every inter-chain pair is knowable.
+        Same-chain pairs closer than MIN_SEQ_SEPARATION stay *unknown* rather than
+        absent: we never determine them, and they are frequently in contact, so
+        labelling them absent would be wrong.
+        """
+        state = torch.full((n_tok, n_tok), CONTACT_UNKNOWN, dtype=torch.uint8)
+        if not eligible:
+            return state
+
+        elig = torch.zeros(n_tok, dtype=torch.bool)
+        elig[torch.tensor(eligible, dtype=torch.long)] = True
+        known = elig.unsqueeze(1) & elig.unsqueeze(0)
+
+        same_chain = chain_indices.unsqueeze(1) == chain_indices.unsqueeze(0)
+        sep = (res_indices.unsqueeze(1) - res_indices.unsqueeze(0)).abs()
+        known &= (~same_chain) | (sep >= MIN_SEQ_SEPARATION)
+        known.fill_diagonal_(False)
+
+        state[known] = CONTACT_ABSENT
+        if edges:
+            e = torch.tensor(edges, dtype=torch.long)
+            # Only within the known region. pyconfind reports contacts at every
+            # separation, but a same-chain pair closer than MIN_SEQ_SEPARATION is
+            # outside the definition — MarinFold filters those out before
+            # emitting, so marking them PRESENT here would train on a signal no
+            # contact predictor will ever supply.
+            keep = known[e[:, 0], e[:, 1]]
+            e = e[keep]
+            state[e[:, 0], e[:, 1]] = CONTACT_PRESENT
+            state[e[:, 1], e[:, 0]] = CONTACT_PRESENT
+        return state
 
 
 def tokenize_structure(
@@ -2281,6 +2360,12 @@ def _subset_features(
     if "token_bonds" in features:
         result["token_bonds"] = features["token_bonds"][token_indices][:, token_indices]
 
+    # contact_state: (N_tok, N_tok) pair tensor. Contacts are computed on the
+    # whole structure, so a submatrix stays valid — contacts to dropped tokens
+    # simply vanish, and every retained pair keeps its original state.
+    if "contact_state" in features:
+        result["contact_state"] = features["contact_state"][token_indices][:, token_indices]
+
     # Atom-level optional features
     if "ref_space_uid" in features:
         result["ref_space_uid"] = features["ref_space_uid"][atom_mask]
@@ -2308,6 +2393,33 @@ def _subset_features(
 # Dataset and DataLoader
 # ============================================================================
 
+def _apply_contact_conditioning(
+    features: dict[str, torch.Tensor],
+    spec: str | dict | None,
+) -> dict[str, torch.Tensor]:
+    """Mask/corrupt ``contact_state`` in place per a conditioning spec.
+
+    ``spec`` is one of:
+
+    ``"sampled"``  sample a fresh conditioning level per example (training)
+    ``None``       leave the matrix untouched — the fully-specified oracle,
+                   used for inference and for oracle-contact benchmarking
+    ``dict``       keyword arguments pinning a fixed level, e.g.
+                   ``{"mode": "full", "eps_fp": 0.0, "eps_fn": 0.0}`` for
+                   clean full conditioning during validation
+
+    Applied after cropping so the conditioning level describes what the model
+    actually sees, not the uncropped structure.
+    """
+    if spec is None or "contact_state" not in features:
+        return features
+    from helico.contacts import sample_conditioning
+
+    kwargs = {} if spec == "sampled" else dict(spec)
+    features["contact_state"] = sample_conditioning(features["contact_state"], **kwargs)
+    return features
+
+
 class HelicoDataset(Dataset):
     """PyTorch dataset for Helico training.
 
@@ -2320,11 +2432,13 @@ class HelicoDataset(Dataset):
         crop_size: int = 384,
         crop_mode: str = "spatial",  # "spatial" or "contiguous"
         msa_features: dict[str, MSAFeatures] | None = None,
+        contact_conditioning: str | dict | None = "sampled",
     ):
         self.structures = structures
         self.crop_size = crop_size
         self.crop_mode = crop_mode
         self.msa_features = msa_features or {}
+        self.contact_conditioning = contact_conditioning
 
     def __len__(self) -> int:
         return len(self.structures)
@@ -2338,6 +2452,8 @@ class HelicoDataset(Dataset):
             features = spatial_crop(features, self.crop_size)
         else:
             features = contiguous_crop(features, self.crop_size)
+
+        features = _apply_contact_conditioning(features, self.contact_conditioning)
 
         # Add MSA features if available
         msa_key = ts.pdb_id
@@ -2409,6 +2525,21 @@ def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
                 t = torch.nn.functional.pad(t, (0, pad, 0, pad))
             tb_list.append(t)
         result["token_bonds"] = torch.stack(tb_list)
+
+    # contact_state: (N_tok, N_tok) uint8 pair tensor, optional. Padding with 0
+    # is exactly CONTACT_UNKNOWN, so padded rows/columns assert nothing.
+    if any("contact_state" in b for b in batch):
+        cs_list = []
+        for b in batch:
+            if "contact_state" in b:
+                t = b["contact_state"]
+            else:
+                t = torch.full((b["n_tokens"], b["n_tokens"]), CONTACT_UNKNOWN, dtype=torch.uint8)
+            pad = max_tokens - t.shape[0]
+            if pad > 0:
+                t = torch.nn.functional.pad(t, (0, pad, 0, pad), value=CONTACT_UNKNOWN)
+            cs_list.append(t)
+        result["contact_state"] = torch.stack(cs_list)
 
     # Atom-level tensors: pad to max_atoms
     for key in ["atom_coords", "ref_coords", "atom_name_chars"]:
@@ -2612,6 +2743,7 @@ def make_synthetic_batch(
     n_atoms_per_token: int = 5,
     batch_size: int = 1,
     has_msa: bool = True,
+    has_contacts: bool = True,
     device: str = "cuda",
 ) -> dict[str, torch.Tensor]:
     """Create a synthetic feature batch for model testing."""
@@ -2658,6 +2790,26 @@ def make_synthetic_batch(
         batch["cluster_deletion_mean"] = torch.zeros(batch_size, 1, n_tokens, device=device)
         batch["has_msa"] = torch.zeros(batch_size, device=device)
 
+    if has_contacts:
+        # Random symmetric 3-state matrix at a realistic contact rate (~1 per
+        # residue, so ~2/n_tokens of the off-diagonal cells).
+        #
+        # Drawn from a dedicated CPU generator rather than the global RNG: the
+        # global stream is load-bearing for the numerical snapshot pins in
+        # tests/test_snapshots.py (MSA row sampling draws from it), and
+        # consuming from it here would shift every downstream draw.
+        gen = torch.Generator().manual_seed(0xC0FFEE)
+        u = torch.rand(batch_size, n_tokens, n_tokens, generator=gen)
+        u = torch.minimum(u, u.transpose(-1, -2))
+        cs = torch.full_like(u, float(CONTACT_ABSENT))
+        cs[u < 2.0 / max(n_tokens, 1)] = float(CONTACT_PRESENT)
+        cs[:, torch.arange(n_tokens), torch.arange(n_tokens)] = float(CONTACT_UNKNOWN)
+        batch["contact_state"] = cs.to(torch.uint8).to(device)
+    else:
+        batch["contact_state"] = torch.full(
+            (batch_size, n_tokens, n_tokens), CONTACT_UNKNOWN, dtype=torch.uint8, device=device
+        )
+
     return batch
 
 
@@ -2688,12 +2840,27 @@ def discover_mmcif_files(mmcif_dir: Path) -> list[Path]:
 
 # Module-level CCD cache for fork-inherited sharing across workers
 _CCD_CACHE: dict | None = None
+# Rotamer library for contact computation. Parsing costs ~3.4 s, so it is loaded
+# once per worker rather than once per structure.
+_ROTAMER_LIB = None
 
 
 def _init_worker(ccd: dict) -> None:
-    """Multiprocessing worker initializer: set the global CCD cache."""
-    global _CCD_CACHE
+    """Multiprocessing worker initializer: set the global caches.
+
+    The rotamer library is normally inherited from the parent via fork (see
+    ``preprocess_structures``), which matters: ``maxtasksperchild`` recycles
+    workers every 25 tasks, so re-parsing it here would cost ~3.4 s thousands
+    of times over a full run. The fallback only fires under a non-fork start
+    method, where the global would otherwise be None and contacts would be
+    silently dropped.
+    """
+    global _CCD_CACHE, _ROTAMER_LIB
     _CCD_CACHE = ccd
+    if _ROTAMER_LIB is None:
+        from helico.contacts import load_rotamer_library
+
+        _ROTAMER_LIB = load_rotamer_library()
 
 
 def _process_single_structure(args: tuple) -> StructureMetadata | None:
@@ -2702,7 +2869,7 @@ def _process_single_structure(args: tuple) -> StructureMetadata | None:
     Args is a tuple of (cif_path, output_dir, max_resolution) to work with Pool.imap.
     """
     cif_path, output_dir, max_resolution = args
-    global _CCD_CACHE
+    global _CCD_CACHE, _ROTAMER_LIB
 
     try:
         structure = parse_mmcif(cif_path, max_resolution=max_resolution)
@@ -2712,6 +2879,20 @@ def _process_single_structure(args: tuple) -> StructureMetadata | None:
         tokenized = tokenize_structure(structure, ccd=_CCD_CACHE)
         if tokenized.n_tokens == 0:
             return None
+
+        if _ROTAMER_LIB is not None:
+            from helico.contacts import compute_contacts
+
+            # A contact failure should cost this structure its contacts, not the
+            # structure itself — it still trains fine with everything "unknown".
+            try:
+                edges, eligible = compute_contacts(tokenized.tokens, _ROTAMER_LIB)
+                tokenized.contact_edges = edges
+                tokenized.contact_eligible = eligible
+            except Exception as e:
+                logger.warning(f"Contact computation failed for {cif_path}: {e}")
+                tokenized.contact_edges = []
+                tokenized.contact_eligible = []
 
         # Determine output path: structures/{subdir}/{pdb_id}.pkl
         pdb_id = structure.pdb_id.lower()
@@ -2741,6 +2922,35 @@ def _process_single_structure(args: tuple) -> StructureMetadata | None:
         return None
 
 
+def _stems_with_contacts(pickle_paths: list[Path], n_threads: int = 32) -> set[str]:
+    """Return the stems of pickles that already carry residue/residue contacts.
+
+    Used to resume a contacts migration: plain ``skip_existing`` keys off the
+    pickle merely *existing*, which after an earlier (contact-free) preprocess
+    means everything is skipped and the migration silently does nothing.
+
+    Detection reads the raw bytes and looks for the ``contact_eligible`` field
+    name rather than unpickling — unpickling 236K structures would cost far more
+    than the reprocess it is meant to avoid. A contact-free pickle cannot
+    contain that byte string (it would have to appear as an atom name or chain
+    id), so a false skip is not a realistic risk; a false *miss* only costs a
+    redundant reprocess. I/O-bound, so threads rather than processes.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    marker = b"contact_eligible"
+
+    def check(path: Path) -> str | None:
+        try:
+            with open(path, "rb") as f:
+                return path.stem if marker in f.read() else None
+        except OSError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=n_threads) as pool:
+        return {stem for stem in pool.map(check, pickle_paths) if stem is not None}
+
+
 def preprocess_structures(
     mmcif_dir: Path,
     output_dir: Path,
@@ -2748,11 +2958,17 @@ def preprocess_structures(
     max_resolution: float = 9.0,
     n_workers: int | None = None,
     skip_existing: bool = True,
+    require_contacts: bool = False,
 ) -> dict[str, StructureMetadata]:
     """Process all mmCIF files into pickled TokenizedStructures.
 
     Uses multiprocessing with fork to share the CCD cache read-only via COW.
     Returns dict mapping pdb_id -> StructureMetadata.
+
+    ``require_contacts`` makes ``skip_existing`` contact-aware: a structure is
+    only skipped if its pickle already carries contacts. That turns a contacts
+    migration into a resumable, idempotent operation — re-running processes only
+    what is still missing instead of redoing the whole 250K-file corpus.
     """
     if n_workers is None:
         # Conservative cap: each worker can balloon to tens of GB on large
@@ -2765,25 +2981,64 @@ def preprocess_structures(
     ccd = parse_ccd(cache_path=ccd_cache_path)
     logger.info(f"CCD loaded with {len(ccd)} components")
 
+    # Load the rotamer library once here, in the parent. Forked workers inherit
+    # it read-only via COW, so the ~3.4 s parse happens once per run rather than
+    # once per worker respawn, and the first-use download can't race across
+    # concurrent workers.
+    global _ROTAMER_LIB
+    if _ROTAMER_LIB is None:
+        logger.info("Loading rotamer library for contact computation...")
+        from helico.contacts import load_rotamer_library
+
+        _ROTAMER_LIB = load_rotamer_library()
+        logger.info("Rotamer library loaded")
+
     # Discover files
     cif_files = discover_mmcif_files(mmcif_dir)
     logger.info(f"Found {len(cif_files)} mmCIF files")
 
     # Filter out already-processed structures if resuming
+    existing: set[str] = set()
+    n_skipped = 0
     if skip_existing:
         structures_dir = output_dir / "structures"
         if structures_dir.exists():
-            existing = set()
-            for pkl_path in structures_dir.glob("**/*.pkl"):
-                existing.add(pkl_path.stem)
+            all_pickles = list(structures_dir.glob("**/*.pkl"))
+            if require_contacts:
+                existing = _stems_with_contacts(all_pickles)
+                logger.info(
+                    f"{len(existing)}/{len(all_pickles)} existing pickles already carry "
+                    f"contacts; the rest will be reprocessed"
+                )
+            else:
+                for pkl_path in all_pickles:
+                    existing.add(pkl_path.stem)
             before = len(cif_files)
             cif_files = [p for p in cif_files if p.name.split(".")[0].lower() not in existing]
-            logger.info(f"Skipping {before - len(cif_files)} already-processed structures, {len(cif_files)} remaining")
+            n_skipped = before - len(cif_files)
+            logger.info(f"Skipping {n_skipped} already-processed structures, {len(cif_files)} remaining")
+
+    # Skipped structures still have their pickles on disk, but callers feed our
+    # return value straight into build_manifest(), which rewrites manifest.json
+    # wholesale. Returning only the newly-processed subset would therefore drop
+    # every previously-processed structure from the manifest — and so from
+    # training — on any partially-resumed run. Carry their entries forward.
+    manifest_path = output_dir / "manifest.json"
+    carried: dict[str, StructureMetadata] = {}
+    if n_skipped and manifest_path.exists():
+        for pdb_id, meta in load_manifest(manifest_path).items():
+            # Membership in `existing` (already globbed) rather than a stat per
+            # entry: at 236K structures the stat calls are the expensive part.
+            if Path(meta.pickle_path).stem in existing:
+                carried[pdb_id] = meta
+        logger.info(f"Carrying forward {len(carried)} manifest entries for skipped structures")
 
     if not cif_files:
         logger.info("No files to process")
-        # Load existing manifest if available
-        manifest_path = output_dir / "manifest.json"
+        if carried:
+            return carried
+        # Nothing was skipped either (e.g. an empty mmCIF dir) — fall back to
+        # whatever manifest is already there.
         if manifest_path.exists():
             return load_manifest(manifest_path)
         return {}
@@ -2809,6 +3064,15 @@ def preprocess_structures(
                 logger.info(f"Processed {n_done}/{n_total} files, {len(metadata)} structures kept")
 
     logger.info(f"Preprocessing complete: {len(metadata)} structures from {n_total} files")
+    if carried:
+        # Newly-processed entries win: a structure reprocessed in this run has
+        # fresher metadata than whatever the old manifest recorded.
+        merged = {**carried, **metadata}
+        logger.info(
+            f"Manifest total: {len(merged)} structures "
+            f"({len(metadata)} processed now, {len(merged) - len(metadata)} carried forward)"
+        )
+        return merged
     return metadata
 
 
@@ -2887,12 +3151,14 @@ class LazyHelicoDataset(Dataset):
         msa_tar_indices: list[TarIndex] | None = None,
         msa_dir: Path | None = None,
         filter_fn: callable | None = None,
+        contact_conditioning: str | dict | None = "sampled",
     ):
         self.processed_dir = processed_dir
         self.crop_size = crop_size
         self.crop_mode = crop_mode
         self.msa_tar_indices = msa_tar_indices or []
         self.msa_dir = msa_dir
+        self.contact_conditioning = contact_conditioning
 
         if filter_fn is not None:
             self.entries = [(pid, m) for pid, m in manifest.items() if filter_fn(m)]
@@ -2924,6 +3190,8 @@ class LazyHelicoDataset(Dataset):
             features = spatial_crop(features, self.crop_size)
         else:
             features = contiguous_crop(features, self.crop_size)
+
+        features = _apply_contact_conditioning(features, self.contact_conditioning)
 
         # Load MSA features for the first polymer chain
         msa_feat = None
@@ -3002,6 +3270,9 @@ def preprocess_main():
     sp_struct.add_argument("--max-resolution", type=float, default=9.0)
     sp_struct.add_argument("--n-workers", type=int, default=None)
     sp_struct.add_argument("--no-skip-existing", action="store_true")
+    sp_struct.add_argument("--require-contacts", action="store_true",
+                           help="Skip a structure only if its pickle already has "
+                                "contacts (resumable contacts migration)")
 
     # msa-index subcommand
     sp_msa = subparsers.add_parser("msa-index", help="Build tar index for MSA archives")
@@ -3014,6 +3285,13 @@ def preprocess_main():
     sp_all.add_argument("processed_dir", type=Path, help="Output directory for all processed data")
     sp_all.add_argument("--max-resolution", type=float, default=9.0)
     sp_all.add_argument("--n-workers", type=int, default=None)
+    # Needed when the schema changes (e.g. adding contacts): without it an
+    # already-populated structures/ dir makes the whole step a no-op.
+    sp_all.add_argument("--no-skip-existing", action="store_true",
+                        help="Reprocess structures that already have a pickle")
+    sp_all.add_argument("--require-contacts", action="store_true",
+                        help="Skip a structure only if its pickle already has "
+                             "contacts (resumable contacts migration)")
 
     args = parser.parse_args()
 
@@ -3039,6 +3317,7 @@ def preprocess_main():
             max_resolution=args.max_resolution,
             n_workers=args.n_workers,
             skip_existing=not args.no_skip_existing,
+            require_contacts=args.require_contacts,
         )
         build_manifest(metadata, output_dir / "manifest.json")
 
@@ -3067,6 +3346,8 @@ def preprocess_main():
             ccd_cache_path=ccd_cache,
             max_resolution=args.max_resolution,
             n_workers=args.n_workers,
+            skip_existing=not args.no_skip_existing,
+            require_contacts=args.require_contacts,
         )
         build_manifest(metadata, output_dir / "manifest.json")
 
@@ -3090,15 +3371,40 @@ def preprocess_main():
 # ============================================================================
 
 # Small files that can be downloaded individually
-_PROCESSED_FILES = [
-    "processed/ccd_cache.pkl",
-    "processed/manifest.json.gz",
-    "processed/rcsb_raw_msa_index.pkl",
-    "processed/openfold_raw_msa_index.pkl",
+# Per-snapshot files, fetched from processed/<snapshot_id>/ and landed flat
+# under <data-dir>/processed/. ccd_cache.pkl is shared across snapshots and
+# lives at processed/ root instead.
+_SNAPSHOT_FILES = [
+    "manifest.json.gz",
+    "rcsb_raw_msa_index.pkl",
+    "openfold_raw_msa_index.pkl",
 ]
 
-# Split tar prefix for large directories
-_PROCESSED_SPLIT_TARS = ["processed/structures.tar"]
+# structures/ is published as split-tar chunks (structures.tar.00, .01, ...)
+# rather than 236K individual files.
+_STRUCTURES_TAR = "structures.tar"
+
+
+def resolve_hf_snapshot(source_type: str = "pdb") -> str | None:
+    """Resolve ``processed/latest.json`` on HF to a snapshot id.
+
+    The published layout is versioned: metadata and structures live under
+    ``processed/<snapshot_id>/``, and ``processed/latest.json`` names the
+    current snapshot per source type. Returns None when the repo predates that
+    layout, so callers can fall back to the flat one.
+    """
+    from huggingface_hub import hf_hub_download
+
+    try:
+        path = hf_hub_download(
+            repo_id=HF_REPO, repo_type="dataset", filename="processed/latest.json",
+        )
+        with open(path) as f:
+            latest = json.load(f)
+        return latest.get("sources", {}).get(source_type)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Could not resolve latest.json ({e}); assuming flat layout")
+        return None
 
 
 def _reassemble_split_tar(data_dir: Path, prefix: str, extract: bool = True) -> None:
@@ -3179,6 +3485,12 @@ def download_main() -> None:
         action="store_true",
         help="Don't extract split tars after downloading",
     )
+    parser.add_argument(
+        "--snapshot",
+        type=str,
+        default=None,
+        help="Pin a specific snapshot id (default: whatever processed/latest.json names)",
+    )
     args = parser.parse_args()
 
     data_dir = args.data_dir or _default_data_dir()
@@ -3200,23 +3512,57 @@ def download_main() -> None:
         logger.info("Done. CCD cache downloaded.")
         return
 
-    # Download individual files
-    for f in _PROCESSED_FILES:
-        _download(f)
+    # ccd_cache is shared across snapshots and already lives at processed/.
+    _download("processed/ccd_cache.pkl")
 
-    # Download split tar parts
+    # Everything else is versioned under processed/<snapshot_id>/. Resolve it,
+    # then land the files in the *flat* local layout (<data-dir>/processed/...)
+    # that _processed_dir() and the datasets expect — the snapshot id is a
+    # publishing concern, not something the training code should know about.
+    snapshot = args.snapshot or resolve_hf_snapshot()
+    if snapshot:
+        logger.info(f"Using snapshot {snapshot}")
+        remote_prefix = f"processed/{snapshot}"
+    else:
+        # Legacy flat layout (pre-snapshot repos).
+        logger.info("No snapshot found; using flat layout")
+        remote_prefix = "processed"
+
+    local_processed = data_dir / "processed"
+    local_processed.mkdir(parents=True, exist_ok=True)
+
+    def _download_into_processed(remote_name: str) -> Path:
+        """Download <remote_prefix>/<remote_name> to <data-dir>/processed/."""
+        remote = f"{remote_prefix}/{remote_name}"
+        logger.info(f"Downloading {remote}...")
+        src = hf_hub_download(repo_id=HF_REPO, filename=remote, repo_type="dataset")
+        dest = local_processed / remote_name
+        # copy (not move): src is in the HF cache and may be a symlink into it
+        shutil.copyfile(src, dest)
+        return dest
+
+    for name in _SNAPSHOT_FILES:
+        try:
+            _download_into_processed(name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Could not download {name}: {e}")
+
+    # Split-tar structures
     all_repo_files = list_repo_files(repo_id=HF_REPO, repo_type="dataset")
-    for prefix in _PROCESSED_SPLIT_TARS:
-        parts = sorted(f for f in all_repo_files if f.startswith(prefix + "."))
-        if not parts:
-            logger.warning(f"No split parts found for {prefix} in HF repo")
-            continue
+    tar_prefix = f"{remote_prefix}/{_STRUCTURES_TAR}"
+    parts = sorted(f for f in all_repo_files if f.startswith(tar_prefix + "."))
+    if not parts:
+        logger.warning(
+            f"No structures.tar parts under {remote_prefix} — the snapshot has no "
+            f"structures. Training data will be missing."
+        )
+    else:
+        logger.info(f"Downloading {len(parts)} structures.tar parts...")
         for part in parts:
-            _download(part)
+            _download_into_processed(part.split("/")[-1])
         if not args.no_extract:
-            _reassemble_split_tar(data_dir, prefix)
+            _reassemble_split_tar(local_processed, _STRUCTURES_TAR)
 
-    # Decompress manifest
     _decompress_manifest(data_dir)
 
     logger.info(f"Download complete. Data is at {data_dir}")

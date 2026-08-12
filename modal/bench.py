@@ -17,6 +17,32 @@ PROTENIX_CKPT_PATH = "/root/helico/checkpoints/" + PROTENIX_URL.rsplit("/", 1)[-
 # Modal decorator params are static — configure via env vars before `modal run`
 N_WORKERS = int(os.environ.get("HELICO_BENCH_WORKERS", "4"))
 GPU_TYPE = os.environ.get("HELICO_BENCH_GPU", "H100")
+# Condition on contacts derived from the ground-truth structure. THIS LEAKS THE
+# ANSWER — results measure structure realization given the true contact map,
+# not structure prediction, and are not comparable to AF3/Protenix numbers.
+# NOTE: this is evaluated twice — once locally, and again when Modal imports
+# this module *inside the container*, where HELICO_BENCH_ORACLE_CONTACTS is not
+# set unless we put it there. Reading it as a bare global meant Predictor.predict
+# always saw False: the bench ran without contacts while reporting success, with
+# no error and no warning. The value is baked into predictor_image below so both
+# sides agree.
+ORACLE_CONTACTS = os.environ.get("HELICO_BENCH_ORACLE_CONTACTS", "0") == "1"
+# Force use_msa=False on the loaded model regardless of what its config says.
+# Used to score Protenix in "single sequence mode" — an out-of-distribution
+# ablation for a model trained with MSAs, which is exactly the point: it
+# measures what the alignments contribute.
+NO_MSA = os.environ.get("HELICO_BENCH_NO_MSA", "0") == "1"
+# True single-sequence mode: a depth-1 MSA whose one row is the query sequence.
+# The MSA module still runs. This is the fair "no alignments" baseline for a
+# model trained with MSAs -- unlike NO_MSA above, which removes the module.
+SINGLE_SEQ = os.environ.get("HELICO_BENCH_SINGLE_SEQ", "0") == "1"
+# Degrade oracle contacts to a predictor operating point before feeding them in.
+# Unset => perfect contacts (the ceiling). Set to e.g. 0.6/0.6 to score what
+# MarinFold actually emits.
+_cp = os.environ.get("HELICO_BENCH_CONTACT_PRECISION", "")
+_cr = os.environ.get("HELICO_BENCH_CONTACT_RECALL", "")
+CONTACT_PRECISION = float(_cp) if _cp else None
+CONTACT_RECALL = float(_cr) if _cr else None
 
 # Predictor image: GPU model inference. Ships with cuequivariance (pinned
 # to 0.8.x — 0.10 broke bench inference with cuDNN-frontend errors) and
@@ -36,6 +62,18 @@ predictor_image = (
         "huggingface_hub>=0.20",
         "requests",
         "tqdm",
+        # Needed by helico.contacts for --oracle-contacts. Predictor.setup
+        # creates a venv but then imports helico from /root/helico/src using
+        # the *container* python, so anything helico imports must be in this
+        # list. Without it every oracle-contacts target failed with
+        # "No module named 'pyconfind'" while the run still reported success.
+        "pyconfind>=0.6",
+    )
+    # Warm the rotamer-library cache at build time so oracle-contact scoring
+    # does not download it per worker mid-run.
+    .run_commands(
+        "python -c 'from pyconfind import cached_rotamer_library;"
+        " print(cached_rotamer_library())'"
     )
     # Protenix checkpoint baked into image (1.4 GB, cached by Modal)
     # curl with retries + progress dots — wget -q hangs silently on stalls
@@ -46,6 +84,14 @@ predictor_image = (
         f"-o {PROTENIX_CKPT_PATH} {PROTENIX_URL} && "
         f"ls -lh {PROTENIX_CKPT_PATH}"
     )
+    # Propagate the oracle-contacts switch into the container: module-level
+    # os.environ reads happen again on the remote import, where the launching
+    # shell's env does not exist.
+    .env({"HELICO_BENCH_ORACLE_CONTACTS": "1" if ORACLE_CONTACTS else "0",
+          "HELICO_BENCH_NO_MSA": "1" if NO_MSA else "0",
+          "HELICO_BENCH_SINGLE_SEQ": "1" if SINGLE_SEQ else "0",
+          "HELICO_BENCH_CONTACT_PRECISION": _cp,
+          "HELICO_BENCH_CONTACT_RECALL": _cr})
     # Project code last (changes most frequently)
     .add_local_dir(str(ROOT / "src"), remote_path="/root/helico/src")
     .add_local_file(str(ROOT / "pyproject.toml"), remote_path="/root/helico/pyproject.toml")
@@ -184,7 +230,11 @@ class Predictor:
                 (k.removeprefix("module."), v) for k, v in ptx_sd.items()
             )
             config = infer_protenix_config(ptx_sd)
-            print(f"Inferred Protenix config: d_pair={config.d_pair}, d_msa={config.d_msa}")
+            if NO_MSA:
+                config.use_msa = False
+                print("HELICO_BENCH_NO_MSA=1 -> scoring Protenix in single-sequence mode")
+            print(f"Inferred Protenix config: d_pair={config.d_pair}, d_msa={config.d_msa}, "
+                  f"use_msa={config.use_msa}")
             self.model = Helico(config)
             load_protenix_state_dict(ptx_sd, self.model)
         else:
@@ -196,15 +246,24 @@ class Predictor:
                     f"checkpoint {ckpt_path} is not a Helico checkpoint "
                     f"(missing 'model_state_dict'; keys={list(state.keys())[:5]})"
                 )
-            # Pull the two shape-defining HelicoConfig fields from the
-            # saved TrainConfig dict; fall back to defaults if absent.
+            # Rebuild HelicoConfig from the saved TrainConfig dict. Take every
+            # field the two share, not a hardcoded subset: this used to pull
+            # only the two shape-defining fields, so any other config field
+            # (diffusion_pair_source, use_contacts, use_msa, ...) silently
+            # reverted to its default and the bench ran a *different model*
+            # than the checkpoint specified.
             saved_cfg = state.get("config") or {}
-            config = HelicoConfig(
-                n_pairformer_blocks=saved_cfg.get("n_pairformer_blocks", 48),
-                n_diffusion_token_blocks=saved_cfg.get("n_diffusion_token_blocks", 24),
-            )
-            print(f"Helico config: n_pairformer_blocks={config.n_pairformer_blocks}, "
+            overrides = {
+                k: v for k, v in saved_cfg.items() if hasattr(HelicoConfig, k)
+            }
+            config = HelicoConfig(**overrides)
+            if NO_MSA:
+                config.use_msa = False
+            print(f"Helico config from checkpoint ({len(overrides)} fields): "
+                  f"n_pairformer_blocks={config.n_pairformer_blocks}, "
                   f"n_diffusion_token_blocks={config.n_diffusion_token_blocks}, "
+                  f"use_contacts={config.use_contacts}, use_msa={config.use_msa}, "
+                  f"diffusion_pair_source={config.diffusion_pair_source}, "
                   f"step={state.get('step', '?')}")
             self.model = Helico(config)
             self.model.load_state_dict(state["model_state_dict"])
@@ -251,6 +310,9 @@ class Predictor:
             gt_path = _find_gt_path(gt_dir, pdb_id)
             gt_structure = parse_mmcif(gt_path, max_resolution=float("inf"))
             assert gt_structure is not None, f"Failed to parse ground truth: {gt_path}"
+            logger.info(
+                f"[{pdb_id}] oracle_contacts={'ON' if ORACLE_CONTACTS else 'OFF'}"
+            )
             chains = structure_to_chains(gt_structure)
 
             # Multi-seed sampling: published FoldBench protocol uses 5 seeds
@@ -280,9 +342,14 @@ class Predictor:
                     target_name=pdb_id,
                     n_samples=n_samples,
                     max_tokens=max_tokens,
-                    msa_server_url=msa_server_url,
+                    msa_server_url=None if SINGLE_SEQ else msa_server_url,
                     msa_cache_dir=server_cache_dir,
+                    single_sequence=SINGLE_SEQ,
                     n_cycles=n_cycles,
+                    oracle_contacts_from=gt_structure if ORACLE_CONTACTS else None,
+                    contact_precision=CONTACT_PRECISION,
+                    contact_recall=CONTACT_RECALL,
+                    # logged so the log always states which mode actually ran
                 )
                 if pred_result is None:
                     return {"pdb_id": pdb_id, "category": category, "status": "too_large"}

@@ -46,9 +46,12 @@ import gzip
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import modal
@@ -125,6 +128,10 @@ def _build_source_json(
             "command": "helico-preprocess all <raw> <processed>",
             "max_resolution": 9.0,
             "token_bonds_format": "sparse",  # sparse since 16c904d
+            # Residue/residue contacts (pyconfind, MarinFold contacts-v1
+            # parameters). Structures preprocessed before this was added carry
+            # no contact fields and train with everything "unknown".
+            "contacts": "pyconfind-v1",
         },
         "fingerprints": {
             "ccd_cache.pkl": _file_sha256(processed_dir / "ccd_cache.pkl"),
@@ -136,7 +143,7 @@ def _build_source_json(
 @app.function(
     cpu=8.0,
     memory=64 * 1024,
-    timeout=6 * 3600,
+    timeout=12 * 3600,
     volumes={DATA_ROOT: data_volume},
     secrets=[modal.Secret.from_name("helico-hf-modal")],
     ephemeral_disk=600 * 1024,
@@ -202,11 +209,20 @@ def upload_remote(
           flush=True)
 
     # 4. Stage everything into a single tree that mirrors the HF repo layout.
-    # upload_large_folder (the right tool for 236K small files) doesn't
-    # support path_in_repo, so we build a staging dir that already has the
-    # target structure, using a symlink for the big structures/ dir so we
-    # don't copy 57 GB. upload_large_folder's recursive walk follows
-    # symlinks (Path.rglob default).
+    # upload_large_folder (the right tool here) doesn't support path_in_repo,
+    # so we build a staging dir that already has the target structure.
+    #
+    # structures/ is packed into split-tar chunks rather than uploaded as
+    # 236K individual files. Two reasons: HF handles a handful of large files
+    # far better than a quarter-million small ones, and `helico-download`
+    # already reassembles this exact format (_PROCESSED_SPLIT_TARS).
+    #
+    # A previous version symlinked structures/ into the staging dir with the
+    # comment "upload_large_folder's recursive walk follows symlinks". It does
+    # not — Path.rglob does not descend into symlinked directories — so the
+    # walk silently found nothing and *no snapshot ever contained structures*.
+    # Verified against the repo: both pdb-2026-04-22 and the first
+    # pdb-2026-08-08 attempt held only 4 metadata files.
     stage = Path("/tmp/hf-stage")
     if stage.exists():
         shutil.rmtree(stage)
@@ -219,18 +235,80 @@ def upload_remote(
         src = processed_dir / fname
         if src.exists():
             shutil.copy2(src, stage / HF_PROCESSED_PREFIX / fname)
-    # Symlink structures — upload reads through the link from the Volume.
-    (stage_snap / "structures").symlink_to(structures_dir)
 
     struct_size = sum(p.stat().st_size for p in structures_dir.rglob("*.pkl"))
     n_pkls = sum(1 for _ in structures_dir.rglob("*.pkl"))
-    print(f"[2/3] Staged tree at {stage}:", flush=True)
+    print(
+        f"[2/3] Packing structures/ ({n_pkls} files, {struct_size/1e9:.2f} GB) "
+        f"into {tar_chunk_gb} GB tar chunks...",
+        flush=True,
+    )
+    if n_pkls == 0:
+        raise SystemExit(f"no .pkl files under {structures_dir} — nothing to publish")
+
+    # Stage structures onto local disk first, with a *parallel* copy.
+    #
+    # Tarring straight from the Volume is latency-bound, not bandwidth-bound:
+    # a serial walk manages ~11 files/sec against the Volume's network FS, so
+    # 236K files blew through a 6h timeout without finishing. Preprocessing hit
+    # ~65 files/sec only because it ran 32 workers. Same trick here — many
+    # concurrent readers, then tar from local disk where it is fast.
+    local_structures = Path("/tmp/structures-src/structures")
+    if local_structures.parent.exists():
+        shutil.rmtree(local_structures.parent)
+    local_structures.mkdir(parents=True)
+
+    t_copy = time.time()
+    src_files = list(structures_dir.rglob("*.pkl"))
+    for sub in {f.parent.name for f in src_files}:
+        (local_structures / sub).mkdir(exist_ok=True)
+
+    def _copy(src: Path) -> int:
+        dst = local_structures / src.parent.name / src.name
+        shutil.copyfile(src, dst)
+        return 1
+
+    copied = 0
+    with ThreadPoolExecutor(max_workers=64) as pool:
+        for i, _ in enumerate(pool.map(_copy, src_files), 1):
+            copied = i
+            if i % 25000 == 0:
+                rate = i / max(time.time() - t_copy, 1e-9)
+                print(f"  copied {i}/{len(src_files)} ({rate:.0f} files/s)", flush=True)
+    dt_copy = time.time() - t_copy
+    print(
+        f"  staged {copied} files locally in {dt_copy:.0f}s "
+        f"({copied/max(dt_copy,1e-9):.0f} files/s)",
+        flush=True,
+    )
+    if copied != len(src_files):
+        raise SystemExit(f"copied {copied} of {len(src_files)} pickles")
+
+    # Stream tar into split so no intermediate full-size tar is written.
+    tar_prefix = stage_snap / "structures.tar."
+    t_tar = time.time()
+    subprocess.run(
+        f"set -o pipefail; tar -cf - -C {shlex.quote(str(local_structures.parent))} structures "
+        f"| split -b {tar_chunk_gb}G -d -a 2 - {shlex.quote(str(tar_prefix))}",
+        shell=True, check=True, executable="/bin/bash",
+    )
+    chunks = sorted(stage_snap.glob("structures.tar.*"))
+    packed = sum(p.stat().st_size for p in chunks)
+    print(f"  → {len(chunks)} chunks, {packed/1e9:.2f} GB in {time.time()-t_tar:.0f}s", flush=True)
+    if not chunks:
+        raise SystemExit("tar/split produced no chunks")
+    # Guard against a silently truncated pipe: the archive must account for
+    # essentially all of the source bytes (tar adds padding, never removes).
+    if packed < struct_size * 0.95:
+        raise SystemExit(
+            f"packed {packed/1e9:.2f} GB from {struct_size/1e9:.2f} GB of pickles — "
+            f"tar looks truncated, refusing to publish"
+        )
+
+    print(f"  Staged tree at {stage}:", flush=True)
     for p in sorted(stage.rglob("*")):
-        if p.is_symlink():
-            print(f"  {str(p.relative_to(stage)):60s}  → symlink → {os.readlink(p)}", flush=True)
-        elif p.is_file():
+        if p.is_file():
             print(f"  {str(p.relative_to(stage)):60s}  {p.stat().st_size/1e6:7.1f} MB", flush=True)
-    print(f"  (structures via symlink: {n_pkls} files, {struct_size/1e9:.2f} GB)", flush=True)
 
     if dry_run:
         print("[3/3] DRY RUN — nothing uploaded.", flush=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import datetime
 import json
 import logging
 import os
@@ -17,6 +18,7 @@ import torch.nn as nn
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 
+from helico.contacts import MARINFOLD_PRECISION, MARINFOLD_RECALL
 from helico.data import (
     HelicoDataset,
     LazyHelicoDataset,
@@ -87,6 +89,12 @@ class TrainConfig:
     # Validation (rank 0 only; 0 disables)
     val_every: int = 0
     val_samples: int = 32
+    # Hard wall-clock cap for one val sweep (all conditioning levels together).
+    # Validation runs on rank 0 while every other rank waits inside a
+    # collective; if it overruns NCCL's watchdog they abort and kill the run.
+    # Capping the sweep is the guard that actually binds — it bounds the work
+    # regardless of dataset speed, structure size or level count.
+    val_max_seconds: float = 420.0
 
     # EMA
     ema_decay: float = 0.999
@@ -101,6 +109,27 @@ class TrainConfig:
     # plus a flag to freeze the trunk so only the diffusion module trains.
     diffusion_pair_source: str = "z"
     freeze_trunk: bool = False
+
+    # Contact conditioning. `use_contacts` / `use_msa` are HelicoConfig fields
+    # mirrored here because asdict(TrainConfig) is what lands in the checkpoint
+    # and every loader rebuilds HelicoConfig from it by name.
+    use_contacts: bool = True
+    use_msa: bool = True
+    # How the 3-state contact matrix is masked/corrupted per example:
+    # "sampled" = random level each example (training), "oracle" = leave the
+    # ground-truth matrix untouched. Validation always pins fixed levels.
+    contact_conditioning: str = "sampled"
+    # LR multiplier for the contact pathway (Helico.linear_contact) only.
+    #
+    # linear_contact is zero-initialised, so it must travel from exactly zero
+    # before contacts can influence anything, while the rest of the trunk is
+    # warm-started and already near a solution. Worse, grad_clip is a *global*
+    # norm over all parameters: with total norms around 1e4 against a clip of
+    # 1.0, every gradient is scaled by ~1e-4, so the projection barely moves.
+    # Two independent measurements (the paired val curve and a paired FoldBench
+    # comparison) showed the 2026-08-10 run never learned to use contacts.
+    # Scaling this one small (d_pair x 3) tensor's LR attacks that directly.
+    contact_lr_multiplier: float = 1.0
 
     def get_torch_dtype(self) -> torch.dtype:
         return {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}[self.dtype]
@@ -307,6 +336,25 @@ def load_checkpoint(
 # ============================================================================
 
 @torch.no_grad()
+def _align_pred_to_gt(pred: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    """Slice a (B*N_d, ...) prediction down to one sample per batch row.
+
+    With n_diffusion_samples > 1 (gh#6) the diffusion module returns B*N_d
+    predictions against B ground-truth rows. Handing both straight to
+    smooth_lddt_loss lets them broadcast: the numerator then sums N_d samples
+    while the denominator counts one batch row's pairs, inflating the reported
+    lDDT by ~N_d. That is why val/lddt has been logging values above 1 (2-5
+    with N_d=8) — a metric-only bug, since smooth_lddt_loss is not part of the
+    training objective. _eval_quality_metrics already does this slicing; the
+    lDDT call sites did not.
+    """
+    if pred.shape[0] != gt.shape[0] and gt.shape[0] > 0:
+        n_d = pred.shape[0] // gt.shape[0]
+        if n_d > 1:
+            return pred[::n_d]
+    return pred
+
+
 def _eval_quality_metrics(outputs: dict, batch: dict) -> dict[str, float]:
     """Compute Tier-1 structural quality metrics from a forward pass.
 
@@ -364,6 +412,54 @@ def _eval_quality_metrics(outputs: dict, batch: dict) -> dict[str, float]:
     return out
 
 
+def _contact_conditioning_spec(config: TrainConfig) -> str | dict | None:
+    """Translate the TrainConfig knobs into a dataset conditioning spec."""
+    if not getattr(config, "use_contacts", True):
+        return None
+    if getattr(config, "contact_conditioning", "sampled") == "oracle":
+        return None
+    return "sampled"
+
+
+# Fixed contact-conditioning levels evaluated at validation. Pinned rather than
+# sampled so the numbers are comparable across steps and across runs — together
+# they trace the conditioning curve that is the headline result of the contact
+# work (see .agents/project/20260806_contact_conditioned_folding.md §8.1).
+# The config.val_samples budget is split across levels, so sweeping them costs
+# no more than single-level validation did.
+# Seed for the validation subset permutation. Constant so that every
+# conditioning level and every validation step evaluate identical structures,
+# making val/*_gain a paired comparison.
+_VAL_SUBSET_SEED = 20260810
+
+VAL_CONTACT_LEVELS: dict[str, dict] = {
+    # 0% of the matrix defined — ab initio, no contact information at all.
+    "@contacts0": {"mode": "none"},
+    # Half the true contacts listed, rest unknown — a partial top-k list with no
+    # errors. Was `pair-subset`, which specifies half of *all pairs*; since
+    # contacts are ~0.1% of pairs that asserted an enormous number of true
+    # negatives and behaved much closer to full conditioning than to half of it.
+    "@contacts50": {"mode": "contact-list", "reveal": 0.5, "eps_fp": 0.0, "eps_fn": 0.0},
+    # 100% defined and correct — the ceiling.
+    "@contacts100": {"mode": "full", "eps_fp": 0.0, "eps_fn": 0.0},
+    # 100% defined but corrupted (20% false positives + 20% false negatives),
+    # standing in for what a real contact predictor would supply.
+    "@contacts100noisy": {"mode": "full", "eps_fp": 0.2, "eps_fn": 0.2},
+    # MarinFold's actual output: a truncated top-k list at ~60% precision and
+    # ~60% recall. This is the level that tracks deployment readiness — the
+    # others bracket it. Pinned to the constants in helico.contacts so the two
+    # move together when the predictor improves.
+    "@contactsMarinFold": {"mode": "contact-list",
+                           "precision": MARINFOLD_PRECISION,
+                           "recall": MARINFOLD_RECALL},
+}
+
+# The headline curve: these three differ only in how much of the contact matrix
+# is revealed, so plotting them together shows whether the model uses contacts
+# at all and how gracefully it degrades.
+VAL_HEADLINE_LEVELS = ("@contacts0", "@contacts50", "@contacts100")
+
+
 @torch.no_grad()
 def _run_validation(
     base_model: Helico,
@@ -372,18 +468,92 @@ def _run_validation(
     device: torch.device,
     dtype: torch.dtype,
 ) -> dict[str, float]:
-    """Run up to config.val_samples val batches. Returns mean metrics.
+    """Run validation, sweeping fixed contact-conditioning levels.
 
-    Uses an SDPA backend context that allows fallback to math attention —
-    cuDNN flash-attn rejects some val structure shapes with "No valid
-    execution plans built", which crashed the very first val sweep.
+    Every metric is suffixed by level — ``val/lddt_hard@contacts0``,
+    ``@contacts50``, ``@contacts100``, ``@contacts100noisy``. Nothing is
+    reported unsuffixed, so a plot can never silently mix levels.
+
+    Also emits ``val/<metric>_gain`` = (100% contacts − 0% contacts), the
+    headline quantity: positive means the model is actually exploiting the
+    contact matrix, ~0 means it is ignoring it.
+    """
+    if not getattr(config, "use_contacts", True):
+        return _run_validation_pass(base_model, val_dataset, config, device, dtype,
+                                    config.val_samples, None, "")
+    levels = VAL_CONTACT_LEVELS
+    per_level = max(1, config.val_samples // len(levels))
+    deadline = time.time() + config.val_max_seconds
+    result: dict[str, float] = {}
+    for suffix, spec in levels.items():
+        if time.time() >= deadline:
+            logger.warning(
+                f"[val] wall-clock budget ({config.val_max_seconds:.0f}s) exhausted; "
+                f"skipping level '{suffix or 'full'}' and any after it"
+            )
+            break
+        result.update(_run_validation_pass(
+            base_model, val_dataset, config, device, dtype, per_level, spec, suffix,
+            deadline=deadline,
+        ))
+
+    # Contact gain: how much full conditioning buys over none. This is the
+    # number the whole redesign turns on, so log it directly rather than
+    # leaving it to be eyeballed off three curves.
+    lo, hi = VAL_HEADLINE_LEVELS[0], VAL_HEADLINE_LEVELS[-1]
+    for metric in ("lddt_hard", "gdt_ts", "rmsd"):
+        a, b = result.get(f"val/{metric}{hi}"), result.get(f"val/{metric}{lo}")
+        if a is not None and b is not None:
+            # rmsd improves downward, so flip its sign to keep "higher is better"
+            result[f"val/{metric}_gain"] = (b - a) if metric == "rmsd" else (a - b)
+    return result
+
+
+@torch.no_grad()
+def _run_validation_pass(
+    base_model: Helico,
+    val_dataset: torch.utils.data.Dataset,
+    config: TrainConfig,
+    device: torch.device,
+    dtype: torch.dtype,
+    val_samples: int,
+    contact_spec: dict | None,
+    suffix: str,
+    deadline: float | None = None,
+) -> dict[str, float]:
+    """Run up to val_samples val batches at one conditioning level.
+
+    Some val structure shapes still make cuDNN's flash-attn kernel abort. The
+    RuntimeError path below recovers the CUDA context and ends the sweep, but
+    the failure can also arrive as a SIGABRT from the C++ layer, which no
+    Python except clause can catch — that kills the whole (DDP) run. Observed
+    on the 2026-08-08 depth sweep: the depth-16 arm died at its step-500 val.
+    Mitigate by validating less often; the real fix is the collate_fn token
+    padding (see AGENTS.md), which evidently does not cover every shape.
+
+    NOTE: an earlier docstring here claimed this function installs an SDPA
+    backend context allowing a math-attention fallback. It does not, and never
+    did — `sdpa_kernel` appears nowhere in the codebase. That approach was
+    abandoned (AGENTS.md records the monkey-patch that silently did nothing).
     """
     base_model.eval()
+    if contact_spec is not None and hasattr(val_dataset, "contact_conditioning"):
+        val_dataset.contact_conditioning = contact_spec
     try:
+        # Fixed-seed shuffle: every conditioning level, at every validation
+        # step, must see the SAME structures in the same order.
+        #
+        # With an unseeded shuffle each level drew a different random subset, so
+        # the level-to-level difference carried target-difficulty variance —
+        # which dwarfs the conditioning effect (validating one unchanged model
+        # swung +/-0.18 lddt between sweeps). Pairing removes that source
+        # entirely: val/*_gain becomes a within-structure difference, and the
+        # curve over steps tracks the model rather than the sample.
         loader = torch.utils.data.DataLoader(
             val_dataset,
             batch_size=config.batch_size,
             shuffle=True,
+            generator=torch.Generator().manual_seed(_VAL_SUBSET_SEED),
             num_workers=min(2, config.num_workers),
             collate_fn=collate_fn,
             pin_memory=True,
@@ -397,7 +567,13 @@ def _run_validation(
         n_attempted = 0
         n_skipped = 0
         for i, batch in enumerate(loader):
-            if n_attempted >= config.val_samples:
+            if n_attempted >= val_samples:
+                break
+            if deadline is not None and time.time() >= deadline:
+                logger.warning(
+                    f"[val] budget exhausted after {n_attempted} samples at level "
+                    f"'{suffix or 'full'}' — reporting a partial mean"
+                )
                 break
             n_attempted += 1
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
@@ -430,7 +606,8 @@ def _run_validation(
             sums["total_loss"] += total; counts["total_loss"] += 1
             if "x_denoised" in outputs:
                 lddt = 1.0 - float(smooth_lddt_loss(
-                    outputs["x_denoised"].float(), batch["atom_coords"].float(),
+                    _align_pred_to_gt(outputs["x_denoised"], batch["atom_coords"]).float(),
+                    batch["atom_coords"].float(),
                     batch.get("atom_mask"),
                 ).item())
                 sums["lddt"] += lddt; counts["lddt"] += 1
@@ -438,9 +615,9 @@ def _run_validation(
                 if k in sums:
                     sums[k] += v
                     counts[k] += 1
-        result = {f"val/{k}": sums[k] / counts[k] for k in sums if counts[k] > 0}
-        result["val/n_attempted"] = float(n_attempted)
-        result["val/n_skipped"] = float(n_skipped)
+        result = {f"val/{k}{suffix}": sums[k] / counts[k] for k in sums if counts[k] > 0}
+        result[f"val/n_attempted{suffix}"] = float(n_attempted)
+        result[f"val/n_skipped{suffix}"] = float(n_skipped)
         return result
     finally:
         base_model.train()
@@ -467,7 +644,14 @@ def train(
 
     # DDP setup
     if config.distributed:
-        dist.init_process_group("nccl")
+        # NCCL's watchdog defaults to 10 minutes. Validation runs on rank 0
+        # only while every other rank blocks on the next gradient all-reduce,
+        # so a val sweep longer than that trips the watchdog and every waiting
+        # rank aborts with SIGABRT ("Invalid access of peer GPU memory over
+        # nvlink"), taking the run down. That killed all five arms of the
+        # 2026-08-08 depth sweep. The wall-clock cap in _run_validation is the
+        # primary guard; this raises the ceiling so the cap is what binds.
+        dist.init_process_group("nccl", timeout=datetime.timedelta(hours=2))
         rank = dist.get_rank()
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         device = torch.device(f"cuda:{local_rank}")
@@ -492,8 +676,24 @@ def train(
         model = DDP(model, device_ids=[device], find_unused_parameters=True)
 
     # Optimizer (skip frozen params so AdamW state doesn't grow uselessly).
+    # Two groups so the contact pathway can run at its own LR; `lr_scale` is
+    # re-applied every step by the scheduler below, which would otherwise
+    # overwrite the per-group LR with a single value.
+    contact_params, other_params = [], []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        (contact_params if "linear_contact" in name else other_params).append(param)
+    groups = [{"params": other_params, "lr_scale": 1.0}]
+    if contact_params:
+        groups.append({"params": contact_params, "lr_scale": config.contact_lr_multiplier})
+        logger.info(
+            f"contact pathway: {sum(p.numel() for p in contact_params)} params at "
+            f"{config.contact_lr_multiplier}x LR "
+            f"({config.lr * config.contact_lr_multiplier:.2e} peak)"
+        )
     optimizer = torch.optim.AdamW(
-        [p for p in model.parameters() if p.requires_grad],
+        groups,
         lr=config.lr,
         weight_decay=config.weight_decay,
         betas=(0.9, 0.999),
@@ -559,6 +759,7 @@ def train(
             structures=train_data,
             crop_size=config.crop_size,
             msa_features=msa_features,
+            contact_conditioning=_contact_conditioning_spec(config),
         )
 
     sampler = DistributedSampler(dataset) if config.distributed else None
@@ -607,7 +808,7 @@ def train(
             # staging below is unaffected.
             current_lr = get_lr(step, config)
             for param_group in optimizer.param_groups:
-                param_group["lr"] = current_lr
+                param_group["lr"] = current_lr * param_group.get("lr_scale", 1.0)
 
             # Update crop size if changed
             if stage.get("crop_size") != dataset.crop_size:
@@ -654,7 +855,7 @@ def train(
             if "x_denoised" in outputs:
                 with torch.no_grad():
                     lddt_val = 1.0 - smooth_lddt_loss(
-                        outputs["x_denoised"].float(),
+                        _align_pred_to_gt(outputs["x_denoised"], batch["atom_coords"]).float(),
                         batch["atom_coords"].float(),
                         batch.get("atom_mask"),
                     ).item()
@@ -675,6 +876,16 @@ def train(
                 # Snapshot hard quality metrics on the most recent batch
                 # (cheap, run only on log steps).
                 quality = _eval_quality_metrics(outputs, batch)
+                # Is the contact pathway actually moving? linear_contact starts
+                # at exactly zero, so its weight norm is a direct read on
+                # whether it is learning at all — the mechanism the LR
+                # multiplier targets. A flat ~0 norm means the LR is still too
+                # small; a growing norm with a flat val gain means the signal
+                # is being learned but is not useful, which is a different
+                # (and more interesting) result.
+                contact_w = getattr(base_model, "linear_contact", None)
+                contact_norm = float(contact_w.weight.detach().norm()) if contact_w is not None else None
+
                 logger.info(
                     f"Step {step} | Loss: {avg_loss:.4f} | Diff: {avg_diff:.4f}"
                     + (f" | Dist: {avg_dist:.4f}" if avg_dist is not None else "")
@@ -685,6 +896,7 @@ def train(
                     + (f" | pLDDT: {quality['plddt']:.1f}" if "plddt" in quality else "")
                     + (f" | GradNorm: {avg_grad:.3f}" if avg_grad is not None else "")
                     + f" | LR: {current_lr:.2e} | GPU: {peak_gb:.1f}G | Tokens/s: {throughput:.0f}"
+                    + (f" | ContactW: {contact_norm:.4f}" if contact_norm is not None else "")
                 )
                 if wandb_run is not None:
                     log_payload = {
@@ -709,6 +921,8 @@ def train(
                         log_payload["train/gdt_ts"] = quality["gdt_ts"]
                     if "plddt" in quality:
                         log_payload["train/plddt"] = quality["plddt"]
+                    if contact_norm is not None:
+                        log_payload["train/contact_weight_norm"] = contact_norm
                     wandb_run.log(log_payload, step=step)
                 running_loss = 0.0
                 running_diff = 0.0
@@ -733,6 +947,15 @@ def train(
                 logger.info(f"[val] step {step} | {msg}")
                 if wandb_run is not None:
                     wandb_run.log(val_metrics, step=step)
+
+            # Re-sync after rank-0-only work. Without this the other ranks sit
+            # inside a collective (with its watchdog running) rather than at an
+            # explicit rendezvous, which is what turned a slow val sweep into a
+            # hard abort. Must be called by *every* rank, so it lives outside
+            # the rank == 0 guards above.
+            if (config.distributed and config.val_every > 0 and step > 0
+                    and step % config.val_every == 0 and val_dataset is not None):
+                dist.barrier()
 
             # Checkpointing
             if step % config.save_every == 0 and step > 0 and rank == 0:
@@ -872,6 +1095,20 @@ def main():
                              "'none' = zero out the trunk's pair contribution (relpe-only baseline).")
     parser.add_argument("--freeze-trunk", action="store_true",
                         help="Freeze the trunk (gh#9). Only the diffusion module trains.")
+    parser.add_argument("--no-contacts", action="store_true",
+                        help="Disable residue/residue contact conditioning.")
+    parser.add_argument("--no-msa", action="store_true",
+                        help="Run MSA-free. The MSA channels of s_inputs arrive zeroed, "
+                             "so the diffusion/atom modules stay warm-startable.")
+    parser.add_argument("--contact-lr-multiplier", type=float, default=1.0,
+                        help="LR multiplier for Helico.linear_contact only. The projection "
+                             "is zero-init and global grad clipping shrinks every update, so "
+                             "it barely moves at 1x; raise this to let contacts actually be "
+                             "learned.")
+    parser.add_argument("--contact-conditioning", type=str, default="sampled",
+                        choices=["sampled", "oracle"],
+                        help="'sampled' masks and corrupts contacts per example (training); "
+                             "'oracle' passes the ground-truth matrix through untouched.")
     parser.add_argument("--crop-size", type=int, default=384, help="Initial crop size")
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size per GPU")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
@@ -931,6 +1168,10 @@ def main():
         distributed=args.distributed,
         diffusion_pair_source=args.diffusion_pair_source,
         freeze_trunk=args.freeze_trunk,
+        use_contacts=not args.no_contacts,
+        use_msa=not args.no_msa,
+        contact_conditioning=args.contact_conditioning,
+        contact_lr_multiplier=args.contact_lr_multiplier,
     )
 
     model_config = HelicoConfig(
@@ -938,6 +1179,8 @@ def main():
         n_diffusion_token_blocks=args.n_diffusion_token_blocks,
         n_diffusion_samples=args.n_diffusion_samples,
         diffusion_pair_source=args.diffusion_pair_source,
+        use_contacts=not args.no_contacts,
+        use_msa=not args.no_msa,
     )
 
     model = Helico(model_config)
@@ -963,16 +1206,23 @@ def main():
         manifest = load_manifest(manifest_path)
         logger.info(f"Manifest has {len(manifest)} structures")
 
-        # Load MSA tar indices if available
+        # Load MSA tar indices if available. Skipped entirely under --no-msa:
+        # the model gates every MSA-derived feature, but not loading the data in
+        # the first place means an MSA-free run cannot regress into a leaky one
+        # if that gate is ever weakened. It also saves the index load and the
+        # per-example MSA assembly, which are pure waste in this mode.
         msa_tar_indices: list[TarIndex] = []
-        for idx_name in ["rcsb_msa_index.pkl", "rcsb_raw_msa_index.pkl",
-                         "openfold_msa_index.pkl", "openfold_raw_msa_index.pkl"]:
-            idx_path = processed_dir / idx_name
-            if idx_path.exists():
-                logger.info(f"Loading MSA tar index from {idx_path}...")
-                msa_tar_indices.append(load_tar_index(idx_path))
-
-        msa_dir = Path(args.msa_dir) if args.msa_dir else None
+        msa_dir = None
+        if args.no_msa:
+            logger.info("--no-msa: skipping MSA indices; no alignment data will be loaded")
+        else:
+            for idx_name in ["rcsb_msa_index.pkl", "rcsb_raw_msa_index.pkl",
+                             "openfold_msa_index.pkl", "openfold_raw_msa_index.pkl"]:
+                idx_path = processed_dir / idx_name
+                if idx_path.exists():
+                    logger.info(f"Loading MSA tar index from {idx_path}...")
+                    msa_tar_indices.append(load_tar_index(idx_path))
+            msa_dir = Path(args.msa_dir) if args.msa_dir else None
 
         # Create training dataset with date-based filter (AF3 convention).
         train_cutoff = args.train_cutoff
@@ -985,6 +1235,7 @@ def main():
             msa_tar_indices=msa_tar_indices,
             msa_dir=msa_dir,
             filter_fn=lambda m: m.release_date < train_cutoff if m.release_date else True,
+            contact_conditioning=_contact_conditioning_spec(train_config),
         )
         logger.info(f"Training dataset: {len(train_dataset)} structures (release_date < {train_cutoff})")
 
@@ -997,6 +1248,8 @@ def main():
                 msa_tar_indices=msa_tar_indices,
                 msa_dir=msa_dir,
                 filter_fn=lambda m: bool(m.release_date) and val_start <= m.release_date <= val_end,
+                # Overwritten per level by _run_validation; pinned, never sampled.
+                contact_conditioning=VAL_CONTACT_LEVELS["@contacts100"],
             )
             logger.info(f"Validation dataset: {len(val_dataset)} structures "
                         f"({val_start} ≤ release_date ≤ {val_end})")
@@ -1017,6 +1270,16 @@ def infer_main():
     parser.add_argument("--ccd", type=str, default=None, help="Path to CCD cache pickle (optional, falls back to env vars)")
     parser.add_argument("--output", type=str, default="output.pdb", help="Output PDB file")
     parser.add_argument("--n-samples", type=int, default=5, help="Number of samples")
+    parser.add_argument("--contacts-from-structure", type=str, default=None,
+                        help="mmCIF to derive the contact map from with pyconfind. "
+                             "This is the ORACLE condition — it uses the answer — and is "
+                             "for reproducing the reported ceiling, not for prediction.")
+    parser.add_argument("--contacts", type=str, default=None,
+                        help="Contact list file: one 'i j' or 'chainA i chainB j' pair "
+                             "per line, as a contact predictor would emit. Unlisted "
+                             "pairs are left unknown, not absent.")
+    parser.add_argument("--contacts-one-indexed", action="store_true",
+                        help="Residue positions in --contacts count from 1, not 0")
     parser.add_argument("--use-msa-server", action="store_true",
                         help="Generate MSA using the public ColabFold MMseqs2 server")
     parser.add_argument("--msa-server-url", type=str, default="https://api.colabfold.com",
@@ -1069,6 +1332,36 @@ def infer_main():
 
     logger.info(f"Tokenized: {tokenized.n_tokens} tokens, {tokenized.n_atoms} atoms")
     features = tokenized.to_features()
+
+    if args.contacts and args.contacts_from_structure:
+        parser.error("pass only one of --contacts / --contacts-from-structure")
+    if args.contacts_from_structure:
+        from helico.inference import contacts_from_structure
+
+        ref = parse_mmcif(args.contacts_from_structure)
+        if ref is None:
+            parser.error(f"could not parse {args.contacts_from_structure}")
+        features["contact_state"] = contacts_from_structure(tokenized, ref)
+        logger.info("Contacts derived from %s (ORACLE — uses the answer)",
+                    args.contacts_from_structure)
+    elif args.contacts:
+        from helico.inference import contacts_from_pairs
+
+        pairs = []
+        for line in Path(args.contacts).read_text().splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) == 2:
+                pairs.append((int(parts[0]), int(parts[1])))
+            elif len(parts) == 4:
+                pairs.append((parts[0], int(parts[1]), parts[2], int(parts[3])))
+            else:
+                parser.error(f"bad contact line: {line!r}")
+        features["contact_state"] = contacts_from_pairs(
+            pairs, tokenized=tokenized, one_indexed=args.contacts_one_indexed)
+        logger.info("Loaded %d contact pairs from %s", len(pairs), args.contacts)
 
     # Add batch dimension
     batch = {k: v.unsqueeze(0) if isinstance(v, torch.Tensor) else v for k, v in features.items()}
