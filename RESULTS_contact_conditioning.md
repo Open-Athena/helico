@@ -1,10 +1,12 @@
 # Folding from contacts instead of MSAs — results so far
 
-**Status:** exploratory. Results are from a *warm-started* model, and contacts
-are derived from the ground-truth structure — either exactly (the oracle
-ceiling) or degraded to a predictor's operating point with our noise model. No
-real MarinFold predictions have been fed through yet. See
-[Caveats](#caveats) before quoting any number.
+**Status:** exploratory. Results below are from a *warm-started* model.
+
+**Real MarinFold predictions have now been tested, and the synthetic result does
+not transfer** — see [Real predicted contacts](#real-predicted-contacts). At
+matched precision and recall, real predictor errors cost a further 0.165 lDDT
+beyond what our uniform noise model predicts. Treat the synthetic numbers as an
+upper bound.
 
 Weights: [timodonnell/helico](https://huggingface.co/timodonnell/helico)
 (`contacts-msafree-01`, step 6000 — the checkpoint every number below describes).
@@ -43,9 +45,13 @@ contact predictor.
 - Validation reports lDDT at 0%, 50%, 100%, and 100%-with-noise conditioning
   every validation step.
 
-## Headline result
+## Headline result (synthetic contacts — an upper bound)
 
-**At MarinFold's current accuracy, an MSA-free model matches Protenix with MSAs.**
+**Given contacts degraded with our noise model to 60% precision and 60% recall,
+an MSA-free model matches Protenix with MSAs.** With *real* MarinFold contacts at
+a comparable operating point it does not — see
+[Real predicted contacts](#real-predicted-contacts). The synthetic figure is the
+ceiling this approach reaches if predictor errors were unstructured.
 
 ![MSA-free folding from contacts](.agents/project/figures/contact_conditioning_accuracy.png)
 
@@ -93,10 +99,11 @@ correlated and concentrate near true contacts — geometrically plausible
 near-misses are plausibly much harder to discount than uniform random ones,
 because the model cannot reject them as inconsistent with everything else.
 
-So this result establishes that *a* predictor at 60/60 suffices. Whether
-*MarinFold* at 60/60 suffices requires feeding real MarinFold output — planned
-in [helico#11](https://github.com/Open-Athena/helico/issues/11). That is the
-experiment that decides the project.
+This established that *a* predictor at 60/60 would suffice **if its errors were
+unstructured**. They are not: feeding real MarinFold output costs a further
+0.165 lDDT at matched precision and recall
+([Real predicted contacts](#real-predicted-contacts),
+[helico#11](https://github.com/Open-Athena/helico/issues/11)).
 
 Other controls:
 
@@ -108,6 +115,81 @@ Other controls:
   `linear_contact`.
 - **No benchmark overlap.** 0 of the 49 FoldBench targets appear among the
   168,102 train-eligible structures.
+
+## Real predicted contacts
+
+The section above conditions on contacts derived from the answer, degraded with a
+noise model whose false positives are drawn uniformly. This section feeds the
+real thing.
+
+![real vs synthetic contacts](.agents/project/figures/marinfold_real_contacts.png)
+
+98 paired FoldBench monomer targets, all MSA-free. Contacts come from MarinFold
+`contacts-v1-exp199-1.5B` via
+[MarinFold exp211](https://github.com/Open-Athena/MarinFold/issues/211)'s
+rollouts. Each synthetic arm was generated at the precision/recall **measured for
+its real counterpart**, so the real-vs-synthetic gap isolates error *structure*
+from error *rate*.
+
+| arm | lDDT |
+| --- | --- |
+| no contacts | 0.365 |
+| single rollout, top-L | 0.551 |
+| **real MarinFold, top-L/5** | **0.564** |
+| **real MarinFold, top-L/2** | **0.610** |
+| **real MarinFold, top-L** | **0.622** |
+| synthetic @ p=.795 r=.179 | 0.682 |
+| synthetic @ p=.676 r=.379 | 0.757 |
+| synthetic @ p=.505 r=.564 | 0.786 |
+| oracle contacts | 0.824 |
+| Protenix + MSA | 0.851 |
+
+### Error structure dominates error rate
+
+| budget | real − synthetic | t | worse on |
+| --- | --- | --- | --- |
+| top-L/5 | **−0.119 ± 0.018** | −6.5 | 77/98 |
+| top-L/2 | **−0.147 ± 0.020** | −7.5 | 79/98 |
+| top-L | **−0.165 ± 0.020** | −8.5 | 81/98 |
+
+At top-L, degrading the oracle map to MarinFold's measured 50%/56% *rate* costs
+0.037 lDDT; swapping uniform errors for real ones costs a further **0.165** —
+about 4.5× more. Real predictor errors cluster near true contacts, where they are
+geometrically plausible and cannot be rejected as inconsistent with the rest of
+the map. The training noise model was the easy case.
+
+### Where that leaves the project
+
+Real MarinFold contacts help substantially — **+0.257 ± 0.020** over no contacts
+(t=12.6, 87/98). But at 0.622 against Protenix+MSA's 0.851, **MSA-free folding
+driven by today's MarinFold does not yet match MSAs.**
+
+The 0.230 shortfall decomposes as roughly 0.028 (oracle vs MSA on this set) +
+0.037 (error rate) + **0.165 (error structure)**. Structure dominates, which
+makes the cheapest lever ours rather than MarinFold's: **sample training false
+positives from near-miss pairs rather than uniformly**, so the model is trained
+against the error distribution it actually faces.
+
+Also measured:
+
+- **Vote aggregation is worth +0.071 ± 0.008** (t=8.5) over a single rollout at
+  the same budget, matching its ~0.10 precision advantage. Never mix the recipes.
+- On monomers, Protenix+MSA edges out even oracle contacts by +0.028 ± 0.014
+  (t=1.9, marginal) — unlike the assembly set, where they matched.
+
+### The index map, which nearly broke this
+
+MarinFold indexes residues into the published prompt (full SEQRES); the bench
+derives its sequence from the *resolved* residues of the ground truth. Only 15 of
+100 targets agree outright. 83 agree once prompt positions are mapped through
+exp211's `resolved` list; 2 need real alignment and were dropped. A naive
+identity map would have shifted contacts on 83% of targets and produced exactly
+the same qualitative answer — "real contacts underperform" — for entirely the
+wrong reason.
+
+Verified by round trip: exp211's ground truth pushed through the map reproduces
+helico's own `oracle_contact_state` at mean Jaccard 0.998 (min 0.984), pinned by
+`tests/test_marinfold_export.py`.
 
 ## Two bugs that mattered
 
@@ -192,11 +274,10 @@ favours the 48-block arm. A from-scratch sweep is still open.
 
 These matter, and none of them are resolved yet.
 
-0. **Synthetic contact errors.** The 60/60 arm degrades the true map with our
-   noise model, which draws false positives uniformly from the eligible region.
-   Real predictor errors are spatially correlated and cluster near true
-   contacts, and those near-misses are plausibly harder to reject. Feeding real
-   MarinFold output is the decisive next experiment.
+0. **Synthetic contact errors — now measured.** The 60/60 arm draws false
+   positives uniformly. Real MarinFold errors cost a further 0.165 lDDT at the
+   same precision and recall, so every synthetic number here is an upper bound.
+   See [Real predicted contacts](#real-predicted-contacts).
 1. **Contacts come from the answer.** Even degraded, the contact map is derived
    from the ground-truth structure, so the Helico rows are conditioned on
    information a deployed system would have to predict. The Protenix rows are

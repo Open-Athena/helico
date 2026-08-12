@@ -550,6 +550,7 @@ def predict_target(
     oracle_contacts_from: Structure | None = None,
     contact_precision: float | None = None,
     contact_recall: float | None = None,
+    contact_pairs: list | None = None,
 ) -> tuple[TokenizedStructure, dict[str, torch.Tensor]] | None:
     """Run Helico inference on a target defined by chain dicts.
 
@@ -578,7 +579,17 @@ def predict_target(
     # Oracle contacts, when requested. tokenize_sequences has no ground-truth
     # coordinates, so contacts must come from the reference structure and be
     # re-indexed onto these tokens.
-    if oracle_contacts_from is not None:
+    if contact_pairs is not None:
+        # Externally supplied contacts -- a real predictor's output. Already in
+        # this target's token indices (see experiments/marinfold_contacts).
+        # Unlisted pairs stay UNKNOWN: a truncated top-n list cannot claim a
+        # non-contact, and that is the convention the model was trained on.
+        from helico.inference import contacts_from_pairs
+
+        features["contact_state"] = contacts_from_pairs(
+            [(int(a), int(b)) for a, b in contact_pairs], tokenized=tokenized,
+        )
+    elif oracle_contacts_from is not None:
         from helico.contacts import load_rotamer_library
 
         global _ROTAMER_LIBRARY
@@ -1300,6 +1311,7 @@ def run_benchmark(
     single_sequence: bool = False,
     contact_precision: float | None = None,
     contact_recall: float | None = None,
+    contact_map: dict | None = None,
     n_cycles: int | None = None,
     cutoff_date: str | None = None,
     pdb_ids: list[str] | None = None,
@@ -1442,6 +1454,7 @@ def run_benchmark(
                             oracle_contacts_from=gt_for_chains if oracle_contacts else None,
                             contact_precision=contact_precision,
                             contact_recall=contact_recall,
+                            contact_pairs=(contact_map or {}).get(pdb_id),
                         )
                         if pred_result is None:
                             too_large = True
