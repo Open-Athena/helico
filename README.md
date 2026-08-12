@@ -4,7 +4,7 @@
 [![W&B](https://img.shields.io/badge/W%26B-timodonnell%2Fhelico-FFBE00?logo=weightsandbiases&logoColor=white)](https://wandb.ai/timodonnell/helico)
 [![HF Dataset](https://img.shields.io/badge/🤗%20dataset-helico--data-yellow)](https://huggingface.co/datasets/timodonnell/helico-data)
 [![HF Model](https://img.shields.io/badge/🤗%20model-helico-yellow)](https://huggingface.co/timodonnell/helico)
-[![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Open-Athena/helico/blob/claude/helico-residue-contacts-redesign-4cc1c4/notebooks/helico_contact_conditioned_folding.ipynb)
+[![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Open-Athena/helico/blob/main/notebooks/helico_contact_conditioned_folding.ipynb)
 
 Our goal is to enable robust experimentation around modeling and data improvements for AlphaFold3-like architectures.
 
@@ -41,7 +41,7 @@ true contacts and may be harder to reject. Feeding real MarinFold output is
 
 Weights: [timodonnell/helico](https://huggingface.co/timodonnell/helico) ·
 Full writeup: [`RESULTS_contact_conditioning.md`](RESULTS_contact_conditioning.md) ·
-Try it: [Colab notebook](https://colab.research.google.com/github/Open-Athena/helico/blob/claude/helico-residue-contacts-redesign-4cc1c4/notebooks/helico_contact_conditioned_folding.ipynb)
+Try it: [Colab notebook](https://colab.research.google.com/github/Open-Athena/helico/blob/main/notebooks/helico_contact_conditioned_folding.ipynb)
 
 ```python
 from helico.inference import load_model, contacts_from_pairs, fold
@@ -269,7 +269,7 @@ Generates N structure samples and selects the one with the highest mean pLDDT. O
 ### Python API
 
 Folding with contacts — see the
-[Colab notebook](https://colab.research.google.com/github/Open-Athena/helico/blob/claude/helico-residue-contacts-redesign-4cc1c4/notebooks/helico_contact_conditioned_folding.ipynb)
+[Colab notebook](https://colab.research.google.com/github/Open-Athena/helico/blob/main/notebooks/helico_contact_conditioned_folding.ipynb)
 for a worked example with visualisation:
 
 ```python

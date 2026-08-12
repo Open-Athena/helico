@@ -222,6 +222,9 @@ class TestCropAndCollate:
 
 
 class TestPreprocessResume:
+    # These call preprocess_structures, which loads the rotamer library itself.
+    # Requesting the fixture makes them skip when it cannot be fetched, instead
+    # of hard-failing the suite on a network blip the way sibling tests do not.
     """A partially-resumed preprocess must not truncate the manifest.
 
     Real end-to-end runs of ``preprocess_structures`` against gzipped mmCIFs —
@@ -251,7 +254,7 @@ class TestPreprocessResume:
                     shutil.copyfileobj(src, out)
         return tmp_path / "raw", processed
 
-    def test_resume_keeps_previously_processed_structures(self, tmp_path, ccd):
+    def test_resume_keeps_previously_processed_structures(self, tmp_path, ccd, rotamer_library):
         from helico.data import build_manifest, load_manifest, preprocess_structures
 
         # First pass: two structures.
@@ -278,7 +281,7 @@ class TestPreprocessResume:
         )
         assert len(final) == 4
 
-    def test_all_skipped_returns_full_manifest(self, tmp_path, ccd):
+    def test_all_skipped_returns_full_manifest(self, tmp_path, ccd, rotamer_library):
         from helico.data import build_manifest, load_manifest, preprocess_structures
 
         raw, processed = self._stage(tmp_path, ccd, ["1UBQ", "1CRN"])
