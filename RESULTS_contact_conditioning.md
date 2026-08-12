@@ -6,6 +6,9 @@ ceiling) or degraded to a predictor's operating point with our noise model. No
 real MarinFold predictions have been fed through yet. See
 [Caveats](#caveats) before quoting any number.
 
+Weights: [timodonnell/helico](https://huggingface.co/timodonnell/helico)
+(`contacts-msafree-01`, step 6000 — the checkpoint every number below describes).
+
 Design doc and full research record:
 [`.agents/project/20260806_contact_conditioned_folding.md`](.agents/project/20260806_contact_conditioned_folding.md).
 
@@ -91,8 +94,9 @@ near-misses are plausibly much harder to discount than uniform random ones,
 because the model cannot reject them as inconsistent with everything else.
 
 So this result establishes that *a* predictor at 60/60 suffices. Whether
-*MarinFold* at 60/60 suffices requires feeding real MarinFold output. That is
-the next experiment, and it is the one that decides the project.
+*MarinFold* at 60/60 suffices requires feeding real MarinFold output — planned
+in [helico#11](https://github.com/Open-Athena/helico/issues/11). That is the
+experiment that decides the project.
 
 Other controls:
 
@@ -350,8 +354,12 @@ that removes the MSA module outright — see
 
 ## Open questions
 
-1. **Feed real MarinFold predictions.** The remaining gap between this result
-   and a working system. Synthetic 60/60 suffices; real 60/60 is untested.
+1. **Feed real MarinFold predictions** —
+   [helico#11](https://github.com/Open-Athena/helico/issues/11). The remaining
+   gap between this result and a working system: synthetic 60/60 suffices, real
+   60/60 is untested. The design pairs every real-contact arm with a synthetic
+   arm at the *same measured* precision/recall, so any gap isolates error
+   *structure* from error *rate*.
 2. **How accurate must contacts be, exactly?** 60/60 costs only 0.012 vs a
    perfect map. The floor is somewhere below 60% — worth locating, since it sets
    how much predictor headroom exists.
