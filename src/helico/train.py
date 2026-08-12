@@ -1270,6 +1270,16 @@ def infer_main():
     parser.add_argument("--ccd", type=str, default=None, help="Path to CCD cache pickle (optional, falls back to env vars)")
     parser.add_argument("--output", type=str, default="output.pdb", help="Output PDB file")
     parser.add_argument("--n-samples", type=int, default=5, help="Number of samples")
+    parser.add_argument("--contacts-from-structure", type=str, default=None,
+                        help="mmCIF to derive the contact map from with pyconfind. "
+                             "This is the ORACLE condition — it uses the answer — and is "
+                             "for reproducing the reported ceiling, not for prediction.")
+    parser.add_argument("--contacts", type=str, default=None,
+                        help="Contact list file: one 'i j' or 'chainA i chainB j' pair "
+                             "per line, as a contact predictor would emit. Unlisted "
+                             "pairs are left unknown, not absent.")
+    parser.add_argument("--contacts-one-indexed", action="store_true",
+                        help="Residue positions in --contacts count from 1, not 0")
     parser.add_argument("--use-msa-server", action="store_true",
                         help="Generate MSA using the public ColabFold MMseqs2 server")
     parser.add_argument("--msa-server-url", type=str, default="https://api.colabfold.com",
@@ -1322,6 +1332,36 @@ def infer_main():
 
     logger.info(f"Tokenized: {tokenized.n_tokens} tokens, {tokenized.n_atoms} atoms")
     features = tokenized.to_features()
+
+    if args.contacts and args.contacts_from_structure:
+        parser.error("pass only one of --contacts / --contacts-from-structure")
+    if args.contacts_from_structure:
+        from helico.inference import contacts_from_structure
+
+        ref = parse_mmcif(args.contacts_from_structure)
+        if ref is None:
+            parser.error(f"could not parse {args.contacts_from_structure}")
+        features["contact_state"] = contacts_from_structure(tokenized, ref)
+        logger.info("Contacts derived from %s (ORACLE — uses the answer)",
+                    args.contacts_from_structure)
+    elif args.contacts:
+        from helico.inference import contacts_from_pairs
+
+        pairs = []
+        for line in Path(args.contacts).read_text().splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) == 2:
+                pairs.append((int(parts[0]), int(parts[1])))
+            elif len(parts) == 4:
+                pairs.append((parts[0], int(parts[1]), parts[2], int(parts[3])))
+            else:
+                parser.error(f"bad contact line: {line!r}")
+        features["contact_state"] = contacts_from_pairs(
+            pairs, tokenized=tokenized, one_indexed=args.contacts_one_indexed)
+        logger.info("Loaded %d contact pairs from %s", len(pairs), args.contacts)
 
     # Add batch dimension
     batch = {k: v.unsqueeze(0) if isinstance(v, torch.Tensor) else v for k, v in features.items()}

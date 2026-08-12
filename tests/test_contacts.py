@@ -59,23 +59,7 @@ def _pdb_path(pdb_id: str) -> Path:
     return path
 
 
-@pytest.fixture(scope="module")
-def ccd():
-    from helico.data import _processed_dir
-
-    path = _processed_dir() / "ccd_cache.pkl"
-    if not path.exists():
-        pytest.skip("CCD cache not available (run helico-download --subset ccd-only)")
-    with open(path, "rb") as f:
-        return pickle.load(f)
-
-
-@pytest.fixture(scope="module")
-def rotamer_library():
-    try:
-        return load_rotamer_library()
-    except Exception as e:  # noqa: BLE001
-        pytest.skip(f"rotamer library unavailable: {e}")
+# `ccd` and `rotamer_library` come from tests/conftest.py.
 
 
 def _tokenize(pdb_id, ccd, rotamer_library):
