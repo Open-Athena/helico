@@ -1417,6 +1417,7 @@ bench = [
 ]
 dev = [
     { name = "modal" },
+    { name = "nbformat" },
     { name = "pytest" },
 ]
 docs = [
@@ -1447,6 +1448,7 @@ requires-dist = [
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
     { name = "modal", marker = "extra == 'dev'" },
     { name = "nbconvert", marker = "extra == 'experiments'", specifier = ">=7" },
+    { name = "nbformat", marker = "extra == 'dev'", specifier = ">=5" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "pandas", marker = "extra == 'experiments'" },
     { name = "pyconfind", specifier = ">=0.6" },

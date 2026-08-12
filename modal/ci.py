@@ -21,6 +21,16 @@ image = (
         "tmtools",
         "DockQ",
         "tqdm",
+        # Needed to warm the rotamer cache below.
+        "pyconfind>=0.6",
+    )
+    # Warm the pyconfind rotamer library into ~/.cache at build time.
+    # preprocess_structures fetches it on first use with no retry, so a
+    # transient network blip fails the whole suite (seen: RemoteDisconnected).
+    # The venv the tests run in shares the same on-disk cache.
+    .run_commands(
+        "python -c 'from pyconfind import cached_rotamer_library;"
+        " print(cached_rotamer_library())'"
     )
     # Protenix checkpoint baked into image (1.4 GB, cached by Modal)
     .run_commands(

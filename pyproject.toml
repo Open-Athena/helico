@@ -26,6 +26,9 @@ dependencies = [
 dev = [
     "pytest>=7",
     "modal",
+    # Notebook validation (tests/test_notebooks.py); without it those checks
+    # skip silently, which is how a broken notebook shipped once already.
+    "nbformat>=5",
 ]
 bench = [
     "tmtools",
