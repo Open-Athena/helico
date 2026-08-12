@@ -36,6 +36,13 @@ NO_MSA = os.environ.get("HELICO_BENCH_NO_MSA", "0") == "1"
 # The MSA module still runs. This is the fair "no alignments" baseline for a
 # model trained with MSAs -- unlike NO_MSA above, which removes the module.
 SINGLE_SEQ = os.environ.get("HELICO_BENCH_SINGLE_SEQ", "0") == "1"
+# Degrade oracle contacts to a predictor operating point before feeding them in.
+# Unset => perfect contacts (the ceiling). Set to e.g. 0.6/0.6 to score what
+# MarinFold actually emits.
+_cp = os.environ.get("HELICO_BENCH_CONTACT_PRECISION", "")
+_cr = os.environ.get("HELICO_BENCH_CONTACT_RECALL", "")
+CONTACT_PRECISION = float(_cp) if _cp else None
+CONTACT_RECALL = float(_cr) if _cr else None
 
 # Predictor image: GPU model inference. Ships with cuequivariance (pinned
 # to 0.8.x — 0.10 broke bench inference with cuDNN-frontend errors) and
@@ -82,7 +89,9 @@ predictor_image = (
     # shell's env does not exist.
     .env({"HELICO_BENCH_ORACLE_CONTACTS": "1" if ORACLE_CONTACTS else "0",
           "HELICO_BENCH_NO_MSA": "1" if NO_MSA else "0",
-          "HELICO_BENCH_SINGLE_SEQ": "1" if SINGLE_SEQ else "0"})
+          "HELICO_BENCH_SINGLE_SEQ": "1" if SINGLE_SEQ else "0",
+          "HELICO_BENCH_CONTACT_PRECISION": _cp,
+          "HELICO_BENCH_CONTACT_RECALL": _cr})
     # Project code last (changes most frequently)
     .add_local_dir(str(ROOT / "src"), remote_path="/root/helico/src")
     .add_local_file(str(ROOT / "pyproject.toml"), remote_path="/root/helico/pyproject.toml")
@@ -338,6 +347,8 @@ class Predictor:
                     single_sequence=SINGLE_SEQ,
                     n_cycles=n_cycles,
                     oracle_contacts_from=gt_structure if ORACLE_CONTACTS else None,
+                    contact_precision=CONTACT_PRECISION,
+                    contact_recall=CONTACT_RECALL,
                     # logged so the log always states which mode actually ran
                 )
                 if pred_result is None:

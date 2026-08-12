@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import os
@@ -547,6 +548,8 @@ def predict_target(
     n_cycles: int | None = None,
     verbose_timing: bool = False,
     oracle_contacts_from: Structure | None = None,
+    contact_precision: float | None = None,
+    contact_recall: float | None = None,
 ) -> tuple[TokenizedStructure, dict[str, torch.Tensor]] | None:
     """Run Helico inference on a target defined by chain dicts.
 
@@ -582,6 +585,25 @@ def predict_target(
         if _ROTAMER_LIBRARY is None:
             _ROTAMER_LIBRARY = load_rotamer_library()
         state = oracle_contact_state(oracle_contacts_from, tokenized, _ROTAMER_LIBRARY)
+        if state is not None and contact_precision is not None:
+            # Degrade the oracle map to a real predictor's operating point: a
+            # truncated top-k list at the given precision/recall. Without this
+            # the bench can only score perfect contacts, which is the ceiling,
+            # not the deployment condition.
+            #
+            # Seeded from the target name so a given target gets the same
+            # corruption in every arm and every re-run — otherwise the
+            # checkpoint-to-checkpoint comparison would be unpaired.
+            from helico.contacts import sample_conditioning
+
+            gen = torch.Generator().manual_seed(
+                int(hashlib.sha256(target_name.encode()).hexdigest()[:8], 16)
+            )
+            state = sample_conditioning(
+                state, generator=gen, mode="contact-list",
+                precision=contact_precision,
+                recall=contact_recall if contact_recall is not None else contact_precision,
+            )
         if state is not None:
             features["contact_state"] = state
 
@@ -1276,6 +1298,8 @@ def run_benchmark(
     msa_dir: Path | None = None,
     msa_server_url: str | None = None,
     single_sequence: bool = False,
+    contact_precision: float | None = None,
+    contact_recall: float | None = None,
     n_cycles: int | None = None,
     cutoff_date: str | None = None,
     pdb_ids: list[str] | None = None,
@@ -1416,6 +1440,8 @@ def run_benchmark(
                             single_sequence=single_sequence,
                             n_cycles=n_cycles,
                             oracle_contacts_from=gt_for_chains if oracle_contacts else None,
+                            contact_precision=contact_precision,
+                            contact_recall=contact_recall,
                         )
                         if pred_result is None:
                             too_large = True

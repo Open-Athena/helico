@@ -866,3 +866,68 @@ class TestNoMsaSkipsMsaLoading:
         assert "Loading MSA tar index" in guarded, (
             "MSA index loading moved out of the branch it should sit in"
         )
+
+
+class TestBenchContactDegradation:
+    """bench can score a predictor operating point, not just perfect contacts.
+
+    Without this the benchmark can only measure the ceiling (oracle contacts),
+    which is not the deployment condition. The corruption must also be *paired*
+    across checkpoints: a given target has to receive the same degraded map in
+    every arm, or a checkpoint-to-checkpoint comparison is unpaired and the
+    differences are swamped by resampling noise.
+    """
+
+    def _state(self, ccd, rotamer_library):
+        return _tokenize("4HHB", ccd, rotamer_library).to_features()["contact_state"]
+
+    def test_degradation_is_deterministic_per_target(self, ccd, rotamer_library):
+        """Same target name -> identical corruption, so arms stay paired."""
+        import hashlib
+
+        state = self._state(ccd, rotamer_library)
+
+        def degrade(name):
+            gen = torch.Generator().manual_seed(
+                int(hashlib.sha256(name.encode()).hexdigest()[:8], 16)
+            )
+            return sample_conditioning(state, generator=gen, mode="contact-list",
+                                       precision=0.6, recall=0.6)
+
+        assert torch.equal(degrade("8ycm"), degrade("8ycm"))
+        assert not torch.equal(degrade("8ycm"), degrade("7z65")), (
+            "different targets should not share a corruption draw"
+        )
+
+    def test_degraded_map_hits_the_operating_point(self, ccd, rotamer_library):
+        import hashlib
+
+        state = self._state(ccd, rotamer_library)
+        n_true = int((state == CONTACT_PRESENT).sum()) // 2
+        ps, rs = [], []
+        for name in [f"t{i}" for i in range(40)]:
+            gen = torch.Generator().manual_seed(
+                int(hashlib.sha256(name.encode()).hexdigest()[:8], 16)
+            )
+            out = sample_conditioning(state, generator=gen, mode="contact-list",
+                                      precision=0.6, recall=0.6)
+            asserted = out == CONTACT_PRESENT
+            n = int(asserted.sum()) // 2
+            if not n:
+                continue
+            tp = int((asserted & (state == CONTACT_PRESENT)).sum()) // 2
+            ps.append(tp / n)
+            rs.append(tp / n_true)
+        assert abs(sum(ps) / len(ps) - 0.6) < 0.06, f"precision {sum(ps)/len(ps):.3f}"
+        assert abs(sum(rs) / len(rs) - 0.6) < 0.06, f"recall {sum(rs)/len(rs):.3f}"
+
+    def test_predict_target_accepts_the_knobs(self):
+        """Signature guard: the plumbing must reach predict_target."""
+        import inspect
+
+        from helico.bench import predict_target, run_benchmark
+
+        for fn in (predict_target, run_benchmark):
+            params = inspect.signature(fn).parameters
+            assert "contact_precision" in params, fn.__name__
+            assert "contact_recall" in params, fn.__name__
