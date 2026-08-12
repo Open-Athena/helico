@@ -134,6 +134,7 @@ from error *rate*.
 | arm | lDDT |
 | --- | --- |
 | no contacts | 0.365 |
+| stock Protenix v1, single sequence | 0.383 |
 | single rollout, top-L | 0.551 |
 | **real MarinFold, top-L/5** | **0.564** |
 | **real MarinFold, top-L/2** | **0.610** |
@@ -158,11 +159,32 @@ about 4.5× more. Real predictor errors cluster near true contacts, where they a
 geometrically plausible and cannot be rejected as inconsistent with the rest of
 the map. The training noise model was the easy case.
 
+### Against the honest single-sequence baseline
+
+Stock Protenix v1 in single-sequence mode — original weights, depth-1 query-only
+MSA, same 98 targets — scores **0.383**. Real MarinFold contacts beat it
+decisively:
+
+| vs stock Protenix single-sequence | Δ lDDT | t | better on |
+| --- | --- | --- | --- |
+| real MarinFold, top-L | **+0.239 ± 0.022** | +10.7 | 80/98 |
+| real MarinFold, top-L/2 | +0.227 ± 0.021 | +10.8 | 81/98 |
+| real MarinFold, top-L/5 | +0.180 ± 0.019 | +9.7 | 82/98 |
+| single rollout, top-L | +0.168 ± 0.022 | +7.7 | 70/98 |
+
+The control that makes this credible: **our own contacts-off arm scores 0.365,
+slightly *below* Protenix's 0.383** (−0.018 ± 0.007, t=−2.63). The fine-tuned
+model has no intrinsic advantage in the no-information condition — if anything it
+gave up a little single-sequence capability during contact fine-tuning. All of
+the +0.239 comes from the contacts.
+
 ### Where that leaves the project
 
-Real MarinFold contacts help substantially — **+0.257 ± 0.020** over no contacts
-(t=12.6, 87/98). But at 0.622 against Protenix+MSA's 0.851, **MSA-free folding
-driven by today's MarinFold does not yet match MSAs.**
+The picture is two-sided. Real MarinFold contacts **clearly beat single-sequence
+folding** — +0.257 ± 0.020 over no contacts (t=12.6, 87/98), +0.239 ± 0.022 over
+stock Protenix single-sequence — and **clearly do not yet reach MSAs**: 0.622
+against Protenix+MSA's 0.851. The contacts are doing real work; they are not yet
+doing all of the MSA's work.
 
 The 0.230 shortfall decomposes as roughly 0.028 (oracle vs MSA on this set) +
 0.037 (error rate) + **0.165 (error structure)**. Structure dominates, which

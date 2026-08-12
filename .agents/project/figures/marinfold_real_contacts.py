@@ -22,7 +22,7 @@ LEVELS = [("L/5", "rollout_L5", "synth_L5", 0.795, 0.179),
           ("L/2", "rollout_L2", "synth_L2", 0.676, 0.379),
           ("L",   "rollout_L",  "synth_L",  0.505, 0.564)]
 C_REAL, C_SYN, C_OFF = "#b8452f", "#7b52a1", "#7a7a7a"
-C_ORACLE, C_MSA = "#1b5e9c", "#2e7d32"
+C_ORACLE, C_MSA, C_SS = "#1b5e9c", "#2e7d32", "#8a6d3b"
 
 
 def load(arm):
@@ -47,7 +47,7 @@ def paired(a, b, keys):
 
 def main():
     arms = {a: load(a) for a in
-            ["off", "oracle", "protenix_msa", "single_L",
+            ["off", "oracle", "protenix_msa", "protenix_singleseq", "single_L",
              *[x for _l, r, s, *_ in LEVELS for x in (r, s)]]}
     keys = None
     for d in arms.values():
@@ -74,6 +74,8 @@ def main():
 
     for val, c, lab in ((mean("oracle"), C_ORACLE, "oracle contacts"),
                         (mean("protenix_msa"), C_MSA, "Protenix + MSA"),
+                        (mean("protenix_singleseq"), C_SS,
+                         "stock Protenix, single sequence"),
                         (mean("off"), C_OFF, "no contacts")):
         ax.axhline(val, color=c, ls="--", lw=1.5, zorder=1)
         ax.annotate(f"{lab}  ({val:.3f})", xy=(0.985, val),
@@ -116,7 +118,7 @@ def main():
     fig.tight_layout()
     fig.savefig(OUT, dpi=170, bbox_inches="tight")
     print(f"n={n}")
-    for a in ("off", "single_L", *[r for _l, r, _s, *_ in LEVELS],
+    for a in ("off", "protenix_singleseq", "single_L", *[r for _l, r, _s, *_ in LEVELS],
               *[s for _l, _r, s, *_ in LEVELS], "oracle", "protenix_msa"):
         print(f"  {a:14s} {mean(a):.4f}")
     print(f"\nwrote {OUT}")
