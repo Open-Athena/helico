@@ -124,26 +124,62 @@ real thing.
 
 ![real vs synthetic contacts](.agents/project/figures/marinfold_real_contacts.png)
 
-98 paired FoldBench monomer targets, all MSA-free. Contacts come from MarinFold
-`contacts-v1-exp199-1.5B` via
+91 paired FoldBench monomer targets, all Helico arms MSA-free. Contacts come from
+MarinFold `contacts-v1-exp199-1.5B` via
 [MarinFold exp211](https://github.com/Open-Athena/MarinFold/issues/211)'s
 rollouts. Each synthetic arm was generated at the precision/recall **measured for
 its real counterpart**, so the real-vs-synthetic gap isolates error *structure*
 from error *rate*.
 
+Protenix v1 **and** v2 appear as baselines, each with and without MSAs. v2 runs
+through the **official ByteDance implementation** (`protenix==2.0.0`, model
+`protenix-v2`) rather than Helico's reimplementation, since v2 changes the
+architecture. Both v2 arms use Protenix's own recommended inference settings
+(5 samples / 10 cycles / 200 steps) — more compute than the Helico arms get at
+3 samples / 6 cycles, which deliberately favours the baseline.
+
 | arm | lDDT |
 | --- | --- |
-| no contacts | 0.365 |
-| stock Protenix v1, single sequence | 0.383 |
-| single rollout, top-L | 0.551 |
-| **real MarinFold, top-L/5** | **0.564** |
-| **real MarinFold, top-L/2** | **0.610** |
-| **real MarinFold, top-L** | **0.622** |
-| synthetic @ p=.795 r=.179 | 0.682 |
-| synthetic @ p=.676 r=.379 | 0.757 |
-| synthetic @ p=.505 r=.564 | 0.786 |
-| oracle contacts | 0.824 |
-| Protenix + MSA | 0.851 |
+| no contacts | 0.368 |
+| Protenix v1, single sequence | 0.386 |
+| **Protenix v2, single sequence** | **0.409** |
+| single rollout, top-L | 0.566 |
+| **real MarinFold, top-L/5** | **0.575** |
+| **real MarinFold, top-L/2** | **0.626** |
+| **real MarinFold, top-L** | **0.638** |
+| synthetic @ p=.795 r=.179 | 0.710 |
+| synthetic @ p=.676 r=.379 | 0.790 |
+| synthetic @ p=.505 r=.564 | 0.822 |
+| Protenix v1 + MSA | 0.855 |
+| oracle contacts | 0.862 |
+| **Protenix v2 + MSA** | **0.865** |
+
+n is 91 rather than 98 because FoldBench ships no pre-computed a3m for 7 targets,
+so the Protenix MSA arm cannot run on them; every arm is restricted to the common
+set so all comparisons stay paired.
+
+### Against both Protenix generations
+
+| comparison | Δ lDDT | t | better on |
+| --- | --- | --- | --- |
+| Protenix v2 vs v1, single sequence | +0.023 ± 0.011 | 2.2 | 51/91 |
+| Protenix v2 vs v1, with MSA | +0.010 ± 0.004 | 2.5 | 60/91 |
+| **real MarinFold vs v2 single sequence** | **+0.229 ± 0.022** | 10.4 | 76/91 |
+| **v2 + MSA vs real MarinFold** | **+0.227 ± 0.019** | 11.8 | 87/91 |
+| **v2 + MSA vs oracle contacts** | +0.004 ± 0.006 | 0.6 | 59/91 |
+
+Three things follow.
+
+**Real contacts beat the strongest single-sequence baseline.** v2 is genuinely
+better than v1 without MSAs (+0.023), and real MarinFold contacts still clear it
+by **+0.229 ± 0.022** on 76 of 91 targets.
+
+**They still do not reach MSAs.** v2+MSA leads real contacts by
+**+0.227 ± 0.019** on 87 of 91.
+
+**Oracle contacts match the best MSA model.** v2+MSA vs oracle is
++0.004 ± 0.006 — indistinguishable. A perfect contact map is worth as much as an
+alignment to the best available model; the entire shortfall is contact *quality*.
 
 ### Error structure dominates error rate
 

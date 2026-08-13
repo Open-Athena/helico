@@ -1,0 +1,17 @@
+[
+  {
+    "name": "8b2g-assembly1",
+    "covalent_bonds": [],
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "YPITGDGVNCRSGPGTSYSVVKSYQKGADVAITCQAPGTDVKGDNIWDKTADGCYVADYYIKTGSSSYVTAKCD",
+          "count": 1,
+          "modifications": [],
+          "pairedMsaPath": "/cache/helico-data/protenix_v2/v2_singleseq/8b2g-assembly1/msa/98d14213270e4aee3bc3a978d153c6e9941e863e3a122d607d048bb7bde67c39.a3m",
+          "unpairedMsaPath": "/cache/helico-data/protenix_v2/v2_singleseq/8b2g-assembly1/msa/98d14213270e4aee3bc3a978d153c6e9941e863e3a122d607d048bb7bde67c39.a3m"
+        }
+      }
+    ]
+  }
+]

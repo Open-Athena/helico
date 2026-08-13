@@ -1,0 +1,17 @@
+[
+  {
+    "name": "7zoi-assembly1",
+    "covalent_bonds": [],
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "KTIWLQGFNNKYVNSKNGQGAMWCDSDAPQAWELFTVVDAGNGKIALRGNNGMYVSSENGEQAITCNRPAIQGWEAFDWLETADGKVSLRGSNGLFISSENGAAAMTCTRPTASGWEAFGYSVV",
+          "count": 1,
+          "modifications": [],
+          "pairedMsaPath": "/cache/helico-data/protenix_v2/v2_msa/7zoi-assembly1/msa/46eb28b7d08294276400f85720d346979b9f96fb478d4652a2b5c7e7b400fcd9.a3m",
+          "unpairedMsaPath": "/cache/helico-data/protenix_v2/v2_msa/7zoi-assembly1/msa/46eb28b7d08294276400f85720d346979b9f96fb478d4652a2b5c7e7b400fcd9.a3m"
+        }
+      }
+    ]
+  }
+]

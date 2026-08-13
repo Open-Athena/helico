@@ -1,0 +1,17 @@
+[
+  {
+    "name": "7w15-assembly1",
+    "covalent_bonds": [],
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "MTIQDIQSLAEAHGLLLTDKMNFNEMGIDFKVVFALDTKGQQWLLRIPRRDGMREQIKKEKRILELVKKHLSVEVPDWRISSTELVAYPILKDNPVLNLDAETYEIIWNMDKDSPKYITSLAKTLFEIHSIPEKEVRENDLKIMKPSDLRPEIANNLQLVKSEIGISEQLETRYRKWLDNDVLWADFTQFIHGDLYAGHVLASKDGAVSGVIDWSTAHIDDPAIDFAGHVTLFGEESLKTLIIEYEKLGGKVWNKLYEQTLERAAASPLMYGLFALETQNESLIVGAKAQLGV",
+          "count": 1,
+          "modifications": [],
+          "pairedMsaPath": "/cache/helico-data/protenix_v2/v2_msa/7w15-assembly1/msa/21c5dcd5422065a59dbea3730ca645494e5a9c4ae7315cd429834cbd4a753c11.a3m",
+          "unpairedMsaPath": "/cache/helico-data/protenix_v2/v2_msa/7w15-assembly1/msa/21c5dcd5422065a59dbea3730ca645494e5a9c4ae7315cd429834cbd4a753c11.a3m"
+        }
+      }
+    ]
+  }
+]

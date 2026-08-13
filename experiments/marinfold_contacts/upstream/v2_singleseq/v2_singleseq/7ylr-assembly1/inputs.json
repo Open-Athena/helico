@@ -1,0 +1,17 @@
+[
+  {
+    "name": "7ylr-assembly1",
+    "covalent_bonds": [],
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "APTATLQLRVAEARQLNPLIRMLRLCAEDGRALPGFAAGAHIRVQVSLPDGRTDWRHYSLINFATARNATNAPTEYVIAVRKEAEGRGGSRFMHEGLNEGDTLAIEAPKNDFPLHTGPGGSVLVAGGIGVTPLATMAARRRAEGAPVRMHYAGRSRELMAFLPELQALLGDDLRVHADAEAGAPLDIDALLDGVPAGDRLYVCGPKVMLDAVLARTQARGWEHDRVHFELFTEPVAEGDQPFEVELAQSGQRFTVPAGQSILDCLIEHGCDPMFDCKRGECGVCAVPVLEGEIDHRDYVLTAREKAQGNVMQICISRAKGARLVLD",
+          "count": 1,
+          "modifications": [],
+          "pairedMsaPath": "/cache/helico-data/protenix_v2/v2_singleseq/7ylr-assembly1/msa/4a0769d86c5e4bab69d0eec8ebdf7aab04679256c8af2e6518149f2fa5bf3e67.a3m",
+          "unpairedMsaPath": "/cache/helico-data/protenix_v2/v2_singleseq/7ylr-assembly1/msa/4a0769d86c5e4bab69d0eec8ebdf7aab04679256c8af2e6518149f2fa5bf3e67.a3m"
+        }
+      }
+    ]
+  }
+]

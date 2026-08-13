@@ -1,0 +1,17 @@
+[
+  {
+    "name": "8dp9-assembly1",
+    "covalent_bonds": [],
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "DLENVKAIAIVYRELSDGSQTVLLAKMKGKGWMFVRGHVRKDEEADPGVAAIRETQEETGFTGMVKQSGAPFTQPGSVITIHPHIVQVQEASKSKDTEDTVKREFLWVRPSEVRSKLQRAEMIQAWDQLHSFF",
+          "count": 1,
+          "modifications": [],
+          "pairedMsaPath": "/cache/helico-data/protenix_v2/v2_msa/8dp9-assembly1/msa/86489ef75254ae209eaadcf4a1de7dc3347ff57523e7cad2d62d075d89f79a83.a3m",
+          "unpairedMsaPath": "/cache/helico-data/protenix_v2/v2_msa/8dp9-assembly1/msa/86489ef75254ae209eaadcf4a1de7dc3347ff57523e7cad2d62d075d89f79a83.a3m"
+        }
+      }
+    ]
+  }
+]

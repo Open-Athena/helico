@@ -1,0 +1,17 @@
+[
+  {
+    "name": "7y5m-assembly1",
+    "covalent_bonds": [],
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "NLSESLISDCDNLGNFYRGPIVLDINKEFTIEDVPGDGDCFFHCLAKQLPEVSVSRLKGIITSYALRNWDTLTEAPRFYSDPKDYERELNRAGYWGGTTEAEIINHSFGVPVVIWTTEDKKLTSAVQVWTRKHGNLPELHLLHTGTHFMCLAPIV",
+          "count": 1,
+          "modifications": [],
+          "pairedMsaPath": "/cache/helico-data/protenix_v2/v2_msa/7y5m-assembly1/msa/cfcff909686ae99dda63d23ef94113f1cee30a6996a34a9f8dc4d15f34b0b421.a3m",
+          "unpairedMsaPath": "/cache/helico-data/protenix_v2/v2_msa/7y5m-assembly1/msa/cfcff909686ae99dda63d23ef94113f1cee30a6996a34a9f8dc4d15f34b0b421.a3m"
+        }
+      }
+    ]
+  }
+]
