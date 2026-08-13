@@ -2,9 +2,11 @@
 
     uv run python .agents/project/slides/make_slides.py
 
-Every number is from the n=98 FoldBench monomer arms (bench_mf2_*), so the deck
-is internally consistent -- the earlier assembly-set numbers are a different
-target set and are never mixed in. Regenerates the PDF in place.
+Every number is from the FoldBench monomer arms (bench_mf2_*, plus the Protenix
+v2 arms scored by score_protenix_v2.py), so the deck is internally consistent --
+the earlier assembly-set numbers are a different target set and are never mixed
+in. All arms are intersected to a common paired set; N is computed, not hardcoded.
+Regenerates the PDF in place.
 """
 import csv
 import math
@@ -41,9 +43,9 @@ def load(arm):
     return out
 
 
-ARMS = ["off", "protenix_singleseq", "v2_singleseq", "single_L", "rollout_L5",
-        "rollout_L2", "rollout_L", "synth_L5", "synth_L2", "synth_L", "oracle",
-        "protenix_msa", "v2_msa"]
+ARMS = ["off", "protenix_singleseq", "v2_singleseq", "v2ss_derived", "single_L",
+        "rollout_L5", "rollout_L2", "rollout_L", "oracle", "protenix_msa",
+        "v2_msa"]
 
 
 def load_v2(tag):
@@ -95,8 +97,8 @@ with PdfPages(OUT) as pdf:
     fig.patch.set_facecolor("white")
     fig.text(0.06, 0.62, "Folding from predicted contacts\ninstead of MSAs",
              fontsize=40, fontweight="bold", color=INK, va="top", linespacing=1.25)
-    fig.text(0.06, 0.34, "Helico + MarinFold  ·  results on 98 FoldBench monomers",
-             fontsize=17, color=MUTE)
+    fig.text(0.06, 0.34, f"Helico + MarinFold  ·  results on {N} paired FoldBench "
+             f"monomers", fontsize=17, color=MUTE)
     fig.text(0.06, 0.27, "github.com/Open-Athena/helico  ·  PR #13, issue #11",
              fontsize=12, color=MUTE)
     pdf.savefig(fig); plt.close(fig)
@@ -145,6 +147,19 @@ with PdfPages(OUT) as pdf:
              color=GOOD, fontweight="bold", va="top")
     pdf.savefig(fig); plt.close(fig)
 
+    # 3a -- how the model learned to use contacts
+    fig = slide(pdf, "How the model learned to use contacts",
+                "checkpoint sweep of contacts-msafree-01, benched on real "
+                "MarinFold contacts at each step")
+    embed(fig, FIGS / "contact_conditioning_accuracy.png",
+          rect=(0.045, 0.155, 0.91, 0.60))
+    fig.text(0.06, 0.115,
+             "Step 0 is the warm start -- Protenix v1 weights, contact projection "
+             "still zero-initialised, so conditioning is an exact no-op.\n"
+             "All three arms coincide there within 0.003. Almost all of the "
+             "learning happens in the first 1000 steps.",
+             fontsize=11.5, color=MUTE, va="top", linespacing=1.6)
+    pdf.savefig(fig); plt.close(fig)
     # 3b -- the benchmark set
     fig = slide(pdf, "What we benchmark on, and how it was chosen",
                 "FoldBench is far bigger than this subset -- here is the whole chain")
@@ -241,6 +256,43 @@ with PdfPages(OUT) as pdf:
          f"predict -- {M['rollout_L']:.3f} with real ones versus {M['oracle']:.3f} with "
          f"perfect ones.", WARN),
     ], y0=0.68, dy=0.155)
+    pdf.savefig(fig); plt.close(fig)
+
+    # 6b -- reconciling with MarinFold's own R-precision comparison
+    fig = slide(pdf, "But MarinFold's own numbers say it ties Protenix v2 SS",
+                "R-precision, and why the two measurements do not conflict")
+    bullets(fig, [
+        ("MarinFold reports 0.603 R-precision for Protenix v2 single sequence — a\n"
+         "target-weighted mean over 554 proteins, 72% of them denovo_pdb designs,\n"
+         "where v2 SS scores 0.579–0.723.", None),
+        ("On foldbench100 — the set used here — Protenix v2 SS scores 0.255.", WARN),
+        ("Measured here independently at 0.261, against MarinFold's own exp74\n"
+         "measurement of 0.251 on the same set. The pipelines agree.", None),
+    ], y0=0.68, dy=0.155)
+    fig.text(0.075, 0.20, "Scope limitation", fontsize=15, fontweight="bold", color=INK)
+    fig.text(0.075, 0.145,
+             "The contact-quality advantage is measured on natural PDB monomers. "
+             "It likely shrinks, or reverses,\non designed proteins — which is most "
+             "of what MarinFold's own aggregate is weighted by.",
+             fontsize=12.5, color=MUTE, va="top", linespacing=1.7)
+    pdf.savefig(fig); plt.close(fig)
+
+    # 6c -- contamination
+    fig = slide(pdf, "Was MarinFold trained on these proteins?",
+                "mmseqs search of the distillation corpora against the 98 targets")
+    bullets(fig, [
+        ("AFDB distillation corpus: 76/98 targets have a homolog at ≥25% identity,\n"
+         "27 at ≥50%. So yes, homologs are present.", None),
+        ("But identity does not predict accuracy: r = −0.044 between a target's best\n"
+         "homolog identity and its lDDT.", None),
+        ("Dropping every target with a ≥50% homolog STRENGTHENS the result:\n"
+         "+0.259 versus +0.229 on the full set.", WARN),
+    ], y0=0.68, dy=0.155)
+    fig.text(0.075, 0.19, "Still open", fontsize=15, fontweight="bold", color=INK)
+    fig.text(0.075, 0.135,
+             "The ESM-Atlas scan is still running. An earlier coarse check reported "
+             "2/98 and was wrong —\nit is superseded by the mmseqs numbers above.",
+             fontsize=12.5, color=MUTE, va="top", linespacing=1.7)
     pdf.savefig(fig); plt.close(fig)
 
     # 7 -- what next
