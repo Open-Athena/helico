@@ -2,11 +2,11 @@
 
 **Status:** exploratory. Results below are from a *warm-started* model.
 
-**Real MarinFold predictions have now been tested, and the synthetic result does
-not transfer** — see [Real predicted contacts](#real-predicted-contacts). At
-matched precision and recall, real predictor errors cost a further 0.165 lDDT
-beyond what our uniform noise model predicts. Treat the synthetic numbers as an
-upper bound.
+Every number here uses **real MarinFold predicted contacts** (or, where labelled,
+oracle contacts from the ground-truth structure as a ceiling). Earlier versions of
+this document led with synthetic contacts — the ground-truth map degraded with a
+uniform noise model. Those numbers were an upper bound that did not transfer, and
+they have been removed.
 
 Weights: [timodonnell/helico](https://huggingface.co/timodonnell/helico)
 (`contacts-msafree-01`, step 6000 — the checkpoint every number below describes).
@@ -41,95 +41,21 @@ contact predictor.
 - Training samples the conditioning level per example — all-unknown, fully
   specified, and everything between — so one model serves any level of contact
   knowledge, including none.
-- The MSA input is gated off (`use_msa=False`) for all runs here.
-- Validation reports lDDT at 0%, 50%, 100%, and 100%-with-noise conditioning
-  every validation step.
+- The MSA input is gated off (`use_msa=False`) for all Helico runs here: no
+  alignment and no conservation profile, at training or inference.
+- Validation reports lDDT at several conditioning levels every validation step.
 
-## Headline result (synthetic contacts — an upper bound)
+## Headline result
 
-**Given contacts degraded with our noise model to 60% precision and 60% recall,
-an MSA-free model matches Protenix with MSAs.** With *real* MarinFold contacts at
-a comparable operating point it does not — see
-[Real predicted contacts](#real-predicted-contacts). The synthetic figure is the
-ceiling this approach reaches if predictor errors were unstructured.
+**Real predicted contacts beat the strongest single-sequence baseline by a wide
+margin, and do not yet reach MSAs.**
 
-![MSA-free folding from contacts](.agents/project/figures/contact_conditioning_accuracy.png)
+![real predicted contacts](.agents/project/figures/marinfold_real_contacts.png)
 
-FoldBench, 27 protein targets scored by every arm (paired). Every Helico row is
-genuinely MSA-free — no alignment, no conservation profile, at training or
-inference.
-
-| Arm | lDDT |
-| --- | --- |
-| Protenix v1, single sequence | 0.329 |
-| Helico, contacts withheld | 0.316 |
-| **Helico, contacts @ 60% precision / 60% recall** | **0.824** |
-| Helico, oracle contacts (100%) | 0.836 |
-| Protenix v1, with MSAs | 0.837 |
-
-| Comparison | Δ lDDT | t | improved |
-| --- | --- | --- | --- |
-| MarinFold 60/60 vs contacts withheld | **+0.508 ± 0.027** | 18.6 | 27/27 |
-| **MarinFold 60/60 vs Protenix + MSA** | **−0.013 ± 0.026** | −0.5 | 14/27 |
-| oracle vs Protenix + MSA | −0.001 ± 0.025 | −0.0 | 16/27 |
-| oracle vs MarinFold 60/60 | +0.012 ± 0.003 | 4.1 | 20/27 |
-
-Two things matter here.
-
-**Contact quality barely matters in this range.** Degrading a perfect contact
-map to 60% precision and 60% recall costs **0.012 lDDT** — statistically real
-(t=4.1) but tiny next to the +0.508 the contacts are worth. The contact map is
-highly redundant: most of the fold is pinned by well under half of it, so losing
-40% of contacts and adding 40% false ones is nearly free.
-
-**So the predictor does not need to improve for this to work.** The 60/60 arm
-lands within noise of Protenix+MSA (−0.013 ± 0.026). MarinFold's *current*
-operating point is already enough to replace the alignment.
-
-Both arms rise monotonically with training and plateau by ~step 4000; the
-contacts-withheld arm is flat at ~0.31 throughout, which is the correct
-signature for a model with no information to exploit.
-
-### The load-bearing caveat
-
-**The false positives are ours, not MarinFold's.** The 60/60 map is produced by
-degrading the ground-truth map with our noise model, which draws false contacts
-uniformly from the eligible region. Real predictor errors are spatially
-correlated and concentrate near true contacts — geometrically plausible
-near-misses are plausibly much harder to discount than uniform random ones,
-because the model cannot reject them as inconsistent with everything else.
-
-This established that *a* predictor at 60/60 would suffice **if its errors were
-unstructured**. They are not: feeding real MarinFold output costs a further
-0.165 lDDT at matched precision and recall
-([Real predicted contacts](#real-predicted-contacts),
-[helico#11](https://github.com/Open-Athena/helico/issues/11)).
-
-Other controls:
-
-- **Empirical null.** 11 nucleic-acid-only targets have no protein contacts, so
-  the arms are identical by construction. Measured: +0.0004 (sd 0.026).
-- **Zero-init no-op.** At step 0 the arms differ by +0.004 ± 0.005 (t=0.9).
-- **Dead contact pathway.** A run whose contact projection never learned shows
-  contacts off→on of +0.003 ± 0.003 (n.s.), so contacts leak nothing outside
-  `linear_contact`.
-- **No benchmark overlap.** 0 of the 49 FoldBench targets appear among the
-  168,102 train-eligible structures.
-
-## Real predicted contacts
-
-The section above conditions on contacts derived from the answer, degraded with a
-noise model whose false positives are drawn uniformly. This section feeds the
-real thing.
-
-![real vs synthetic contacts](.agents/project/figures/marinfold_real_contacts.png)
-
-91 paired FoldBench monomer targets, all Helico arms MSA-free. Contacts come from
-MarinFold `contacts-v1-exp199-1.5B` via
+91 paired FoldBench monomer targets. Contacts come from MarinFold
+`contacts-v1-exp199-1.5B` via
 [MarinFold exp211](https://github.com/Open-Athena/MarinFold/issues/211)'s
-rollouts. Each synthetic arm was generated at the precision/recall **measured for
-its real counterpart**, so the real-vs-synthetic gap isolates error *structure*
-from error *rate*.
+rollouts, aggregated by vote across 100 rollouts and truncated to a top-k list.
 
 Protenix v1 **and** v2 appear as baselines, each with and without MSAs. v2 runs
 through the **official ByteDance implementation** (`protenix==2.0.0`, model
@@ -138,27 +64,19 @@ architecture. Both v2 arms use Protenix's own recommended inference settings
 (5 samples / 10 cycles / 200 steps) — more compute than the Helico arms get at
 3 samples / 6 cycles, which deliberately favours the baseline.
 
-| arm | lDDT |
-| --- | --- |
-| no contacts | 0.368 |
-| Protenix v1, single sequence | 0.386 |
-| **Protenix v2, single sequence** | **0.409** |
-| single rollout, top-L | 0.566 |
-| **real MarinFold, top-L/5** | **0.575** |
-| **real MarinFold, top-L/2** | **0.626** |
-| **real MarinFold, top-L** | **0.638** |
-| synthetic @ p=.795 r=.179 | 0.710 |
-| synthetic @ p=.676 r=.379 | 0.790 |
-| synthetic @ p=.505 r=.564 | 0.822 |
-| Protenix v1 + MSA | 0.855 |
-| oracle contacts | 0.862 |
-| **Protenix v2 + MSA** | **0.865** |
-
-n is 91 rather than 98 because FoldBench ships no pre-computed a3m for 7 targets,
-so the Protenix MSA arm cannot run on them; every arm is restricted to the common
-set so all comparisons stay paired.
-
-### Against both Protenix generations
+| arm | MSA? | lDDT |
+| --- | --- | --- |
+| Helico, no contacts | no | 0.368 |
+| Protenix v1, single sequence | no | 0.386 |
+| Helico + contacts read off v2's single-seq structure | no | 0.404 |
+| **Protenix v2, single sequence** | no | **0.409** |
+| Helico + single rollout, top-L | no | 0.566 |
+| **Helico + real MarinFold, top-L/5** | no | **0.575** |
+| **Helico + real MarinFold, top-L/2** | no | **0.626** |
+| **Helico + real MarinFold, top-L** | no | **0.638** |
+| Protenix v1 + MSA | **yes** | 0.855 |
+| Helico + oracle contacts | no | 0.862 |
+| **Protenix v2 + MSA** | **yes** | **0.865** |
 
 | comparison | Δ lDDT | t | better on |
 | --- | --- | --- | --- |
@@ -172,82 +90,158 @@ Three things follow.
 
 **Real contacts beat the strongest single-sequence baseline.** v2 is genuinely
 better than v1 without MSAs (+0.023), and real MarinFold contacts still clear it
-by **+0.229 ± 0.022** on 76 of 91 targets.
+by **+0.229 ± 0.022** on 76 of 91 targets. It holds at every contact budget, and
+even a single un-aggregated rollout beats it.
 
 **They still do not reach MSAs.** v2+MSA leads real contacts by
 **+0.227 ± 0.019** on 87 of 91.
 
 **Oracle contacts match the best MSA model.** v2+MSA vs oracle is
 +0.004 ± 0.006 — indistinguishable. A perfect contact map is worth as much as an
-alignment to the best available model; the entire shortfall is contact *quality*.
+alignment to the best available model, so nothing about the approach caps out
+below MSAs; **the entire shortfall is contact quality**.
 
-### Error structure dominates error rate
+The control that makes the first claim credible: **our own contacts-off arm
+scores 0.368, below Protenix v2's 0.409** (−0.042 ± 0.008, t=−5.0). The fine-tuned model
+has no intrinsic advantage in the no-information condition — if anything it gave
+up a little single-sequence capability during contact fine-tuning. All of the
++0.229 comes from the contacts.
 
-| budget | real − synthetic | t | worse on |
+Other controls:
+
+- **Empirical null.** Nucleic-acid-only targets have no protein contacts, so the
+  arms are identical by construction. Measured: +0.0004 (sd 0.026).
+- **Zero-init no-op.** At step 0 the arms coincide — see
+  [Training progress](#training-progress).
+- **No benchmark overlap.** 0 of the FoldBench targets appear among the 168,102
+  train-eligible structures.
+
+## What we benchmark on, and how it was chosen
+
+FoldBench is far larger than this subset. The full chain:
+
+| stage | targets |
+| --- | --- |
+| FoldBench, all categories | 1823 |
+| `monomer_protein` category | 334 |
+| MarinFold exp211's `foldbench100` subset (the targets real contacts exist for) | 100 |
+| index map verified end-to-end (2 dropped: sequences would not align) | 98 |
+| Protenix +MSA arm needs a pre-computed a3m (7 dropped) | **91** |
+
+All arms are restricted to the common 91 so every comparison stays paired. The
+full target list is in
+[`experiments/marinfold_contacts/arms/targets.csv`](experiments/marinfold_contacts/arms/targets.csv).
+
+The 100 were **not** chosen by this project: `foldbench100` is MarinFold exp89's
+standing evaluation set, fixed long before this experiment existed, and exp211
+simply reran the current model on it. Checked for selection bias against the 236
+unselected monomers: lengths match (median 227 vs 226).
+
+Monomers only, so these numbers are not comparable to the assembly-set results
+reported in earlier revisions of this document.
+
+## Is MarinFold actually supplying better contacts?
+
+If Protenix v2's own single-sequence structure already implies contacts as good
+as MarinFold's, then the gain would be Helico extracting more from equivalent
+information rather than the contact map being better. Measured directly: run
+Protenix v2 in single-sequence mode, run pyconfind on its predicted structure,
+and feed *those* contacts to Helico.
+
+| contact source | precision | recall | contacts emitted |
 | --- | --- | --- | --- |
-| top-L/5 | **−0.119 ± 0.018** | −6.5 | 77/98 |
-| top-L/2 | **−0.147 ± 0.020** | −7.5 | 79/98 |
-| top-L | **−0.165 ± 0.020** | −8.5 | 81/98 |
+| Protenix v2 single-seq structure → pyconfind | 0.261 | 0.263 | 270 |
+| MarinFold exp199, top-L | **0.505** | **0.564** | 265 |
 
-At top-L, degrading the oracle map to MarinFold's measured 50%/56% *rate* costs
-0.037 lDDT; swapping uniform errors for real ones costs a further **0.165** —
-about 4.5× more. Real predictor errors cluster near true contacts, where they are
-geometrically plausible and cannot be rejected as inconsistent with the rest of
-the map. The training noise model was the easy case.
+(against 261 true contacts per target on average — a like-for-like budget.)
 
-### Against the honest single-sequence baseline
+MarinFold is ~1.9× more precise at ~2.1× the recall. And feeding the
+v2-derived contacts to Helico gives **0.404**, versus **0.409** for Protenix v2
+itself — a deficit of 0.006 ± 0.001. Helico recovers essentially all of v2's
+accuracy from a contact map read off v2's own output, and adds nothing on top of
+it: it faithfully tracks contact quality. So the gain over single-sequence
+folding is the contact map, not the folding model.
 
-Stock Protenix v1 in single-sequence mode — original weights, depth-1 query-only
-MSA, same 98 targets — scores **0.383**. Real MarinFold contacts beat it
-decisively:
+### Reconciling with MarinFold's own R-precision comparison
 
-| vs stock Protenix single-sequence | Δ lDDT | t | better on |
-| --- | --- | --- | --- |
-| real MarinFold, top-L | **+0.239 ± 0.022** | +10.7 | 80/98 |
-| real MarinFold, top-L/2 | +0.227 ± 0.021 | +10.8 | 81/98 |
-| real MarinFold, top-L/5 | +0.180 ± 0.019 | +9.7 | 82/98 |
-| single rollout, top-L | +0.168 ± 0.022 | +7.7 | 70/98 |
+MarinFold's internal evaluations report its models as on-par or slightly worse
+than Protenix v2 single-sequence at contact recapitulation, which appears to
+contradict the 1.9× above. It does not:
 
-The control that makes this credible: **our own contacts-off arm scores 0.365,
-slightly *below* Protenix's 0.383** (−0.018 ± 0.007, t=−2.63). The fine-tuned
-model has no intrinsic advantage in the no-information condition — if anything it
-gave up a little single-sequence capability during contact fine-tuning. All of
-the +0.239 comes from the contacts.
+- MarinFold's "0.603 for Protenix v2 SS" is a **target-weighted mean over 554
+  proteins, 72% of which are `denovo_pdb`** — designed proteins, where v2 SS
+  scores 0.579–0.723.
+- On `foldbench100` specifically — the set used here — v2 SS scores **0.255**.
+- The independent measurement here (0.261) matches MarinFold's own exp74
+  measurement of 0.251, so the two pipelines agree.
 
-### Where that leaves the project
+The advantage is real on natural PDB monomers and likely shrinks or reverses on
+designed proteins. That is a scope limitation on this result, not a discrepancy.
 
-The picture is two-sided. Real MarinFold contacts **clearly beat single-sequence
-folding** — +0.257 ± 0.020 over no contacts (t=12.6, 87/98), +0.239 ± 0.022 over
-stock Protenix single-sequence — and **clearly do not yet reach MSAs**: 0.622
-against Protenix+MSA's 0.851. The contacts are doing real work; they are not yet
-doing all of the MSA's work.
+## Training-set contamination
 
-The 0.230 shortfall decomposes as roughly 0.028 (oracle vs MSA on this set) +
-0.037 (error rate) + **0.165 (error structure)**. Structure dominates, which
-makes the cheapest lever ours rather than MarinFold's: **sample training false
-positives from near-miss pairs rather than uniformly**, so the model is trained
-against the error distribution it actually faces.
+MarinFold's training corpora were checked for homologs of the 98 benchmark
+targets with mmseqs (not the earlier coarse check, which reported 2/98 and was
+wrong).
 
-Also measured:
+AFDB distillation corpus: **76/98 targets have a homolog at ≥25% identity, 27 at
+≥50%**. But identity does not predict accuracy — r = −0.044 between a target's
+best homolog identity and its lDDT — and dropping every target with a ≥50%
+homolog *strengthens* the headline (+0.2587 vs +0.229). The ESM-Atlas scan is
+still running.
 
-- **Vote aggregation is worth +0.071 ± 0.008** (t=8.5) over a single rollout at
-  the same budget, matching its ~0.10 precision advantage. Never mix the recipes.
-- On monomers, Protenix+MSA edges out even oracle contacts by +0.028 ± 0.014
-  (t=1.9, marginal) — unlike the assembly set, where they matched.
-
-### The index map, which nearly broke this
+## The index map, which nearly broke this
 
 MarinFold indexes residues into the published prompt (full SEQRES); the bench
 derives its sequence from the *resolved* residues of the ground truth. Only 15 of
 100 targets agree outright. 83 agree once prompt positions are mapped through
 exp211's `resolved` list; 2 need real alignment and were dropped. A naive
-identity map would have shifted contacts on 83% of targets and produced exactly
-the same qualitative answer — "real contacts underperform" — for entirely the
-wrong reason.
+identity map would have shifted contacts on 83% of targets and produced a
+plausible-looking "real contacts underperform" answer for entirely the wrong
+reason.
 
 Verified by round trip: exp211's ground truth pushed through the map reproduces
 helico's own `oracle_contact_state` at mean Jaccard 0.998 (min 0.984), pinned by
 `tests/test_marinfold_export.py`.
+
+## Training progress
+
+![learning to use contacts](.agents/project/figures/contact_conditioning_accuracy.png)
+
+A checkpoint sweep of `contacts-msafree-01` on the same 91 targets, so it is
+directly comparable to everything above. Each checkpoint is benched with real
+MarinFold contacts, with oracle contacts, and with contacts withheld.
+
+| step | contacts withheld | real MarinFold, top-L | oracle |
+| --- | --- | --- | --- |
+| 0 *(warm start)* | 0.310 | 0.307 | 0.307 |
+| 1000 | 0.362 | 0.626 | 0.829 |
+| 2000 | — | 0.629 | 0.848 |
+| 3000 | — | 0.637 | 0.855 |
+| 5000 | — | 0.637 | 0.861 |
+| final | 0.368 | 0.638 | 0.862 |
+
+**Step 0 is the control.** It is the warm start itself — Protenix v1 weights with
+`use_msa=False` and the contact projection still at its zero initialisation, so
+conditioning is an exact no-op and all three arms must coincide. They do: the
+spread across the three is **0.003**, and oracle-vs-withheld is
+−0.004 ± 0.003 (t=−1.1). The warm start is lossless and nothing leaks contact
+information through another path.
+
+**Almost all of the learning happens in the first 1000 steps.** Steps 1000 →
+final add +0.012 ± 0.004 (t=3.3) with real contacts and +0.033 with oracle ones —
+real and small, but the pathway is essentially trained within one thousand steps.
+
+The contacts-withheld arm rises from 0.310 to 0.368 over the same span. That is
+not contact learning: step 0 is the harsher `use_msa=False` lesion (see
+["Single sequence" meant three different things](#single-sequence-meant-three-different-things)),
+and fine-tuning recovers part of what removing the MSA module cost. It ends
+*below* both Protenix single-sequence baselines, which is the control that keeps
+the contact effect attributable to contacts.
+
+At the final checkpoint, real contacts are worth **+0.270 ± 0.021** (t=12.8) over
+the same weights with contacts withheld, on 83 of 91 targets.
+
 
 ## Two bugs that mattered
 
@@ -287,10 +281,10 @@ Measured cost of the leak at step_8000:
 | contacts withheld | 0.622 | 0.311 | **+0.311 ± 0.021** (t=14.9) |
 | contacts given | 0.853 | 0.841 | +0.012 ± 0.013 (t=0.9, n.s.) |
 
-Two consequences. The apparent contact effect was understated — off→on is
-+0.530 MSA-free, not +0.234 — because the profile was propping up the
-contacts-withheld arm. And once the true contact map is supplied, the profile
-adds nothing: contacts subsume the first-order conservation signal.
+Two consequences. The apparent contact effect was understated — because the
+profile was propping up the contacts-withheld arm. And once the contact map is
+supplied, the profile adds nothing: contacts subsume the first-order conservation
+signal.
 
 The fix gates `profile`/`deletion_mean` on `use_msa` in `build_s_inputs`, with
 both `Helico.forward` call sites forwarding `config.use_msa`.
@@ -314,8 +308,8 @@ recycling iteration. That is a lesion, not a starved input, and it understated
 Protenix by +0.082 ± 0.022 (t=3.80). The corrected baseline is 0.327.
 
 This mattered because it made a fine-tuned model look like it beat a baseline it
-was never fairly compared against. It does not affect the headline
-contacts-off-vs-on result, which is same-checkpoint and paired.
+was never fairly compared against. It does not affect the same-checkpoint,
+paired contacts-off-vs-on result.
 
 ## What did not hold up
 
@@ -330,66 +324,25 @@ favours the 48-block arm. A from-scratch sweep is still open.
 
 ## Caveats
 
-These matter, and none of them are resolved yet.
-
-0. **Synthetic contact errors — now measured.** The 60/60 arm draws false
-   positives uniformly. Real MarinFold errors cost a further 0.165 lDDT at the
-   same precision and recall, so every synthetic number here is an upper bound.
-   See [Real predicted contacts](#real-predicted-contacts).
-1. **Contacts come from the answer.** Even degraded, the contact map is derived
-   from the ground-truth structure, so the Helico rows are conditioned on
-   information a deployed system would have to predict. The Protenix rows are
-   genuine end-to-end predictions; the Helico rows are not, and the two are not
-   comparable as published numbers. What the comparison does establish is the
-   *accuracy a contact predictor would have to reach* — and the answer is that
-   60/60 is enough.
-2. **Warm start.** All runs initialise from Protenix v1, which was trained with
+1. **Warm start.** All runs initialise from Protenix v1, which was trained with
    MSAs. The model is being adapted, not trained from scratch.
-3. **Fine-tuned vs zero-shot.** The Helico rows are fine-tuned; the Protenix
+2. **Fine-tuned vs zero-shot.** The Helico rows are fine-tuned; the Protenix
    rows are zero-shot. Only the same-checkpoint contacts off-vs-on comparison
-   isolates contacts.
-4. **The noise model is not yet realistic.** See
-   [Conditioning schedule](#conditioning-schedule-and-noise-model).
-5. **The MSA module still exists.** `use_msa=False` removes the MSA *input*;
+   isolates contacts. The contacts-off control (below Protenix v2) bounds how
+   much the fine-tuning itself could be worth.
+3. **Monomers only.** Not comparable to the assembly-set numbers in earlier
+   revisions, and untested on complexes.
+4. **Natural proteins only.** See
+   [the R-precision reconciliation](#reconciling-with-marinfolds-own-r-precision-comparison)
+   — the contact-quality advantage is measured on natural PDB monomers and may
+   not hold on designed proteins.
+5. **Training false positives are drawn uniformly**, while real predictor errors
+   cluster near true contacts. The model has never been trained against the
+   error distribution it actually faces. See
+   [Conditioning schedule](#conditioning-schedule).
+6. **The MSA module still exists.** `use_msa=False` removes the MSA *input*;
    the module is still constructed (~3M dead parameters). Deliberate for now, to
    keep warm starting simple.
-6. **The 8000-step point is from a different run** than the 0-3000
-   trajectory, so it is not directly comparable to it. See
-   [Training progress](#training-progress).
-
-## Training progress
-
-Panel A is a single run (`contacts-lrmult1000`), so it is a real trajectory.
-Step 0 is the warm start itself — Protenix v1 weights with `use_msa=False` and
-the contact projection still at its zero initialisation.
-
-| step | contacts given | contacts withheld |
-| --- | --- | --- |
-| 0 | 0.249 | 0.244 |
-| 1000 | 0.820 | 0.557 |
-| 2000 | 0.832 | 0.592 |
-| 3000 | 0.837 | 0.560 |
-| 8000 *(different run)* | 0.850 | 0.616 |
-
-Almost all of the movement happens in the first 1000 steps; steps 1000 → 3000
-add +0.017 with contacts given.
-
-**Step 0 doubles as a control.** The contact projection is zero-initialised, so
-conditioning should be an exact no-op there and the two arms should coincide.
-Measured difference: **+0.0045 ± 0.0047 (t=0.96)** — consistent with zero. The
-warm start is lossless and the pipeline is not leaking contact information
-through some other path.
-
-The in-training validation (panel C) covers steps 3000–9000 on a different
-evaluation set and is flat over that range: averaged across the two runs with
-full coverage, lDDT at 100% conditioning goes 0.759 (3000) → 0.795 (4000) →
-0.801 (5000) → 0.805 (8000), while independent restarts at matched steps differ
-by up to 0.029.
-
-An earlier claim in this work — that a +0.013 FoldBench gain between two
-checkpoints showed training was still helping — does not survive. Those
-checkpoints came from different runs, and the effect is smaller than the
-run-to-run spread.
 
 ## The validation set is sequence-contaminated
 
@@ -420,7 +373,7 @@ Between-level comparisons still hold — all conditioning levels score identical
 structures under a fixed seed, so the conditioning *curve* is paired and
 meaningful. It is the absolute values that are inflated.
 
-## Conditioning schedule and noise model
+## Conditioning schedule
 
 What training samples per example ([`contacts.py`](src/helico/contacts.py)):
 
@@ -446,7 +399,7 @@ as a truncated top-k list. Three things were wrong for that and are now fixed:
    truncation, an unlisted pair means "did not make the cut", which is
    uninformative — asserting millions of true negatives the predictor never
    claimed. Unlisted pairs now stay unknown.
-3. **The noise range never reached the real operating point.** `eps_fp` counts
+3. **The sampled range never reached the real operating point.** `eps_fp` counts
    false contacts relative to revealed ones, so precision `p` needs
    `eps_fp = (1-p)/p`. At p=0.6 that is **0.667**, well outside the old
    `U(0, 0.3)` — which corresponds to precision ≥ 0.77. The model had never
@@ -455,53 +408,55 @@ as a truncated top-k list. Three things were wrong for that and are now fixed:
 
 `conditioning_from_precision_recall(p, r)` converts an operating point into
 `(reveal, eps_fp, eps_fn)`; recall loss folds into `reveal` because a top-k list
-has no separate "reported but wrong" channel. A new validation level
-`@contactsMarinFold` is pinned to the constants, so the tracked curve includes
-the deployment condition rather than only bracketing it.
+has no separate "reported but wrong" channel.
 
 Remaining known gaps, not yet addressed:
 
-- **`@contacts50` is not "half the information".** `pair-subset` at 0.5
-  specifies half of *all pairs*, and since contacts are ~0.1% of pairs that
-  asserts a very large number of true negatives. This is why the 50% level
-  tracks close to 100% rather than sitting midway.
+- **False positives are uniform within the eligible region.** Real ones
+  concentrate near true contacts (near-miss pairs just beyond the distance
+  threshold), where they are geometrically plausible and cannot be rejected as
+  inconsistent with the rest of the map. **This is the cheapest available
+  lever, and it is on our side rather than MarinFold's.**
 - **Revealed contacts are a uniform random subset.** A predictor finds
   high-confidence contacts first. pyconfind returns a *degree* per contact,
   currently thresholded and discarded — weighting reveal probability by degree
   would model this.
 - **Errors are independent.** Real predictor errors are spatially correlated.
-- **False positives are uniform within the eligible region.** Real ones
-  concentrate near true contacts (near-miss pairs just beyond the distance
-  threshold).
+- **`@contacts50` is not "half the information".** `pair-subset` at 0.5
+  specifies half of *all pairs*, and since contacts are ~0.1% of pairs that
+  asserts a very large number of true negatives. This is why the 50% level
+  tracks close to 100% rather than sitting midway.
 
 ## Reproducing
 
 ```bash
+uv run python .agents/project/figures/marinfold_real_contacts.py
 uv run python .agents/project/figures/contact_conditioning_accuracy.py
 ```
 
-Benchmark arms (oracle contacts on/off) are produced by `modal/bench.py`:
+Benchmark arms are produced by `modal/bench.py`:
 
 ```bash
-HELICO_BENCH_ORACLE_CONTACTS=1 modal run --detach modal/bench.py --checkpoint /ckpts/<run>/step_8000.pt --output-dir bench_on
+HELICO_BENCH_CONTACTS_ARM=rollout_L modal run --detach modal/bench.py --checkpoint /ckpts/contacts-msafree-01/final.pt --output-dir bench_real
 ```
 
+`HELICO_BENCH_ORACLE_CONTACTS=1` substitutes the ground-truth contact map.
 Protenix single-sequence uses `HELICO_BENCH_SINGLE_SEQ=1` (depth-1 MSA whose one
 row is the query). `HELICO_BENCH_NO_MSA=1` is a *different*, harsher ablation
 that removes the MSA module outright — see
 ["Single sequence" meant three different things](#single-sequence-meant-three-different-things).
 
+Protenix v2 baselines run through ByteDance's own implementation:
+`modal/bench_protenix_v2.py`.
+
 ## Open questions
 
-1. **Feed real MarinFold predictions** —
-   [helico#11](https://github.com/Open-Athena/helico/issues/11). The remaining
-   gap between this result and a working system: synthetic 60/60 suffices, real
-   60/60 is untested. The design pairs every real-contact arm with a synthetic
-   arm at the *same measured* precision/recall, so any gap isolates error
-   *structure* from error *rate*.
-2. **How accurate must contacts be, exactly?** 60/60 costs only 0.012 vs a
-   perfect map. The floor is somewhere below 60% — worth locating, since it sets
-   how much predictor headroom exists.
-2. **Depth from scratch**, to remove the warm-start confound.
-3. **Do partial contacts help proportionally?** 50% conditioning currently sits
-   much closer to 100% than to 0% — worth understanding.
+1. **Retrain with structured false positives** — sample training FPs from
+   near-miss pairs rather than uniformly, so the model is trained against the
+   error distribution it actually faces.
+2. **How accurate must contacts be?** The measured points are top-L/5 (p=0.80,
+   r=0.18) → 0.575, top-L/2 (0.68/0.38) → 0.626, top-L (0.51/0.56) → 0.638.
+   Locating the knee sets how much predictor headroom is worth chasing.
+3. **Depth from scratch**, to remove the warm-start confound
+   ([helico#12](https://github.com/Open-Athena/helico/issues/12)).
+4. **Complexes.** Everything here is monomers.
