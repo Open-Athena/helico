@@ -16,16 +16,15 @@ Metric is R-precision -- precision among the top-R predicted contacts, where R i
 the ground-truth contact count, so the budget matches the answer's size. Primary
 separation >= 6, all ranges pooled.
 
-Data (`experiments/marinfold_contacts/rprecision_by_dataset.csv`) is extracted
-verbatim from MarinFold's own experiment outputs, not recomputed here:
+**Homology-filtered.** Every target shown is in MarinFold exp226's `eval2`:
+< 40% identity to either training arm (4.1M AFDB + 66.8M ESM-Atlas), mmseqs
+-s 7.5, a hit counted only at evalue <= 1e-3 and qcov >= 0.50. 307 of the
+expanded 776 survive. Numbers on the unfiltered set are not shown -- they are
+dominated by targets MarinFold has effectively memorised.
 
-  MarinFold exp199   MarinFold exp180, exp199_cw_p06_aug_step145199_rows.csv.gz
-  Protenix v2        MarinFold exp74,  contact_precision_all.csv
-
-Both are restricted to the 554 targets scored by every arm, so every comparison
-is paired. Protenix contacts are read off its predicted structure with pyconfind
-(`predictor=structure`); the distogram-derived variant is weaker everywhere and
-is reported in the writeup rather than plotted.
+Data (`experiments/marinfold_contacts/rprecision_eval2.csv.gz`) is exp226's
+per-protein table verbatim, not recomputed here. Protenix contacts are read off
+its predicted structure with pyconfind, which is the stronger of its two routes.
 """
 
 import csv
@@ -37,20 +36,21 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parents[3]
-SRC = ROOT / "experiments/marinfold_contacts/rprecision_by_dataset.csv"
+SRC = ROOT / "experiments/marinfold_contacts/rprecision_eval2.csv.gz"
 OUT = Path(__file__).parent / "contact_accuracy_by_dataset.png"
 
-# (key, label, sublabel). foldbench100 is the set the folding results here use.
+# Same order as folding_by_dataset.py so the two figures read together.
 GROUPS = [
-    ("denovo_pdb", "de novo designs", "denovo_pdb"),
-    ("foldbench100", "natural: FoldBench\nmonomers", "foldbench100"),
-    ("cameo_hard", "natural: CAMEO\nhard", "cameo_hard"),
-    ("casp_fm", "natural: CASP\nfree modelling", "casp_fm"),
+    ("foldbench_rest", "FoldBench monomers\n(exp226's net-new)"),
+    ("foldbench100", "FoldBench monomers\n(the original 100)"),
+    ("cameo_hard", "CAMEO hard"),
+    ("casp_fm", "CASP free\nmodelling"),
+    ("denovo_pdb", "de novo designs"),
 ]
 SERIES = [
-    ("marinfold_exp199", "MarinFold exp199 (no MSA)", "#b8452f"),
-    ("px_ss_structure", "Protenix v2, single sequence", "#a0762b"),
-    ("px_msa_structure", "Protenix v2 + MSA", "#1a7f5a"),
+    ("Protenix-v2 single-seq", "Protenix v2, single sequence", "#a0762b"),
+    ("MarinFold #199 (1.5B, seq only)", "MarinFold exp199 (no MSA)", "#b8452f"),
+    ("Protenix-v2 + MSA", "Protenix v2 + MSA", "#1a7f5a"),
 ]
 
 
@@ -64,59 +64,54 @@ def paired_stats(a, b):
 
 
 def main():
-    rows = list(csv.DictReader(SRC.open()))
-    by = {g: [r for r in rows if r["dataset"] == g] for g, _l, _s in GROUPS}
+    import gzip
+
+    with gzip.open(SRC, "rt") as f:
+        rows = [r for r in csv.DictReader(f) if r["cut"] == "R" and r["range"] == "all"]
+    by = {g: [r for r in rows if r["dataset"] == g] for g, _l in GROUPS}
+    natural = [r for r in rows if r["designed_any"].lower() in ("false", "0", "")]
 
     def mean(rs, col):
         return sum(float(r[col]) for r in rs) / len(rs)
 
-    print(f"R-precision, {len(rows)} paired targets\n")
-    hdr = f"{'target class':16s} {'n':>4s}" + "".join(f" {s[0][:13]:>15s}" for s in SERIES)
-    print(hdr)
-    for g, _lab, _sub in GROUPS:
+    print(f"R-precision on eval2 (< 40% training identity): {len(rows)} targets, "
+          f"{len(natural)} natural\n")
+    print(f"{'class':22s} {'n':>4s}" + "".join(f" {s[1][:20]:>22s}" for s in SERIES))
+    for g, _lab in GROUPS:
         rs = by[g]
-        print(f"{g:16s} {len(rs):4d}" + "".join(f" {mean(rs, c):15.3f}" for c, _l, _k in SERIES))
-    print(f"{'ALL (weighted)':16s} {len(rows):4d}"
-          + "".join(f" {mean(rows, c):15.3f}" for c, _l, _k in SERIES))
+        print(f"{g:22s} {len(rs):4d}" + "".join(f" {mean(rs, c):22.3f}" for c, _l, _k in SERIES))
+    print(f"{'natural (pooled)':22s} {len(natural):4d}"
+          + "".join(f" {mean(natural, c):22.3f}" for c, _l, _k in SERIES))
     print()
-    for g, _lab, _sub in [*GROUPS, ("ALL", "", "")]:
-        rs = rows if g == "ALL" else by[g]
-        m, se, up = paired_stats([float(r["px_ss_structure"]) for r in rs],
-                                 [float(r["marinfold_exp199"]) for r in rs])
-        print(f"  MarinFold - Protenix v2 SS on {g:14s} {m:+.3f} +/- {se:.3f}  "
-              f"MarinFold better on {up}/{len(rs)}")
-    print()
-    for c, lab, _k in [("px_ss_distogram", "Protenix v2 SS, distogram", 0),
-                       ("px_msa_distogram", "Protenix v2 + MSA, distogram", 0)]:
-        print(f"  {lab:32s} " + "  ".join(f"{g}={mean(by[g], c):.3f}"
-                                          for g, _l, _s in GROUPS))
+    for lab, rs in [("natural", natural), *[(g, by[g]) for g, _l in GROUPS]]:
+        m, se, up = paired_stats([float(r["Protenix-v2 single-seq"]) for r in rs],
+                                 [float(r["MarinFold #199 (1.5B, seq only)"]) for r in rs])
+        print(f"  MarinFold - Protenix v2 SS, {lab:22s} {m:+.3f} +/- {se:.3f}  "
+              f"({up}/{len(rs)})")
 
-    fig, ax = plt.subplots(figsize=(9.6, 5.4))
-    w = 0.26
-    xs = list(range(len(GROUPS)))
+    fig, ax = plt.subplots(figsize=(11.6, 5.4))
+    xs = list(range(len(GROUPS) + 1))          # +1 for the pooled natural bar
+    w = 0.8 / len(SERIES)
     for i, (col, lab, colr) in enumerate(SERIES):
-        vals = [mean(by[g], col) for g, _l, _s in GROUPS]
-        off = (i - 1) * w
+        vals = [mean(by[g], col) for g, _l in GROUPS] + [mean(natural, col)]
+        off = (i - (len(SERIES) - 1) / 2) * w
         ax.bar([x + off for x in xs], vals, width=w, color=colr, alpha=0.9, label=lab)
         for x, v in zip(xs, vals):
-            ax.text(x + off, v + 0.012, f"{v:.3f}", ha="center", fontsize=8.5,
+            ax.text(x + off, v + 0.012, f"{v:.2f}", ha="center", fontsize=8,
                     color=colr, fontweight="bold")
 
-    # The mix that produces the aggregate: 71% of targets are designed.
-    frac = len(by["denovo_pdb"]) / len(rows)
-    ax.annotate(f"{frac:.0%} of the 554 targets are here,\n"
-                f"so this class sets the aggregate",
-                xy=(0, 0.90), xycoords=("data", "axes fraction"), ha="center",
-                fontsize=8.5, color="0.35", linespacing=1.5)
-
+    ax.axvline(len(GROUPS) - 0.5, color="0.75", lw=1.2, ls="--")
+    labels = [f"{lab}\nn = {len(by[g])}" for g, lab in GROUPS]
+    labels[-1] += "\n(designed)"
+    labels.append(f"ALL NATURAL\npooled, n = {len(natural)}")
     ax.set_xticks(xs)
-    ax.set_xticklabels([f"{lab}\nn = {len(by[g])}" for g, lab, _s in GROUPS], fontsize=9.5)
+    ax.set_xticklabels(labels, fontsize=8.8)
     ax.set_ylim(0, 1.0)
     ax.set_ylabel("R-precision  (precision among the top-R predicted contacts)")
-    ax.set_title("Contact-prediction accuracy by target class\n"
-                 "554 paired targets, MarinFold's own evaluation sets",
-                 fontsize=11.5, loc="left")
-    ax.legend(loc="upper right", fontsize=9, framealpha=0.95)
+    ax.set_title("Contact-prediction accuracy by target class, homology-filtered\n"
+                 f"MarinFold exp226 eval2: {len(rows)} targets at < 40% identity to "
+                 f"MarinFold's training data", fontsize=11.5, loc="left")
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.95)
     ax.grid(axis="y", alpha=0.25, ls=":")
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)
