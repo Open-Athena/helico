@@ -113,19 +113,19 @@ with PdfPages(OUT) as pdf:
         ("Training samples the conditioning level per example, so one model spans\n"
          "no contacts through fully specified.", None),
     ])
-    fig.text(0.075, 0.20, "All Helico arms here are genuinely MSA-free: no alignment, "
-             "no conservation profile,\nat training or inference.",
+    fig.text(0.075, 0.20, "Helico arms use no alignment and no conservation profile, at "
+             "training or inference.\nThe Protenix +MSA baselines do use MSAs -- that is "
+             "the comparison.",
              fontsize=13, color=MUTE, style="italic")
     pdf.savefig(fig); plt.close(fig)
 
     # 3 -- headline numbers
     fig = slide(fig if False else pdf, "Where things land",
-                f"FoldBench, {N} paired monomer targets, all MSA-free")
+                f"FoldBench monomer subset, {N} paired targets  ·  Helico arms use no MSA; Protenix +MSA arms do")
     rows = [("no contacts", M["off"], MUTE),
             ("Protenix v1, single sequence", M["protenix_singleseq"], MUTE),
             ("Protenix v2, single sequence", M["v2_singleseq"], MUTE),
             ("real MarinFold contacts, top-L", M["rollout_L"], WARN),
-            ("synthetic noise at the same precision/recall", M["synth_L"], ACCENT),
             ("oracle contacts", M["oracle"], ACCENT),
             ("Protenix v1 + MSA", M["protenix_msa"], GOOD),
             ("Protenix v2 + MSA", M["v2_msa"], GOOD)]
@@ -143,6 +143,33 @@ with PdfPages(OUT) as pdf:
              fontsize=14, color=WARN, fontweight="bold", va="top")
     fig.text(0.755, 0.50, "...but do not reach\nMSA-level accuracy", fontsize=14,
              color=GOOD, fontweight="bold", va="top")
+    pdf.savefig(fig); plt.close(fig)
+
+    # 3b -- the benchmark set
+    fig = slide(pdf, "What we benchmark on, and how it was chosen",
+                "FoldBench is far bigger than this subset -- here is the whole chain")
+    steps = [("FoldBench, all categories", 1823, MUTE),
+             ("monomer_protein category", 334, MUTE),
+             ("MarinFold exp211's 'foldbench100' subset\n"
+              "(the targets real contacts exist for)", 100, WARN),
+             ("index map verified end-to-end\n(2 dropped: sequences would not align)", 98, WARN),
+             ("Protenix +MSA arm needs a pre-computed a3m\n"
+              "(7 dropped; all arms use the common set)", 91, ACCENT)]
+    ax = fig.add_axes([0.42, 0.16, 0.30, 0.56])
+    ys = range(len(steps))
+    ax.barh(list(ys), [s[1] for s in steps], color=[s[2] for s in steps], alpha=0.85)
+    for y, s in zip(ys, steps):
+        ax.text(s[1] + 25, y, f"{s[1]}", va="center", fontsize=12,
+                fontweight="bold", color=s[2])
+    ax.set_yticks(list(ys)); ax.set_yticklabels([s[0] for s in steps], fontsize=10)
+    ax.set_xlim(0, 2050); ax.set_xlabel("targets", fontsize=11)
+    ax.invert_yaxis(); ax.grid(axis="x", alpha=0.25, ls=":")
+    for sp in ("top", "right"): ax.spines[sp].set_visible(False)
+    fig.text(0.072, 0.10,
+             "Monomers only -- so these numbers are not comparable to the "
+             "assembly-set results reported earlier.\n"
+             "The full target list is in experiments/marinfold_contacts/arms/targets.csv.",
+             fontsize=11, color=MUTE, va="top", linespacing=1.6)
     pdf.savefig(fig); plt.close(fig)
 
     # 4 -- do we beat single sequence?
@@ -167,40 +194,53 @@ with PdfPages(OUT) as pdf:
              fontsize=14, color=MUTE, va="top", linespacing=1.6)
     pdf.savefig(fig); plt.close(fig)
 
-    # 5 -- the real vs synthetic figure
-    fig = slide(pdf, "But error structure, not error rate, is what hurts",
-                "each synthetic arm generated at the precision/recall measured for its real counterpart")
-    embed(fig, FIGS / "marinfold_real_contacts.png", (0.045, 0.05, 0.91, 0.70))
+    # 5 -- where do the contacts come from, and how good are they?
+    fig = slide(pdf, "Is MarinFold actually supplying better contacts?",
+                "vs reading contacts straight off Protenix v2's own single-sequence structure")
+    q = [("Protenix v2 single-seq structure\n-> pyconfind contacts", 0.261, 0.263, MUTE),
+         ("MarinFold exp199, top-L", 0.505, 0.564, WARN)]
+    ax = fig.add_axes([0.36, 0.34, 0.34, 0.34])
+    ys = range(len(q))
+    ax.barh([y + 0.18 for y in ys], [r[1] for r in q], height=0.32,
+            color=[r[3] for r in q], alpha=0.9, label="precision")
+    ax.barh([y - 0.18 for y in ys], [r[2] for r in q], height=0.32,
+            color=[r[3] for r in q], alpha=0.5, label="recall")
+    for y, r in zip(ys, q):
+        ax.text(r[1] + 0.012, y + 0.18, f"{r[1]:.3f}", va="center", fontsize=11,
+                fontweight="bold", color=r[3])
+        ax.text(r[2] + 0.012, y - 0.18, f"{r[2]:.3f}", va="center", fontsize=11,
+                color=r[3])
+    ax.set_yticks(list(ys)); ax.set_yticklabels([r[0] for r in q], fontsize=11)
+    ax.set_xlim(0, 0.72); ax.set_xlabel("accuracy vs ground-truth contacts", fontsize=11)
+    ax.invert_yaxis(); ax.grid(axis="x", alpha=0.25, ls=":")
+    ax.legend(fontsize=9, loc="upper right")
+    for s in ("top", "right"): ax.spines[s].set_visible(False)
+    fig.text(0.072, 0.25,
+             "Both emit a comparable number of contacts -- 265 vs 270 per target, "
+             "against 261 true ones --\nso this is a like-for-like comparison. "
+             "MarinFold is ~1.9x more precise and ~2.1x higher recall.",
+             fontsize=13, color=INK, va="top", linespacing=1.6)
+    fig.text(0.072, 0.13,
+             "So the gain over single-sequence folding is not Helico extracting more "
+             "from equivalent\ninformation: the contact map really is better.",
+             fontsize=13, color=WARN, va="top", linespacing=1.6, fontweight="bold")
     pdf.savefig(fig); plt.close(fig)
 
-    # 6 -- decomposition
-    gap = M["v2_msa"] - M["rollout_L"]
-    fig = slide(pdf, f"Decomposing the {gap:.3f} gap to MSAs",
-                f"real MarinFold top-L {M['rollout_L']:.3f}  →  "
+    # 6 -- the remaining gap
+    fig = slide(pdf, f"The remaining gap to MSAs is contact quality",
+                f"real MarinFold top-L {M['rollout_L']:.3f}  ->  "
                 f"Protenix v2 + MSA {M['v2_msa']:.3f}")
-    parts = [("oracle contacts\nvs best MSA", M["v2_msa"] - M["oracle"], MUTE),
-             ("error rate\n(oracle → 50%/56%)", M["oracle"] - M["synth_L"], MUTE),
-             ("error STRUCTURE\n(synthetic → real)", M["synth_L"] - M["rollout_L"], WARN)]
-    ax = fig.add_axes([0.34, 0.30, 0.38, 0.40])
-    ax.barh(range(len(parts)), [p[1] for p in parts],
-            color=[p[2] for p in parts], alpha=0.85)
-    for y, (lab, v, c) in enumerate(parts):
-        ax.text(v + 0.004, y, f"{v:.3f}", va="center", fontsize=13,
-                fontweight="bold", color=c)
-    ax.set_yticks(range(len(parts))); ax.set_yticklabels([p[0] for p in parts], fontsize=12.5)
-    ax.set_xlabel("lDDT cost", fontsize=12); ax.invert_yaxis()
-    ax.grid(axis="x", alpha=0.25, ls=":")
-    for s in ("top", "right"): ax.spines[s].set_visible(False)
-    fig.text(0.072, 0.19,
-             "Real predictor errors cluster near true contacts, where they are "
-             "geometrically plausible\nand cannot be rejected as inconsistent with the "
-             "rest of the map. Our training noise model\ndraws false positives "
-             "uniformly — the easy case.\n\n"
-             f"Oracle contacts vs the best MSA model is "
-             f"{M['v2_msa'] - M['oracle']:+.3f} — indistinguishable. A perfect\n"
-             "contact map is worth as much as an alignment; the whole shortfall is "
-             "contact quality.",
-             fontsize=14, color=INK, va="top", linespacing=1.6)
+    d_oracle = M["v2_msa"] - M["oracle"]
+    bullets(fig, [
+        (f"Oracle contacts reach {M['oracle']:.3f} against Protenix v2 + MSA's "
+         f"{M['v2_msa']:.3f}.\nThat difference, {d_oracle:+.3f}, is not statistically "
+         f"distinguishable from zero.", ACCENT),
+        ("A perfect contact map is therefore worth as much as an alignment to the\n"
+         "best model available. Nothing about the approach caps out below MSAs.", None),
+        (f"The entire shortfall is the quality of the contacts we can currently\n"
+         f"predict -- {M['rollout_L']:.3f} with real ones versus {M['oracle']:.3f} with "
+         f"perfect ones.", WARN),
+    ], y0=0.68, dy=0.155)
     pdf.savefig(fig); plt.close(fig)
 
     # 7 -- what next
