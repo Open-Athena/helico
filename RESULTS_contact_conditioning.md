@@ -48,7 +48,10 @@ contact predictor.
 ## Headline result
 
 **Predicted contacts beat the strongest single-sequence baseline by a wide
-margin, and do not yet reach MSAs.**
+margin, and do not yet reach MSAs.** The margin depends on MarinFold supplying a
+better contact map than Protenix v2 does, which holds on this target class and
+not on all of them — see
+[the R-precision reconciliation](#reconciling-with-marinfolds-own-r-precision-comparison).
 
 ![predicted contacts](.agents/project/figures/marinfold_real_contacts.png)
 
@@ -164,19 +167,57 @@ folding is the contact map, not the folding model.
 
 ### Reconciling with MarinFold's own R-precision comparison
 
-MarinFold's internal evaluations report its models as on-par or slightly worse
-than Protenix v2 single-sequence at contact recapitulation, which appears to
-contradict the 1.9× above. It does not:
+MarinFold's internal evaluations report its models as on par with — or slightly
+worse than — Protenix v2 single sequence at contact recapitulation, which appears
+to contradict the 1.9× above. Both are correct. The aggregate is a mean over a
+target mix that is 71% designed proteins, and the two methods rank differently by
+target class.
 
-- MarinFold's "0.603 for Protenix v2 SS" is a **target-weighted mean over 554
-  proteins, 72% of which are `denovo_pdb`** — designed proteins, where v2 SS
-  scores 0.579–0.723.
-- On `foldbench100` specifically — the set used here — v2 SS scores **0.255**.
-- The independent measurement here (0.261) matches MarinFold's own exp74
-  measurement of 0.251, so the two pipelines agree.
+![contact accuracy by target class](.agents/project/figures/contact_accuracy_by_dataset.png)
 
-The advantage is real on natural PDB monomers and likely shrinks or reverses on
-designed proteins. That is a scope limitation on this result, not a discrepancy.
+R-precision (precision among the top-R predictions, R = the true contact count),
+554 targets scored by every arm, taken verbatim from MarinFold's own experiment
+outputs: exp199's rows for MarinFold, exp74's for Protenix v2. Protenix contacts
+are read off its predicted structure with pyconfind — the same route used for the
+v2-derived control above.
+
+| target class | n | MarinFold exp199 | Protenix v2, single seq | Protenix v2 + MSA | MarinFold − v2 SS |
+| --- | --- | --- | --- | --- | --- |
+| de novo designs (`denovo_pdb`) | 396 | 0.649 | **0.723** | 0.828 | −0.074 ± 0.014 |
+| natural: FoldBench monomers | 100 | **0.511** | 0.282 | 0.847 | **+0.230 ± 0.027** |
+| natural: CAMEO hard | 32 | 0.373 | **0.442** | 0.678 | −0.069 ± 0.054 |
+| natural: CASP free modelling | 26 | 0.198 | 0.211 | 0.596 | −0.013 ± 0.026 |
+| **pooled** | **554** | 0.587 | 0.603 | 0.812 | −0.016 ± 0.013 |
+
+The pooled row is the reported tie, and it is dominated by `denovo_pdb` — 71% of
+the targets, and the one class where Protenix v2 single sequence is much the
+better contact predictor. Designed proteins are idealised and highly regular, and
+a structure predictor handles them well without an alignment.
+
+**The advantage is confined to `foldbench100`, and "natural vs designed" does not
+explain it.** MarinFold wins there by +0.230, but loses on CAMEO hard (−0.069)
+and ties on CASP free modelling (−0.013) — both natural sets. What separates
+`foldbench100` from those two is difficulty and novelty: CAMEO hard and CASP FM
+are selected for low homology and novel folds, and MarinFold degrades sharply on
+them (0.373 and 0.198, against 0.511). So the honest statement is narrower than
+"natural proteins": *MarinFold supplies better contacts than Protenix v2 single
+sequence on ordinary, well-represented natural PDB monomers, and not elsewhere.*
+
+That is a real scope limitation on the folding result, since `foldbench100` is
+exactly the set it is measured on. It is not a discrepancy between the two
+measurements: the independent measurement here (0.261 for v2 SS on this set)
+matches MarinFold's own exp74 measurement of 0.282 within the difference in
+target subset (91 vs 100), and the pipelines agree.
+
+Two further notes from the same data:
+
+- **Protenix's distogram head is the wrong place to read contacts from.**
+  Single-sequence distogram R-precision is 0.434 / 0.227 / 0.321 / 0.210 across
+  the four classes — below the structure-derived numbers everywhere. Running
+  pyconfind on the predicted structure is the stronger baseline, and it is the
+  one used throughout.
+- **With an MSA, Protenix v2 is far ahead of everything on every class**
+  (0.596–0.847). Contact prediction is not where the alignment stops mattering.
 
 ## Training-set contamination
 
@@ -332,10 +373,13 @@ favours the 48-block arm. A from-scratch sweep is still open.
    much the fine-tuning itself could be worth.
 3. **Monomers only.** Not comparable to the assembly-set numbers in earlier
    revisions, and untested on complexes.
-4. **Natural proteins only.** See
-   [the R-precision reconciliation](#reconciling-with-marinfolds-own-r-precision-comparison)
-   — the contact-quality advantage is measured on natural PDB monomers and may
-   not hold on designed proteins.
+4. **The contact-quality advantage is confined to this target class.** On
+   MarinFold's own evaluation sets it beats Protenix v2 single sequence on
+   `foldbench100` by +0.230 R-precision, but *loses* on designed proteins
+   (−0.074) and on CAMEO hard (−0.069), and ties on CASP free modelling. The
+   folding result is measured on `foldbench100`, so it inherits that limit
+   directly and should not be read as a general claim. See
+   [the R-precision reconciliation](#reconciling-with-marinfolds-own-r-precision-comparison).
 5. **Training false positives are drawn uniformly**, while real predictor errors
    cluster near true contacts. The model has never been trained against the
    error distribution it actually faces. See

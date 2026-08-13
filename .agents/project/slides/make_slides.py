@@ -260,21 +260,17 @@ with PdfPages(OUT) as pdf:
 
     # 6b -- reconciling with MarinFold's own R-precision comparison
     fig = slide(pdf, "But MarinFold's own numbers say it ties Protenix v2 SS",
-                "R-precision, and why the two measurements do not conflict")
-    bullets(fig, [
-        ("MarinFold reports 0.603 R-precision for Protenix v2 single sequence — a\n"
-         "target-weighted mean over 554 proteins, 72% of them denovo_pdb designs,\n"
-         "where v2 SS scores 0.579–0.723.", None),
-        ("On foldbench100 — the set used here — Protenix v2 SS scores 0.255.", WARN),
-        ("Measured here independently at 0.261, against MarinFold's own exp74\n"
-         "measurement of 0.251 on the same set. The pipelines agree.", None),
-    ], y0=0.68, dy=0.155)
-    fig.text(0.075, 0.20, "Scope limitation", fontsize=15, fontweight="bold", color=INK)
-    fig.text(0.075, 0.145,
-             "The contact-quality advantage is measured on natural PDB monomers. "
-             "It likely shrinks, or reverses,\non designed proteins — which is most "
-             "of what MarinFold's own aggregate is weighted by.",
-             fontsize=12.5, color=MUTE, va="top", linespacing=1.7)
+                "R-precision by target class -- both statements are true")
+    embed(fig, FIGS / "contact_accuracy_by_dataset.png",
+          rect=(0.115, 0.125, 0.77, 0.66))
+    fig.text(0.06, 0.10,
+             "Pooled over all 554: MarinFold 0.587 vs Protenix v2 SS 0.603 -- "
+             "the tie. 71% of those targets are designed proteins,\n"
+             "where Protenix v2 SS is much the better contact predictor. "
+             "MarinFold's advantage is confined to foldbench100 —\n"
+             "it also loses on CAMEO hard and ties on CASP FM, both natural. "
+             "The folding result inherits that limit.",
+             fontsize=11, color=MUTE, va="top", linespacing=1.6)
     pdf.savefig(fig); plt.close(fig)
 
     # 6c -- contamination
