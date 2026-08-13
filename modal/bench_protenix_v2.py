@@ -145,6 +145,8 @@ def run_v2(
     out_tag: str = "v2_msa",
     targets_csv: str = "",
     staging_dir: str = "/tmp/protenix-v2-staging",
+    targets_file: str = "",
+    gt_dir: str = "",
 ):
     """Stage the 98 contact-experiment targets, run Protenix v2, pull outputs.
 
@@ -159,7 +161,13 @@ def run_v2(
     sys.path.insert(0, str(ROOT / "src"))
     from helico.upstream_protenix import build_protenix_input
 
-    if targets_csv:
+    if targets_file:
+        # A CSV with a target_id column and ground truths in --gt-dir. Used for
+        # the by-class set (experiments/marinfold_contacts/byclass), whose
+        # targets are not FoldBench targets and whose CIFs live elsewhere.
+        with open(targets_file) as f:
+            target_list = [r["target_id"] for r in csv.DictReader(f)]
+    elif targets_csv:
         target_list = [t.strip() for t in targets_csv.split(",") if t.strip()]
     else:
         # Default: exactly the target list every other arm in helico#11 uses.
@@ -168,7 +176,7 @@ def run_v2(
     print(f"targets: {len(target_list)}  use_msa={use_msa}  tag={out_tag}")
 
     foldbench_local = Path.home() / ".cache/helico/data/benchmarks/FoldBench"
-    gt_dir_local = foldbench_local / "examples/ground_truths"
+    gt_dir_local = Path(gt_dir) if gt_dir else foldbench_local / "examples/ground_truths"
     msa_local = foldbench_local / "foldbench-msas"
 
     staging_root = Path(staging_dir) / out_tag

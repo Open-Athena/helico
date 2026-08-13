@@ -1,0 +1,5 @@
+# Ground truths are converted from MarinFold exp211's copies by build_targets.py
+# and the arms are exported by export_contacts.py; both are reproducible and
+# large enough not to belong in git.
+data/gt/
+data/arms/

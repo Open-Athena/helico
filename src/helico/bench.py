@@ -586,8 +586,13 @@ def predict_target(
         # non-contact, and that is the convention the model was trained on.
         from helico.inference import contacts_from_pairs
 
+        # Forwarded unchanged so both shapes contacts_from_pairs accepts get
+        # through: (i, j) within the default chain, and (chain_a, i, chain_b, j)
+        # when the ground truth's chain is not named "A". Coercing to 2-tuples
+        # here silently dropped every pair for targets whose chain id came from
+        # gemmi ("Axp"), which scores identically to withholding contacts.
         features["contact_state"] = contacts_from_pairs(
-            [(int(a), int(b)) for a, b in contact_pairs], tokenized=tokenized,
+            contact_pairs, tokenized=tokenized,
         )
     elif oracle_contacts_from is not None:
         from helico.contacts import load_rotamer_library
