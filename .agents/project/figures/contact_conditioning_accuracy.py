@@ -151,8 +151,10 @@ def main():
     ]:
         m, se, t, up = paired_stats(a, b, keys)
         print(f"  {lab:34s} {m:+.4f} +/- {se:.4f}  t={t:+.2f}  {up}/{n}")
+    step0 = [mean(arms[(0, a)]) for a in ("real", "oracle", "off")]
+    print(f"  {'step 0 spread across arms':34s} {max(step0) - min(step0):.4f}")
 
-    fig, (ax, sx) = plt.subplots(1, 2, figsize=(13.4, 5.6))
+    fig, ax = plt.subplots(figsize=(7.6, 5.6))
 
     xs = list(range(len(STEPS)))
     for k, c, lab, xf, va in [
@@ -171,7 +173,7 @@ def main():
             lw=1.8, ms=7, zorder=4, label="oracle contacts")
     ax.plot(xs, [mean(arms[(s, "real")]) for s in STEPS], "-s", color=C_REAL,
             lw=1.8, ms=6.5, zorder=4,
-            label="real MarinFold contacts (exp199, top-L)")
+            label="MarinFold contacts (exp199, top-L)")
     ax.plot([xs[STEPS.index(s)] for s in OFF_STEPS],
             [mean(arms[(s, "off")]) for s in OFF_STEPS], "-^", color=C_OFF,
             lw=1.8, ms=6.5, zorder=4, label="contacts withheld")
@@ -186,48 +188,16 @@ def main():
                 xytext=(0, -17), ha="center", fontsize=8.5, color=C_OFF,
                 fontweight="bold")
 
-    spread = max(mean(arms[(0, a)]) for a in ("real", "oracle", "off")) - \
-        min(mean(arms[(0, a)]) for a in ("real", "oracle", "off"))
-    ax.annotate(f"step 0 (leftmost) is the warm start: Protenix v1 weights,\n"
-                f"contact projection still zero-initialised. Conditioning is an\n"
-                f"exact no-op there, so all three arms coincide -- spread {spread:.3f}.",
-                xy=(0.255, 0.415), xycoords="axes fraction", ha="left", va="top",
-                fontsize=8.5, color="0.32", linespacing=1.5, zorder=6)
-
     ax.set_xticks(xs)
     ax.set_xticklabels([str(s) for s in STEPS])
     ax.set_xlim(-0.35, len(STEPS) - 0.4)
     ax.set_ylim(0.28, 0.95)
     ax.set_xlabel("training step (contacts-msafree-01)")
     ax.set_ylabel("FoldBench lDDT")
-    ax.set_title(f"A. Learning to use contacts\n{n} paired FoldBench monomer "
+    ax.set_title(f"Learning to use contacts\n{n} paired FoldBench monomer "
                  f"targets, Helico arms MSA-free", fontsize=11, loc="left")
     ax.legend(loc=(0.045, 0.545), fontsize=9, framealpha=0.95)
     ax.grid(alpha=0.25, ls=":")
-
-    final_real, final_off = arms[("final", "real")], arms[("final", "off")]
-    sx.plot([0, 1], [0, 1], "-", color="0.55", lw=1.3, zorder=1)
-    sx.annotate("y = x", xy=(0.235, 0.26), fontsize=9, color="0.45",
-                rotation=45, ha="center", va="center")
-    sx.scatter([final_off[k] for k in keys], [final_real[k] for k in keys],
-               s=44, color=C_REAL, alpha=0.75, edgecolors="white",
-               linewidths=0.7, zorder=3)
-
-    m, se, t, up = paired_stats(final_off, final_real, keys)
-    sx.annotate(f"contacts help on {up}/{n} targets\n"
-                f"mean d = {m:+.3f} +/- {se:.3f}  (t={t:.1f})",
-                xy=(0.035, 0.965), xycoords="axes fraction", va="top", fontsize=9,
-                bbox=dict(boxstyle="round,pad=0.45", fc="white", ec="0.75", alpha=0.95))
-
-    sx.set_xlim(0.1, 1.0)
-    sx.set_ylim(0.1, 1.0)
-    sx.set_aspect("equal")
-    sx.set_xlabel("same checkpoint, contacts withheld   lDDT")
-    sx.set_ylabel("real MarinFold contacts, top-L   lDDT")
-    sx.set_title(f"B. What the contacts are worth, per target\n"
-                 f"final checkpoint, same weights in both arms",
-                 fontsize=11, loc="left")
-    sx.grid(alpha=0.25, ls=":")
 
     fig.tight_layout()
     fig.savefig(OUT, dpi=170, bbox_inches="tight")

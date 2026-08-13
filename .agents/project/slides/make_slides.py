@@ -127,7 +127,7 @@ with PdfPages(OUT) as pdf:
     rows = [("no contacts", M["off"], MUTE),
             ("Protenix v1, single sequence", M["protenix_singleseq"], MUTE),
             ("Protenix v2, single sequence", M["v2_singleseq"], MUTE),
-            ("real MarinFold contacts, top-L", M["rollout_L"], WARN),
+            ("MarinFold contacts, top-L", M["rollout_L"], WARN),
             ("oracle contacts", M["oracle"], ACCENT),
             ("Protenix v1 + MSA", M["protenix_msa"], GOOD),
             ("Protenix v2 + MSA", M["v2_msa"], GOOD)]
@@ -141,7 +141,7 @@ with PdfPages(OUT) as pdf:
     ax.set_xlim(0, 1.0); ax.set_xlabel("FoldBench lDDT", fontsize=12)
     ax.invert_yaxis(); ax.grid(axis="x", alpha=0.25, ls=":")
     for s in ("top", "right"): ax.spines[s].set_visible(False)
-    fig.text(0.755, 0.66, "Real contacts beat\nsingle sequence\nby a wide margin",
+    fig.text(0.755, 0.66, "Contacts beat\nsingle sequence\nby a wide margin",
              fontsize=14, color=WARN, fontweight="bold", va="top")
     fig.text(0.755, 0.50, "...but do not reach\nMSA-level accuracy", fontsize=14,
              color=GOOD, fontweight="bold", va="top")
@@ -149,10 +149,10 @@ with PdfPages(OUT) as pdf:
 
     # 3a -- how the model learned to use contacts
     fig = slide(pdf, "How the model learned to use contacts",
-                "checkpoint sweep of contacts-msafree-01, benched on real "
+                "checkpoint sweep of contacts-msafree-01, benched on "
                 "MarinFold contacts at each step")
     embed(fig, FIGS / "contact_conditioning_accuracy.png",
-          rect=(0.045, 0.155, 0.91, 0.60))
+          rect=(0.235, 0.115, 0.53, 0.685))
     fig.text(0.06, 0.115,
              "Step 0 is the warm start -- Protenix v1 weights, contact projection "
              "still zero-initialised, so conditioning is an exact no-op.\n"
@@ -166,7 +166,7 @@ with PdfPages(OUT) as pdf:
     steps = [("FoldBench, all categories", 1823, MUTE),
              ("monomer_protein category", 334, MUTE),
              ("MarinFold exp211's 'foldbench100' subset\n"
-              "(the targets real contacts exist for)", 100, WARN),
+              "(the targets predicted contacts exist for)", 100, WARN),
              ("index map verified end-to-end\n(2 dropped: sequences would not align)", 98, WARN),
              ("Protenix +MSA arm needs a pre-computed a3m\n"
               "(7 dropped; all arms use the common set)", 91, ACCENT)]
@@ -189,10 +189,10 @@ with PdfPages(OUT) as pdf:
 
     # 4 -- do we beat single sequence?
     m, se, up = paired("v2_singleseq", "rollout_L")
-    fig = slide(pdf, "Yes: real contacts clearly beat single-sequence folding",
+    fig = slide(pdf, "Yes: predicted contacts clearly beat single-sequence folding",
                 "vs Protenix v2 -- the stronger baseline -- in single-sequence mode")
     bullets(fig, [
-        (f"Real MarinFold contacts (top-L):  {m:+.3f} ± {se:.3f} lDDT   "
+        (f"MarinFold contacts (top-L):  {m:+.3f} ± {se:.3f} lDDT   "
          f"(t={m/se:.1f}, better on {up}/{N})", WARN),
         ("Protenix v2 is genuinely the harder baseline: +0.023 over v1 without\n"
          "MSAs, +0.010 with them. The margin survives anyway.", None),
@@ -243,7 +243,7 @@ with PdfPages(OUT) as pdf:
 
     # 6 -- the remaining gap
     fig = slide(pdf, f"The remaining gap to MSAs is contact quality",
-                f"real MarinFold top-L {M['rollout_L']:.3f}  ->  "
+                f"MarinFold top-L {M['rollout_L']:.3f}  ->  "
                 f"Protenix v2 + MSA {M['v2_msa']:.3f}")
     d_oracle = M["v2_msa"] - M["oracle"]
     bullets(fig, [
@@ -253,7 +253,7 @@ with PdfPages(OUT) as pdf:
         ("A perfect contact map is therefore worth as much as an alignment to the\n"
          "best model available. Nothing about the approach caps out below MSAs.", None),
         (f"The entire shortfall is the quality of the contacts we can currently\n"
-         f"predict -- {M['rollout_L']:.3f} with real ones versus {M['oracle']:.3f} with "
+         f"predict -- {M['rollout_L']:.3f} with predicted ones versus {M['oracle']:.3f} with "
          f"perfect ones.", WARN),
     ], y0=0.68, dy=0.155)
     pdf.savefig(fig); plt.close(fig)

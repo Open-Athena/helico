@@ -1,4 +1,4 @@
-"""Figure: real MarinFold contacts vs the Protenix baselines.
+"""Figure: MarinFold predicted contacts vs the Protenix baselines.
 
 Reads bench_mf2_* on the paired FoldBench monomer set. Helico arms are MSA-free
 (no alignment, no conservation profile); the Protenix +MSA arms of course use
@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 ROOT = Path(__file__).resolve().parents[3]
 OUT = Path(__file__).parent / "marinfold_real_contacts.png"
 
-# (top-n label, real arm, synthetic arm, measured precision, recall)
+# (top-n label, bench arm, measured precision, measured recall)
 LEVELS = [("L/5", "rollout_L5", 0.795, 0.179),
           ("L/2", "rollout_L2", 0.676, 0.379),
           ("L",   "rollout_L",  0.505, 0.564)]
@@ -82,7 +82,7 @@ def main():
     xs = range(len(LEVELS))
     real = [mean(r) for _l, r, *_ in LEVELS]
     ax.plot(list(xs), real, "-o", color=C_REAL, lw=1.9, ms=8, zorder=3,
-            label="real MarinFold contacts (exp199)")
+            label="MarinFold contacts (exp199)")
 
     refs = [(mean("v2_msa"), C_V2MSA, "Protenix v2 + MSA", 0.30, "bottom"),
             (mean("oracle"), C_ORACLE, "oracle contacts", 0.63, "bottom"),
@@ -103,7 +103,7 @@ def main():
     ax.set_ylim(0.28, 0.95)
     ax.set_ylabel("FoldBench lDDT")
     ax.set_xlabel("contact budget (and MarinFold's measured accuracy there)")
-    ax.set_title(f"A. Folding from real predicted contacts\n"
+    ax.set_title(f"A. Folding from predicted contacts\n"
                  f"{n} paired FoldBench monomer targets", fontsize=11, loc="left")
     ax.legend(loc="lower right", fontsize=9, framealpha=0.95)
     ax.grid(alpha=0.25, ls=":")
@@ -125,7 +125,7 @@ def main():
     bx.set_ylim(0.1, 1.0)
     bx.set_aspect("equal")
     bx.set_xlabel("Protenix v2, single sequence   lDDT")
-    bx.set_ylabel("Helico + real MarinFold contacts, top-L   lDDT")
+    bx.set_ylabel("Helico + MarinFold contacts, top-L   lDDT")
     bx.set_title(f"B. Per-target vs the strongest single-sequence baseline\n"
                  f"{n} paired targets", fontsize=11, loc="left")
     bx.grid(alpha=0.25, ls=":")

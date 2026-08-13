@@ -2,7 +2,7 @@
 
 **Status:** exploratory. Results below are from a *warm-started* model.
 
-Every number here uses **real MarinFold predicted contacts** (or, where labelled,
+Every number here uses **MarinFold predicted contacts** (or, where labelled,
 oracle contacts from the ground-truth structure as a ceiling). Earlier versions of
 this document led with synthetic contacts — the ground-truth map degraded with a
 uniform noise model. Those numbers were an upper bound that did not transfer, and
@@ -47,10 +47,10 @@ contact predictor.
 
 ## Headline result
 
-**Real predicted contacts beat the strongest single-sequence baseline by a wide
+**Predicted contacts beat the strongest single-sequence baseline by a wide
 margin, and do not yet reach MSAs.**
 
-![real predicted contacts](.agents/project/figures/marinfold_real_contacts.png)
+![predicted contacts](.agents/project/figures/marinfold_real_contacts.png)
 
 91 paired FoldBench monomer targets. Contacts come from MarinFold
 `contacts-v1-exp199-1.5B` via
@@ -71,9 +71,9 @@ architecture. Both v2 arms use Protenix's own recommended inference settings
 | Helico + contacts read off v2's single-seq structure | no | 0.404 |
 | **Protenix v2, single sequence** | no | **0.409** |
 | Helico + single rollout, top-L | no | 0.566 |
-| **Helico + real MarinFold, top-L/5** | no | **0.575** |
-| **Helico + real MarinFold, top-L/2** | no | **0.626** |
-| **Helico + real MarinFold, top-L** | no | **0.638** |
+| **Helico + MarinFold, top-L/5** | no | **0.575** |
+| **Helico + MarinFold, top-L/2** | no | **0.626** |
+| **Helico + MarinFold, top-L** | no | **0.638** |
 | Protenix v1 + MSA | **yes** | 0.855 |
 | Helico + oracle contacts | no | 0.862 |
 | **Protenix v2 + MSA** | **yes** | **0.865** |
@@ -82,18 +82,18 @@ architecture. Both v2 arms use Protenix's own recommended inference settings
 | --- | --- | --- | --- |
 | Protenix v2 vs v1, single sequence | +0.023 ± 0.011 | 2.2 | 51/91 |
 | Protenix v2 vs v1, with MSA | +0.010 ± 0.004 | 2.5 | 60/91 |
-| **real MarinFold vs v2 single sequence** | **+0.229 ± 0.022** | 10.4 | 76/91 |
-| **v2 + MSA vs real MarinFold** | **+0.227 ± 0.019** | 11.8 | 87/91 |
+| **MarinFold vs v2 single sequence** | **+0.229 ± 0.022** | 10.4 | 76/91 |
+| **v2 + MSA vs MarinFold** | **+0.227 ± 0.019** | 11.8 | 87/91 |
 | **v2 + MSA vs oracle contacts** | +0.004 ± 0.006 | 0.6 | 59/91 |
 
 Three things follow.
 
-**Real contacts beat the strongest single-sequence baseline.** v2 is genuinely
-better than v1 without MSAs (+0.023), and real MarinFold contacts still clear it
+**Predicted contacts beat the strongest single-sequence baseline.** v2 is genuinely
+better than v1 without MSAs (+0.023), and MarinFold contacts still clear it
 by **+0.229 ± 0.022** on 76 of 91 targets. It holds at every contact budget, and
 even a single un-aggregated rollout beats it.
 
-**They still do not reach MSAs.** v2+MSA leads real contacts by
+**They still do not reach MSAs.** v2+MSA leads predicted contacts by
 **+0.227 ± 0.019** on 87 of 91.
 
 **Oracle contacts match the best MSA model.** v2+MSA vs oracle is
@@ -124,7 +124,7 @@ FoldBench is far larger than this subset. The full chain:
 | --- | --- |
 | FoldBench, all categories | 1823 |
 | `monomer_protein` category | 334 |
-| MarinFold exp211's `foldbench100` subset (the targets real contacts exist for) | 100 |
+| MarinFold exp211's `foldbench100` subset (the targets predicted contacts exist for) | 100 |
 | index map verified end-to-end (2 dropped: sequences would not align) | 98 |
 | Protenix +MSA arm needs a pre-computed a3m (7 dropped) | **91** |
 
@@ -209,10 +209,10 @@ helico's own `oracle_contact_state` at mean Jaccard 0.998 (min 0.984), pinned by
 ![learning to use contacts](.agents/project/figures/contact_conditioning_accuracy.png)
 
 A checkpoint sweep of `contacts-msafree-01` on the same 91 targets, so it is
-directly comparable to everything above. Each checkpoint is benched with real
+directly comparable to everything above. Each checkpoint is benched with
 MarinFold contacts, with oracle contacts, and with contacts withheld.
 
-| step | contacts withheld | real MarinFold, top-L | oracle |
+| step | contacts withheld | MarinFold, top-L | oracle |
 | --- | --- | --- | --- |
 | 0 *(warm start)* | 0.310 | 0.307 | 0.307 |
 | 1000 | 0.362 | 0.626 | 0.829 |
@@ -229,7 +229,7 @@ spread across the three is **0.003**, and oracle-vs-withheld is
 information through another path.
 
 **Almost all of the learning happens in the first 1000 steps.** Steps 1000 →
-final add +0.012 ± 0.004 (t=3.3) with real contacts and +0.033 with oracle ones —
+final add +0.012 ± 0.004 (t=3.3) with predicted contacts and +0.033 with oracle ones —
 real and small, but the pathway is essentially trained within one thousand steps.
 
 The contacts-withheld arm rises from 0.310 to 0.368 over the same span. That is
@@ -239,7 +239,7 @@ and fine-tuning recovers part of what removing the MSA module cost. It ends
 *below* both Protenix single-sequence baselines, which is the control that keeps
 the contact effect attributable to contacts.
 
-At the final checkpoint, real contacts are worth **+0.270 ± 0.021** (t=12.8) over
+At the final checkpoint, MarinFold contacts are worth **+0.270 ± 0.021** (t=12.8) over
 the same weights with contacts withheld, on 83 of 91 targets.
 
 
