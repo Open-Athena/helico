@@ -41,9 +41,20 @@ def load(arm):
     return out
 
 
-ARMS = ["off", "protenix_singleseq", "single_L", "rollout_L5", "rollout_L2",
-        "rollout_L", "synth_L5", "synth_L2", "synth_L", "oracle", "protenix_msa"]
-D = {a: load(a) for a in ARMS}
+ARMS = ["off", "protenix_singleseq", "v2_singleseq", "single_L", "rollout_L5",
+        "rollout_L2", "rollout_L", "synth_L5", "synth_L2", "synth_L", "oracle",
+        "protenix_msa", "v2_msa"]
+
+
+def load_v2(tag):
+    """Protenix v2, run through ByteDance's own implementation."""
+    f = ROOT / f"experiments/marinfold_contacts/upstream/{tag}_scores.csv"
+    if not f.exists():
+        return {}
+    return {r["pdb_id"]: float(r["lddt"]) for r in csv.DictReader(f.open())}
+
+
+D = {a: (load_v2(a) if a.startswith("v2_") else load(a)) for a in ARMS}
 KEYS = sorted(set.intersection(*(set(D[a]) for a in ARMS)))
 N = len(KEYS)
 M = {a: sum(D[a][k] for k in KEYS) / N for a in ARMS}
@@ -111,11 +122,13 @@ with PdfPages(OUT) as pdf:
     fig = slide(fig if False else pdf, "Where things land",
                 f"FoldBench, {N} paired monomer targets, all MSA-free")
     rows = [("no contacts", M["off"], MUTE),
-            ("stock Protenix v1, single sequence", M["protenix_singleseq"], MUTE),
+            ("Protenix v1, single sequence", M["protenix_singleseq"], MUTE),
+            ("Protenix v2, single sequence", M["v2_singleseq"], MUTE),
             ("real MarinFold contacts, top-L", M["rollout_L"], WARN),
             ("synthetic noise at the same precision/recall", M["synth_L"], ACCENT),
             ("oracle contacts", M["oracle"], ACCENT),
-            ("Protenix + MSA", M["protenix_msa"], GOOD)]
+            ("Protenix v1 + MSA", M["protenix_msa"], GOOD),
+            ("Protenix v2 + MSA", M["v2_msa"], GOOD)]
     ax = fig.add_axes([0.34, 0.13, 0.36, 0.58])
     ys = range(len(rows))
     ax.barh(list(ys), [r[1] for r in rows], color=[r[2] for r in rows], alpha=0.85)
@@ -133,21 +146,22 @@ with PdfPages(OUT) as pdf:
     pdf.savefig(fig); plt.close(fig)
 
     # 4 -- do we beat single sequence?
-    m, se, up = paired("protenix_singleseq", "rollout_L")
+    m, se, up = paired("v2_singleseq", "rollout_L")
     fig = slide(pdf, "Yes: real contacts clearly beat single-sequence folding",
-                "vs stock Protenix v1 weights in single-sequence mode, same targets")
+                "vs Protenix v2 -- the stronger baseline -- in single-sequence mode")
     bullets(fig, [
         (f"Real MarinFold contacts (top-L):  {m:+.3f} ± {se:.3f} lDDT   "
          f"(t={m/se:.1f}, better on {up}/{N})", WARN),
-        (f"Holds at every contact budget: +0.227 at top-L/2, +0.180 at top-L/5.", None),
-        (f"Even a single rollout beats it: +0.168 ± 0.022.", None),
+        ("Protenix v2 is genuinely the harder baseline: +0.023 over v1 without\n"
+         "MSAs, +0.010 with them. The margin survives anyway.", None),
+        ("Holds at every contact budget, and even a single rollout beats it.", None),
     ], y0=0.68)
-    mm, sse, _ = paired("protenix_singleseq", "off")
+    mm, sse, _ = paired("v2_singleseq", "off")
     fig.text(0.075, 0.36, "The control that makes this credible", fontsize=16,
              fontweight="bold", color=INK)
     fig.text(0.075, 0.29,
-             f"Our own contacts-off arm scores {M['off']:.3f} — slightly BELOW "
-             f"Protenix's {M['protenix_singleseq']:.3f}\n"
+             f"Our own contacts-off arm scores {M['off']:.3f} — BELOW "
+             f"Protenix v2's {M['v2_singleseq']:.3f}\n"
              f"({mm:+.3f} ± {sse:.3f}). The fine-tuned model has no intrinsic edge "
              f"with no information.\nAll of the gain comes from the contacts.",
              fontsize=14, color=MUTE, va="top", linespacing=1.6)
@@ -160,9 +174,11 @@ with PdfPages(OUT) as pdf:
     pdf.savefig(fig); plt.close(fig)
 
     # 6 -- decomposition
-    fig = slide(pdf, "Decomposing the 0.230 gap to MSAs",
-                "real MarinFold top-L 0.622  →  Protenix + MSA 0.851")
-    parts = [("oracle contacts\nvs MSA", M["protenix_msa"] - M["oracle"], MUTE),
+    gap = M["v2_msa"] - M["rollout_L"]
+    fig = slide(pdf, f"Decomposing the {gap:.3f} gap to MSAs",
+                f"real MarinFold top-L {M['rollout_L']:.3f}  →  "
+                f"Protenix v2 + MSA {M['v2_msa']:.3f}")
+    parts = [("oracle contacts\nvs best MSA", M["v2_msa"] - M["oracle"], MUTE),
              ("error rate\n(oracle → 50%/56%)", M["oracle"] - M["synth_L"], MUTE),
              ("error STRUCTURE\n(synthetic → real)", M["synth_L"] - M["rollout_L"], WARN)]
     ax = fig.add_axes([0.34, 0.30, 0.38, 0.40])
@@ -179,7 +195,11 @@ with PdfPages(OUT) as pdf:
              "Real predictor errors cluster near true contacts, where they are "
              "geometrically plausible\nand cannot be rejected as inconsistent with the "
              "rest of the map. Our training noise model\ndraws false positives "
-             "uniformly — the easy case.",
+             "uniformly — the easy case.\n\n"
+             f"Oracle contacts vs the best MSA model is "
+             f"{M['v2_msa'] - M['oracle']:+.3f} — indistinguishable. A perfect\n"
+             "contact map is worth as much as an alignment; the whole shortfall is "
+             "contact quality.",
              fontsize=14, color=INK, va="top", linespacing=1.6)
     pdf.savefig(fig); plt.close(fig)
 
