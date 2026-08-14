@@ -1,0 +1,17 @@
+[
+  {
+    "name": "casp_fm__T1104-D1",
+    "covalent_bonds": [],
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "QLEDSEVEAVAKGLEEMYANGVTEDNFKNYVKNNFAQQEISSVEEELNVNISDSCVANKIKDEFFAMISISAIVKAAQKKAWKELAVTVLRFAKANGLKTNAIIVAGQLALWAVQCG",
+          "count": 1,
+          "modifications": [],
+          "pairedMsaPath": "/cache/helico-data/protenix_v2/byclass_v2_singleseq/casp_fm__T1104-D1/msa/79aba0c5acc024eb9181bd7871becd7052e3cdaa01e6043502f7738c2ae4c03b.a3m",
+          "unpairedMsaPath": "/cache/helico-data/protenix_v2/byclass_v2_singleseq/casp_fm__T1104-D1/msa/79aba0c5acc024eb9181bd7871becd7052e3cdaa01e6043502f7738c2ae4c03b.a3m"
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,17 @@
+[
+  {
+    "name": "foldbench100__8bux_A",
+    "covalent_bonds": [],
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "GAMGSEAVRSWRGAAEATSRLRERGCDGCLAGIEVQQLFCSQSAAIPEHQLKELNIKIDSALQAYKIALESLGHCEYAMKAGFHLNPKAIEASLQGCCSEAEAQQTGRRPMQCELPTVPVQIGSHFLKGVSFNESAADNLKLKTHTMLQLMKERDDFPVTEVLNQVCPSTWRGACKTAVQLLFGQAGLVVVDTAQIENKEAYAPQISLEGSRIVVQVPSTWCLKEDPATMSLLQRSLDPEKTLGLVDVLYTAVLDLNRWRAGREQALPCIQIQLQRGLQKTFSKLTSRF",
+          "count": 1,
+          "modifications": [],
+          "pairedMsaPath": "/cache/helico-data/protenix_v2/byclass_v2_singleseq/foldbench100__8bux_A/msa/0307572e3d499a75f97c482cf628b66d5fb2198a6b072646a1db6f41e9493fd1.a3m",
+          "unpairedMsaPath": "/cache/helico-data/protenix_v2/byclass_v2_singleseq/foldbench100__8bux_A/msa/0307572e3d499a75f97c482cf628b66d5fb2198a6b072646a1db6f41e9493fd1.a3m"
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,17 @@
+[
+  {
+    "name": "casp_fm__T1125-D1",
+    "covalent_bonds": [],
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "NKPFAQQTGRFHTIELQEEGSPDEFQELLRLQASTQGHVDETTLARLVVQKRATKAILKKLLETADRPEEQAVWRAAIERLVIGNTAYDLKDDESFAKLIELAKKHPLEKVVKNVREVQFSEKVTLSDKYAFVP",
+          "count": 1,
+          "modifications": [],
+          "pairedMsaPath": "/cache/helico-data/protenix_v2/byclass_v2_msa/casp_fm__T1125-D1/msa/31a4aec5d4e51494fb6e37e2218d9cbf223b9b7feb6100d069c7cbe0689d58fd.a3m",
+          "unpairedMsaPath": "/cache/helico-data/protenix_v2/byclass_v2_msa/casp_fm__T1125-D1/msa/31a4aec5d4e51494fb6e37e2218d9cbf223b9b7feb6100d069c7cbe0689d58fd.a3m"
+        }
+      }
+    ]
+  }
+]

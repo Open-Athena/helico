@@ -3,9 +3,12 @@
 Regenerate with:
     uv run python .agents/project/figures/contact_conditioning_accuracy.py
 
-A checkpoint sweep of `contacts-msafree-01` on the same FoldBench monomer set as
-`marinfold_real_contacts.py`, so the two figures are directly comparable. Three
-conditioning arms are benched at each checkpoint:
+A checkpoint sweep of `contacts-msafree-01`, restricted to the FoldBench monomers
+that survive MarinFold exp226's homology filter (< 40% identity to either
+training arm). Only 15 of the original 100 clear it, and 14 of those are paired
+across the whole sweep -- small, but the alternative is a training curve measured
+on targets MarinFold has effectively memorised. Three conditioning arms are
+benched at each checkpoint:
 
   real    -- MarinFold contacts-v1-exp199-1.5B, vote-aggregated, truncated at top-L
   oracle  -- the ground-truth contact map (the ceiling)
@@ -46,6 +49,14 @@ import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parents[3]
 OUT = Path(__file__).parent / "contact_conditioning_accuracy.png"
+BYCLASS = ROOT / "experiments/marinfold_contacts/byclass/data/targets.csv"
+
+
+def eval2_pdb_codes() -> set[str]:
+    """PDB codes of the FoldBench monomers that clear the homology filter."""
+    with BYCLASS.open() as f:
+        return {r["stem"].split("_")[0].lower() for r in csv.DictReader(f)
+                if r["dataset"] == "foldbench100" and r["in_eval2"] == "1"}
 
 STEPS = [0, 1000, 2000, 3000, 5000, "final"]
 # Contacts are withheld here, so there is nothing for training to improve; three
@@ -79,13 +90,18 @@ def load(arm_or_dir):
         f = ROOT / f"experiments/marinfold_contacts/upstream/{arm_or_dir}_scores.csv"
         if not f.exists():
             return {}
-        return {r["pdb_id"]: float(r["lddt"]) for r in csv.DictReader(f.open())}
+        keep = eval2_pdb_codes()
+        return {r["pdb_id"]: float(r["lddt"]) for r in csv.DictReader(f.open())
+                if r["pdb_id"].split("-")[0].lower() in keep}
 
     f = ROOT / arm_or_dir / "results" / "monomer_protein.csv"
     if not f.exists():
         return {}
+    keep = eval2_pdb_codes()
     out = {}
     for row in csv.DictReader(f.open()):
+        if row["pdb_id"].split("-")[0].lower() not in keep:
+            continue
         try:
             v = float(row.get("lddt", ""))
         except (TypeError, ValueError):
@@ -129,7 +145,7 @@ def main():
     def mean(d):
         return sum(d[k] for k in keys) / n
 
-    print(f"n = {n} paired FoldBench monomer targets\n")
+    print(f"n = {n} homology-filtered FoldBench monomers\n")
     print(f"{'step':>7} {'off':>8} {'real MF':>9} {'oracle':>8}")
     for s in STEPS:
         off = mean(arms[(s, "off")]) if (s, "off") in arms else float("nan")
@@ -194,8 +210,8 @@ def main():
     ax.set_ylim(0.28, 0.95)
     ax.set_xlabel("training step (contacts-msafree-01)")
     ax.set_ylabel("FoldBench lDDT")
-    ax.set_title(f"Learning to use contacts\n{n} paired FoldBench monomer "
-                 f"targets, Helico arms MSA-free", fontsize=11, loc="left")
+    ax.set_title(f"Learning to use contacts\n{n} homology-filtered FoldBench "
+                 f"monomers, Helico arms MSA-free", fontsize=11, loc="left")
     ax.legend(loc=(0.045, 0.545), fontsize=9, framealpha=0.95)
     ax.grid(alpha=0.25, ls=":")
 

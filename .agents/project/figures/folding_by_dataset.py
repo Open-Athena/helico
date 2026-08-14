@@ -129,7 +129,7 @@ def main():
         off = (i - (len(present) - 1) / 2) * w
         ax.bar([x + off for x in xs], vals, width=w, color=colr, alpha=0.9, label=lab)
         for x, v in zip(xs, vals):
-            ax.text(x + off, v + 0.012, f"{v:.2f}", ha="center", fontsize=7.2,
+            ax.text(x + off, v + 0.010, f"{v:.2f}", ha="center", fontsize=7.4,
                     color=colr, fontweight="bold", rotation=90)
 
     ax.axvline(len(groups) - 0.5, color="0.75", lw=1.2, ls="--")
@@ -138,13 +138,14 @@ def main():
     labels.append(f"ALL NATURAL\npooled, n = {len(natural)}")
     ax.set_xticks(xs)
     ax.set_xticklabels(labels, fontsize=8.8)
-    ax.set_ylim(0, 1.02)
+    ax.set_ylim(0, 1.12)
     ax.set_ylabel("FoldBench lDDT")
     ax.set_title("Folding accuracy by target class, homology-filtered\n"
                  f"{len(keys)} targets: < 40% identity to MarinFold's training data "
                  f"AND outside Helico's training window",
                  fontsize=11.5, loc="left")
-    ax.legend(loc="upper left", fontsize=8.5, framealpha=0.95, ncol=2)
+    ax.legend(loc="upper center", fontsize=8.5, framealpha=0.95, ncol=5,
+              bbox_to_anchor=(0.5, 1.005), frameon=False)
     ax.grid(axis="y", alpha=0.25, ls=":")
     for s in ("top", "right"):
         ax.spines[s].set_visible(False)

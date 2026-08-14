@@ -1,0 +1,17 @@
+[
+  {
+    "name": "denovo_pdb__7mcc_A",
+    "covalent_bonds": [],
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "MDIAIVDADNPADAIQQVKDLRKYGAKLIAYKSKSSEELKLALKAGADIAIVDADNPADAIQQVKDLRKYGAKLIAYKSKSSEELKLALKAGADIAIVDADNPADAIQQVKDLRKYGAKLIAYKSKSSEELKLALKAGADIAIVDADNPADAIQQVKDLRKYGAKLIAYKSKSSEELKLALKAGHHHHHH",
+          "count": 1,
+          "modifications": [],
+          "pairedMsaPath": "/cache/helico-data/protenix_v2/byclass_v2_singleseq/denovo_pdb__7mcc_A/msa/b21df20fe12c9576161f959c05e3a51c78197eeeb57238ecdcc4fd649ca15fcf.a3m",
+          "unpairedMsaPath": "/cache/helico-data/protenix_v2/byclass_v2_singleseq/denovo_pdb__7mcc_A/msa/b21df20fe12c9576161f959c05e3a51c78197eeeb57238ecdcc4fd649ca15fcf.a3m"
+        }
+      }
+    ]
+  }
+]

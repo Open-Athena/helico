@@ -1,0 +1,17 @@
+[
+  {
+    "name": "cameo_hard__9dl1_D",
+    "covalent_bonds": [],
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "DKEIAKEIFNMMFMLLWRVFRSQRIDANNVELIKFNIRVLDWIMAEADNDLCYFIGTHDKCENPKEQWVANYQNLNNVVFTNKELEDIYDLSNKEETKEVLKKFKEKVNQFYRHAFDIINKYGL",
+          "count": 1,
+          "modifications": [],
+          "pairedMsaPath": "/cache/helico-data/protenix_v2/byclass_v2_msa/cameo_hard__9dl1_D/msa/e7aade8c6a2b3341a0deb232d31e9ec11659a6d02d3b8967c9fb4ab602e5a393.a3m",
+          "unpairedMsaPath": "/cache/helico-data/protenix_v2/byclass_v2_msa/cameo_hard__9dl1_D/msa/e7aade8c6a2b3341a0deb232d31e9ec11659a6d02d3b8967c9fb4ab602e5a393.a3m"
+        }
+      }
+    ]
+  }
+]

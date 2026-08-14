@@ -1,0 +1,17 @@
+[
+  {
+    "name": "foldbench100__5sbj_A",
+    "covalent_bonds": [],
+    "sequences": [
+      {
+        "proteinChain": {
+          "sequence": "YCSDCGADSQVRGGYCTNCGASDRIR",
+          "count": 1,
+          "modifications": [],
+          "pairedMsaPath": "/cache/helico-data/protenix_v2/byclass_v2_msa/foldbench100__5sbj_A/msa/9edbed9dcc12979a9039a4bb9db649f245bcdf30907730a35c7716b41626c8f9.a3m",
+          "unpairedMsaPath": "/cache/helico-data/protenix_v2/byclass_v2_msa/foldbench100__5sbj_A/msa/9edbed9dcc12979a9039a4bb9db649f245bcdf30907730a35c7716b41626c8f9.a3m"
+        }
+      }
+    ]
+  }
+]

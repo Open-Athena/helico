@@ -1,0 +1,42 @@
+{
+    "plddt": 91.11357116699219,
+    "gpde": 0.352247953414917,
+    "ptm": 0.9233910441398621,
+    "iptm": 0.0,
+    "chain_gpde": [
+        0.352247953414917
+    ],
+    "chain_pair_gpde": [
+        [
+            0.0
+        ]
+    ],
+    "chain_ptm": [
+        0.9233910441398621
+    ],
+    "chain_iptm": [
+        0.0
+    ],
+    "chain_pair_iptm": [
+        [
+            0.0
+        ]
+    ],
+    "chain_pair_iptm_global": [
+        [
+            0.0
+        ]
+    ],
+    "chain_plddt": [
+        0.9111356735229492
+    ],
+    "chain_pair_plddt": [
+        [
+            0.0
+        ]
+    ],
+    "has_clash": false,
+    "disorder": 0.0,
+    "ranking_score": 0.18467821180820465,
+    "num_recycles": 10
+}
