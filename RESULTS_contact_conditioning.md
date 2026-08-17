@@ -82,12 +82,18 @@ them read high in a way the FoldBench slices do not.
 | **Protenix v2 + MSA** | **yes** | **0.803** |
 | Helico + oracle contacts | no | 0.806 |
 
-| comparison | Δ lDDT | t | better on |
+| comparison | Δ lDDT | 95% CI | better on |
 | --- | --- | --- | --- |
-| **MarinFold contacts vs Protenix v2 single sequence** | **+0.091 ± 0.028** | 3.3 | 26/38 |
-| MarinFold contacts vs the same weights, contacts withheld | +0.124 ± 0.029 | 4.3 | 27/38 |
-| Protenix v2 + MSA vs MarinFold contacts | +0.291 ± 0.035 | 8.2 | 33/38 |
-| **Protenix v2 + MSA vs oracle contacts** | **−0.002 ± 0.028** | −0.1 | 14/38 |
+| **MarinFold contacts vs Protenix v2 single sequence** | **+0.091 ± 0.028** | [+0.036, +0.145] | 26/38 |
+| MarinFold contacts vs the same weights, contacts withheld | +0.124 ± 0.029 | [+0.069, +0.181] | 27/38 |
+| Protenix v2 + MSA vs MarinFold contacts | +0.291 ± 0.035 | [+0.221, +0.359] | 33/38 |
+| **Protenix v2 + MSA vs oracle contacts** | **−0.002 ± 0.028** | [−0.052, +0.056] | 14/38 |
+
+Intervals are 95% percentile bootstrap on the *per-target difference*, 10,000
+resamples of the 38 targets. Every arm sees the same resample, so the
+comparisons stay paired; a per-arm CI on the means themselves is roughly twice
+as wide (e.g. MarinFold contacts 0.513 [0.455, 0.571]) and is not the right
+interval for a difference.
 
 Three things follow.
 
@@ -385,6 +391,18 @@ paired contacts-off-vs-on result.
 
 ## What did not hold up
 
+**The headline shrank by two thirds under homology filtering.** +0.229 lDDT over
+Protenix v2 single sequence on 91 unfiltered FoldBench monomers became +0.091 on
+the 38 that clear a 40% identity filter against MarinFold's training data. The
+direction survives and the oracle ceiling survives; the magnitude does not, and
+neither does the claim on natural proteins pooled, which is a tie.
+
+**The contact-budget conclusion reversed.** The unfiltered set showed a clean
+monotone gain out to top-L, which is why top-L is the default arm. On filtered
+natural targets the trend flattens and reverses, and on designed proteins every
+extra contact costs accuracy. See
+[How many contacts should be emitted](#how-many-contacts-should-be-emitted).
+
 The original proposal was to *also* shrink the trunk — the intuition being that
 explicit contacts do the work the deep pairformer stack was doing implicitly.
 That is wrong, at least under warm start: 48 blocks (0.815 val lDDT, +0.139
@@ -461,8 +479,12 @@ What training samples per example ([`contacts.py`](src/helico/contacts.py)):
 | `pair-subset` | 35% | reveal a fraction of *pairs*, rest unknown |
 | `contact-list` | 35% | MarinFold-shaped: a truncated top-k contact list |
 
-MarinFold's operating point (2026-08) is **~60% precision, ~60% recall**, output
-as a truncated top-k list. Three things were wrong for that and are now fixed:
+The model was trained for an operating point of **~60% precision, ~60% recall**,
+output as a truncated top-k list — MarinFold's measured accuracy on the
+unfiltered evaluation set at the time (2026-08). **On homology-filtered targets
+its actual precision at top-L is ~0.40**, so the training distribution is
+centred above where the model is asked to work. Three things were wrong even for
+60/60 and are now fixed:
 
 1. **False positives landed where a predictor cannot produce them.** The FP
    candidate set was the whole upper triangle. Measured: **~40% of injected FPs
@@ -489,6 +511,10 @@ has no separate "reported but wrong" channel.
 
 Remaining known gaps, not yet addressed:
 
+- **The sampled operating point is optimistic.** Training centres on 60%
+  precision; homology-filtered MarinFold delivers ~40%. Together with the
+  uniform-FP problem below, the model has been trained for an easier input than
+  it receives.
 - **False positives are uniform within the eligible region.** Real ones
   concentrate near true contacts (near-miss pairs just beyond the distance
   threshold), where they are geometrically plausible and cannot be rejected as

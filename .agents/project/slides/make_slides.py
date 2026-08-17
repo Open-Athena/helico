@@ -24,6 +24,7 @@ time; nothing is hardcoded. Regenerates the PDF in place.
 """
 import csv
 import math
+import random
 from pathlib import Path
 
 import matplotlib
@@ -77,6 +78,31 @@ FB = [k for k in KEYS if META[k]["dataset"] in ("foldbench_rest", "foldbench100"
 NAT = [k for k in KEYS if META[k]["designed"] in ("0", "False", "false")]
 N = len(FB)
 M = {a: sum(D[a][k] for k in FB) / N for a in ARMS}
+
+
+# One set of resampled index lists, reused for every arm and every slide, so a
+# bootstrap CI on one arm is comparable to the CI on another: they are computed
+# over the same resamples of the same targets, which is what "paired" means
+# here. Seeded, so the deck is reproducible.
+N_BOOT = 10_000
+
+
+def _resamples(n_targets, seed=0):
+    rng = random.Random(seed)
+    return [[rng.randrange(n_targets) for _ in range(n_targets)]
+            for _ in range(N_BOOT)]
+
+
+BOOT_IDX = _resamples(len(FB))
+
+
+def boot_ci(arm, keys=None, idx=None):
+    """Percentile 95% CI of an arm's mean lDDT, over paired target resamples."""
+    keys = FB if keys is None else keys
+    idx = BOOT_IDX if idx is None else idx
+    vals = [D[arm][k] for k in keys]
+    means = sorted(sum(vals[i] for i in draw) / len(draw) for draw in idx)
+    return means[int(0.025 * len(means))], means[int(0.975 * len(means))]
 
 
 def paired(a, b, keys=None):
@@ -175,26 +201,41 @@ with PdfPages(OUT) as pdf:
             ("Helico + MarinFold contacts", M["mf_L"], WARN),
             ("Protenix v2 + MSA", M["v2_msa"], GOOD),
             ("Helico + oracle contacts", M["oracle"], ACCENT)]
-    ax = fig.add_axes([0.33, 0.16, 0.34, 0.52])
+    ax = fig.add_axes([0.33, 0.33, 0.34, 0.42])
     ys = range(len(rows))
-    ax.barh(list(ys), [r[1] for r in rows], color=[r[2] for r in rows], alpha=0.85)
-    for y, (lab, v, c) in zip(ys, rows):
-        ax.text(v + 0.012, y, f"{v:.3f}", va="center", fontsize=13,
-                fontweight="bold", color=c)
+    cis = [boot_ci(a) for a in ("off", "v2_singleseq", "mf_L", "v2_msa", "oracle")]
+    err = [[v - lo for (_l, v, _c), (lo, _hi) in zip(rows, cis)],
+           [hi - v for (_l, v, _c), (_lo, hi) in zip(rows, cis)]]
+    ax.barh(list(ys), [r[1] for r in rows], color=[r[2] for r in rows], alpha=0.85,
+            xerr=err, error_kw=dict(ecolor="#333333", elinewidth=1.4, capsize=4))
+    for y, (lab, v, _c), (lo, hi) in zip(ys, rows, cis):
+        ax.text(hi + 0.018, y, f"{v:.3f}", va="center", fontsize=12.5,
+                fontweight="bold", color=_c)
     ax.set_yticks(list(ys)); ax.set_yticklabels([r[0] for r in rows], fontsize=11.5)
     ax.set_xlim(0, 1.0); ax.set_xlabel("FoldBench lDDT", fontsize=12)
     ax.invert_yaxis(); ax.grid(axis="x", alpha=0.25, ls=":")
     for s in ("top", "right"): ax.spines[s].set_visible(False)
     m, se, up = paired("v2_singleseq", "mf_L")
     m2, se2, _ = paired("oracle", "v2_msa")
-    fig.text(0.72, 0.62, f"Contacts beat the best\nsingle-sequence model\n"
+    fig.text(0.72, 0.70, f"Contacts beat the best\nsingle-sequence model\n"
              f"{m:+.3f} ± {se:.3f}",
              fontsize=13.5, color=WARN, fontweight="bold", va="top", linespacing=1.6)
-    fig.text(0.72, 0.45, f"Oracle contacts match\nProtenix v2 + MSA\n"
+    fig.text(0.72, 0.55, f"Oracle contacts match\nProtenix v2 + MSA\n"
              f"{m2:+.3f} ± {se2:.3f}",
              fontsize=13.5, color=ACCENT, fontweight="bold", va="top", linespacing=1.6)
-    fig.text(0.72, 0.28, "...so the ceiling is intact.\nThe shortfall is contact\nquality, "
+    fig.text(0.72, 0.40, "...so the ceiling is intact.\nThe shortfall is contact\nquality, "
              "not the approach.", fontsize=12.5, color=MUTE, va="top", linespacing=1.6)
+    fig.text(0.06, 0.205, "How the error bars are computed", fontsize=13,
+             fontweight="bold", color=INK)
+    fig.text(0.06, 0.158,
+             f"95% percentile bootstrap CI on each arm's mean, from {N_BOOT:,} "
+             f"resamples of the {N} targets drawn with replacement. Every arm is\n"
+             f"evaluated on the same resample, so the arms move together and the "
+             f"comparisons stay paired — which is why the differences\n"
+             f"quoted at right are tighter than the individual bars suggest. Those are "
+             f"paired standard errors on the per-target difference,\n"
+             f"not a subtraction of two CIs.",
+             fontsize=11, color=MUTE, va="top", linespacing=1.6)
     pdf.savefig(fig); plt.close(fig)
 
     # 5 -- the headline comparison and its control
