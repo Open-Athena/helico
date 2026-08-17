@@ -13,6 +13,10 @@ Earlier versions reported the unfiltered FoldBench-100 result (+0.229 lDDT over
 Protenix v2 single sequence). Only 15 of those 100 clear a 40% identity filter
 against MarinFold's training data, so that number appears nowhere here.
 
+Contacts come from `contacts-v1-exp199-cooldown-1.5B`, MarinFold's default
+since exp238. The previous default (`contacts-v1-exp199-1.5B`) is kept loaded as
+`mf_L` so the checkpoint-to-checkpoint delta can be quoted.
+
 The headline set is the FoldBench monomers -- exp226's 23 net-new plus the 15
 survivors of the original 100. CAMEO hard and CASP free modelling are benched
 and shown by class, but kept out of the headline: their depositions fall inside
@@ -43,7 +47,8 @@ W, H = 13.33, 7.5           # 16:9
 INK, MUTE = "#1a1a1a", "#5a5a5a"
 ACCENT, WARN, GOOD = "#1b5e9c", "#b8452f", "#2e7d32"
 
-ARMS = ["off", "v2_singleseq", "mf_L5", "mf_L2", "mf_L", "v2_msa", "oracle"]
+ARMS = ["off", "v2_singleseq", "cool_L5", "cool_L2", "cool_L", "mf_L",
+        "v2_msa", "oracle"]
 
 
 def load(arm):
@@ -198,12 +203,12 @@ with PdfPages(OUT) as pdf:
                 f"{N} homology-filtered FoldBench monomers  ·  Helico arms use no MSA")
     rows = [("Helico, no contacts", M["off"], MUTE),
             ("Protenix v2, single sequence", M["v2_singleseq"], MUTE),
-            ("Helico + MarinFold contacts", M["mf_L"], WARN),
+            ("Helico + MarinFold contacts", M["cool_L"], WARN),
             ("Protenix v2 + MSA", M["v2_msa"], GOOD),
             ("Helico + oracle contacts", M["oracle"], ACCENT)]
     ax = fig.add_axes([0.33, 0.33, 0.34, 0.42])
     ys = range(len(rows))
-    cis = [boot_ci(a) for a in ("off", "v2_singleseq", "mf_L", "v2_msa", "oracle")]
+    cis = [boot_ci(a) for a in ("off", "v2_singleseq", "cool_L", "v2_msa", "oracle")]
     err = [[v - lo for (_l, v, _c), (lo, _hi) in zip(rows, cis)],
            [hi - v for (_l, v, _c), (_lo, hi) in zip(rows, cis)]]
     ax.barh(list(ys), [r[1] for r in rows], color=[r[2] for r in rows], alpha=0.85,
@@ -215,7 +220,7 @@ with PdfPages(OUT) as pdf:
     ax.set_xlim(0, 1.0); ax.set_xlabel("FoldBench lDDT", fontsize=12)
     ax.invert_yaxis(); ax.grid(axis="x", alpha=0.25, ls=":")
     for s in ("top", "right"): ax.spines[s].set_visible(False)
-    m, se, up = paired("v2_singleseq", "mf_L")
+    m, se, up = paired("v2_singleseq", "cool_L")
     m2, se2, _ = paired("oracle", "v2_msa")
     fig.text(0.72, 0.70, f"Contacts beat the best\nsingle-sequence model\n"
              f"{m:+.3f} ± {se:.3f}",
@@ -241,20 +246,21 @@ with PdfPages(OUT) as pdf:
     # 5 -- the headline comparison and its control
     fig = slide(pdf, "Predicted contacts beat single-sequence folding",
                 "against Protenix v2 — the stronger baseline — in single-sequence mode")
-    m, se, up = paired("v2_singleseq", "mf_L")
-    mo, seo, upo = paired("off", "mf_L")
+    m, se, up = paired("v2_singleseq", "cool_L")
+    mo, seo, upo = paired("off", "cool_L")
+    mc, sec, upc = paired("mf_L", "cool_L")
     bullets(fig, [
         (f"vs Protenix v2 single sequence:  {m:+.3f} ± {se:.3f} lDDT   "
          f"(t = {m/se:.1f}, better on {up}/{N})", WARN),
         (f"vs the same Helico weights with contacts withheld:  {mo:+.3f} ± {seo:.3f}   "
          f"(better on {upo}/{N})", None),
-        ("Protenix v2 is genuinely the harder baseline, and this is like-for-like:\n"
-         "both see one sequence and no alignment.", None),
-    ], y0=0.68, dy=0.135)
+        (f"MarinFold's new default checkpoint is worth {mc:+.3f} ± {sec:.3f} over the\n"
+         f"one it replaced, on the same targets through the same folding model.", ACCENT),
+    ], y0=0.70, dy=0.145)
     mm, sse, _ = paired("v2_singleseq", "off")
-    fig.text(0.075, 0.31, "The control that makes this credible", fontsize=16,
+    fig.text(0.075, 0.275, "The control that makes this credible", fontsize=16,
              fontweight="bold", color=INK)
-    fig.text(0.075, 0.245,
+    fig.text(0.075, 0.213,
              f"Our own contacts-off arm scores {M['off']:.3f} — BELOW Protenix v2's "
              f"{M['v2_singleseq']:.3f} ({mm:+.3f} ± {sse:.3f}).\n"
              f"The fine-tuned model has no intrinsic edge with no information. "
@@ -293,7 +299,7 @@ with PdfPages(OUT) as pdf:
     # 8 -- how many contacts to emit
     fig = slide(pdf, "How many contacts should MarinFold emit?",
                 "same targets, three truncation budgets")
-    q = [("top-L/5", M["mf_L5"]), ("top-L/2", M["mf_L2"]), ("top-L", M["mf_L"])]
+    q = [("top-L/5", M["cool_L5"]), ("top-L/2", M["cool_L2"]), ("top-L", M["cool_L"])]
     ax = fig.add_axes([0.37, 0.34, 0.28, 0.37])
     ax.plot([0, 1, 2], [v for _l, v in q], "-o", color=WARN, lw=2, ms=9)
     for x, (lab, v) in enumerate(q):
@@ -306,8 +312,8 @@ with PdfPages(OUT) as pdf:
     ax.set_ylim(0.34, 0.58); ax.set_ylabel("FoldBench lDDT", fontsize=11)
     ax.grid(alpha=0.25, ls=":")
     for s in ("top", "right"): ax.spines[s].set_visible(False)
-    nat_l5 = sum(D["mf_L5"][k] for k in NAT) / len(NAT)
-    nat_l = sum(D["mf_L"][k] for k in NAT) / len(NAT)
+    nat_l5 = sum(D["cool_L5"][k] for k in NAT) / len(NAT)
+    nat_l = sum(D["cool_L"][k] for k in NAT) / len(NAT)
     fig.text(0.075, 0.235, "But this does not generalise off FoldBench", fontsize=15,
              fontweight="bold", color=INK)
     fig.text(0.075, 0.18,
@@ -335,7 +341,7 @@ with PdfPages(OUT) as pdf:
     # 10 -- the remaining gap
     m2, se2, _ = paired("oracle", "v2_msa")
     fig = slide(pdf, "The remaining gap to MSAs is contact quality",
-                f"MarinFold top-L {M['mf_L']:.3f}  ->  Protenix v2 + MSA {M['v2_msa']:.3f}")
+                f"MarinFold top-L {M['cool_L']:.3f}  ->  Protenix v2 + MSA {M['v2_msa']:.3f}")
     bullets(fig, [
         (f"Oracle contacts reach {M['oracle']:.3f} against Protenix v2 + MSA's "
          f"{M['v2_msa']:.3f}.\nThat difference, {m2:+.3f} ± {se2:.3f}, is not "
@@ -344,7 +350,7 @@ with PdfPages(OUT) as pdf:
          "targets where alignments are hardest to build. Nothing about the approach\n"
          "caps out below MSAs.", None),
         (f"The entire shortfall is the quality of the contacts we can predict today:\n"
-         f"{M['mf_L']:.3f} with real ones against {M['oracle']:.3f} with perfect ones.", WARN),
+         f"{M['cool_L']:.3f} with real ones against {M['oracle']:.3f} with perfect ones.", WARN),
     ], y0=0.68, dy=0.155)
     pdf.savefig(fig); plt.close(fig)
 

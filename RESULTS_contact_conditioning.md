@@ -18,8 +18,11 @@ single sequence on 91 FoldBench monomers. Only 15 of the original FoldBench 100
 clear the homology filter, so that number is withdrawn** — it is reported here
 only as the size of the contamination effect. The filtered result is +0.091.
 
-Contacts come from MarinFold `contacts-v1-exp199-1.5B`, vote-aggregated across
-100 rollouts and truncated to a top-k list.
+Contacts come from **`contacts-v1-exp199-cooldown-1.5B`**, MarinFold's default
+since [exp238](https://github.com/Open-Athena/MarinFold/pull/239) — vote-aggregated
+across 100 rollouts and truncated to a top-k list. It is worth
+**+0.028 ± 0.013 lDDT** over the checkpoint it replaced, measured on these same
+targets through the same folding model.
 
 Weights: [timodonnell/helico](https://huggingface.co/timodonnell/helico)
 (`contacts-msafree-01`, step 6000 — the checkpoint every number below describes).
@@ -72,21 +75,25 @@ CASP free modelling are benched and reported
 their depositions fall inside Protenix v2's training window, so its baselines on
 them read high in a way the FoldBench slices do not.
 
-| arm | MSA? | lDDT |
-| --- | --- | --- |
-| Helico, no contacts | no | 0.388 |
-| **Protenix v2, single sequence** | no | **0.421** |
-| Helico + MarinFold, top-L/5 | no | 0.480 |
-| Helico + MarinFold, top-L/2 | no | 0.508 |
-| **Helico + MarinFold, top-L** | no | **0.513** |
-| **Protenix v2 + MSA** | **yes** | **0.803** |
-| Helico + oracle contacts | no | 0.806 |
+| arm | MSA? | lDDT | 95% CI |
+| --- | --- | --- | --- |
+| Helico, no contacts | no | 0.388 | [0.340, 0.443] |
+| **Protenix v2, single sequence** | no | **0.421** | [0.375, 0.470] |
+| Helico + MarinFold, top-L/5 | no | 0.491 | |
+| Helico + MarinFold, top-L/2 | no | 0.538 | |
+| **Helico + MarinFold, top-L** | no | **0.540** | [0.481, 0.599] |
+| **Protenix v2 + MSA** | **yes** | **0.803** | [0.765, 0.837] |
+| Helico + oracle contacts | no | 0.806 | [0.749, 0.850] |
+
+Per-arm intervals are 95% percentile bootstrap over 10,000 resamples of the 38
+targets, every arm on the same resample.
 
 | comparison | Δ lDDT | 95% CI | better on |
 | --- | --- | --- | --- |
-| **MarinFold contacts vs Protenix v2 single sequence** | **+0.091 ± 0.028** | [+0.036, +0.145] | 26/38 |
-| MarinFold contacts vs the same weights, contacts withheld | +0.124 ± 0.029 | [+0.069, +0.181] | 27/38 |
-| Protenix v2 + MSA vs MarinFold contacts | +0.291 ± 0.035 | [+0.221, +0.359] | 33/38 |
+| **MarinFold contacts vs Protenix v2 single sequence** | **+0.119 ± 0.031** | [+0.059, +0.178] | 28/38 |
+| MarinFold contacts vs the same weights, contacts withheld | +0.152 ± 0.032 | [+0.090, +0.215] | 25/38 |
+| MarinFold's new default vs the checkpoint it replaced | +0.028 ± 0.013 | [+0.004, +0.054] | 26/38 |
+| Protenix v2 + MSA vs MarinFold contacts | +0.263 ± 0.035 | [+0.196, +0.330] | 32/38 |
 | **Protenix v2 + MSA vs oracle contacts** | **−0.002 ± 0.028** | [−0.052, +0.056] | 14/38 |
 
 Intervals are 95% percentile bootstrap on the *per-target difference*, 10,000
@@ -97,7 +104,7 @@ interval for a difference.
 
 Three things follow.
 
-**Contacts beat the strongest single-sequence model**, by +0.091 ± 0.028 on 26
+**Contacts beat the strongest single-sequence model**, by +0.119 ± 0.031 on 28
 of 38 targets. This is like-for-like: both see one sequence and no alignment.
 
 **Oracle contacts match Protenix v2 + MSA** — −0.002 ± 0.028, indistinguishable.
@@ -183,6 +190,10 @@ Other controls:
 **85% of the original FoldBench 100 has a ≥ 40% homolog in MarinFold's training
 data**; 15 survive. exp226's 23 net-new monomers are all natural and all clear
 the filter, which is why they nearly double the usable set.
+
+The 38 headline targets, with per-arm lDDT and each one's best identity to
+MarinFold's training data, are in
+[`byclass/data/headline_38_targets.csv`](experiments/marinfold_contacts/byclass/data/headline_38_targets.csv).
 
 The 100 were not chosen by this project — `foldbench100` is MarinFold exp89's
 standing evaluation set, fixed long before this experiment existed. The 234

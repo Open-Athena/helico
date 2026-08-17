@@ -18,7 +18,9 @@ Neither filter alone is enough. The first leaves targets Helico itself trained
 on; the second leaves targets whose fold MarinFold has effectively memorised.
 238 of the 380 benched targets clear both; 67 of those are natural proteins.
 
-Helico arms come from `modal/bench_byclass.py`; Protenix v2 runs through
+Contacts come from `contacts-v1-exp199-cooldown-1.5B`, MarinFold's current
+default since exp238 -- 100 rollouts, occurrence-frequency voting, truncated at
+top-L. Helico arms come from `modal/bench_byclass.py`; Protenix v2 runs through
 ByteDance's own implementation. The oracle arm conditions on contacts derived
 from the answer, so it is a ceiling, not a prediction.
 """
@@ -48,7 +50,7 @@ GROUPS = [
 SERIES = [
     ("off", "Helico, no contacts", "#7a7a7a"),
     ("v2_singleseq", "Protenix v2, single sequence", "#a0762b"),
-    ("mf_L", "Helico + MarinFold contacts", "#b8452f"),
+    ("cool_L", "Helico + MarinFold contacts", "#b8452f"),
     ("v2_msa", "Protenix v2 + MSA", "#1a7f5a"),
     ("oracle", "Helico + oracle contacts", "#1b5e9c"),
 ]
@@ -113,10 +115,10 @@ def main():
           + "".join(f" {mean(s[0], natural):14.3f}" for s in present))
     print()
     for lab, ks in [("natural", natural), *[(g, by[g]) for g, _l in GROUPS if by[g]]]:
-        m, se, up = paired_stats(arms["off"], arms["mf_L"], ks)
+        m, se, up = paired_stats(arms["off"], arms["cool_L"], ks)
         line = f"  contacts vs none, {lab:22s} {m:+.3f} +/- {se:.3f}  ({up}/{len(ks)})"
         if arms.get("v2_singleseq"):
-            m2, se2, up2 = paired_stats(arms["v2_singleseq"], arms["mf_L"], ks)
+            m2, se2, up2 = paired_stats(arms["v2_singleseq"], arms["cool_L"], ks)
             line += f"   vs Protenix v2 SS {m2:+.3f} +/- {se2:.3f} ({up2}/{len(ks)})"
         print(line)
 
