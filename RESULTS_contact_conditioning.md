@@ -2,17 +2,31 @@
 
 **Status:** exploratory. Results below are from a *warm-started* model.
 
-Every number here uses **MarinFold predicted contacts** (or, where labelled,
-oracle contacts from the ground-truth structure as a ceiling). Earlier versions of
-this document led with synthetic contacts — the ground-truth map degraded with a
-uniform noise model. Those numbers were an upper bound that did not transfer, and
-they have been removed.
+**Every number here is homology-filtered.** A target is reported only if it
+survives both of:
+
+| filter | what it removes |
+| --- | --- |
+| **MarinFold homology** ([exp226](https://github.com/Open-Athena/MarinFold/issues/226)'s `eval2`) | anything with ≥ 40% identity to either MarinFold training arm — 4.1M AFDB + 66.8M ESM-Atlas, mmseqs `-s 7.5`, hit counted iff evalue ≤ 1e-3 and qcov ≥ 0.50 |
+| **Helico training window** | anything released before 2021-09-30, Helico's training cutoff |
+
+Neither is optional. The first leaves targets Helico trained on; the second
+leaves targets whose fold MarinFold has effectively memorised.
+
+**An earlier version of this document led with +0.229 lDDT over Protenix v2
+single sequence on 91 FoldBench monomers. Only 15 of the original FoldBench 100
+clear the homology filter, so that number is withdrawn** — it is reported here
+only as the size of the contamination effect. The filtered result is +0.091.
+
+Contacts come from MarinFold `contacts-v1-exp199-1.5B`, vote-aggregated across
+100 rollouts and truncated to a top-k list.
 
 Weights: [timodonnell/helico](https://huggingface.co/timodonnell/helico)
 (`contacts-msafree-01`, step 6000 — the checkpoint every number below describes).
 
 Design doc and full research record:
 [`.agents/project/20260806_contact_conditioned_folding.md`](.agents/project/20260806_contact_conditioned_folding.md).
+Slides: [`.agents/project/slides/contact_conditioned_folding.pdf`](.agents/project/slides/contact_conditioned_folding.pdf).
 
 ---
 
@@ -47,68 +61,98 @@ contact predictor.
 
 ## Headline result
 
-**Predicted contacts beat the strongest single-sequence baseline by a wide
-margin, and do not yet reach MSAs.** The margin depends on MarinFold supplying a
-better contact map than Protenix v2 does, which holds on this target class and
-not on all of them — see
-[the R-precision reconciliation](#reconciling-with-marinfolds-own-r-precision-comparison).
+**Predicted contacts beat the strongest single-sequence baseline, and a perfect
+contact map is worth as much as an alignment.** Both on targets neither model
+has memorised.
 
-![predicted contacts](.agents/project/figures/marinfold_real_contacts.png)
-
-91 paired FoldBench monomer targets. Contacts come from MarinFold
-`contacts-v1-exp199-1.5B` via
-[MarinFold exp211](https://github.com/Open-Athena/MarinFold/issues/211)'s
-rollouts, aggregated by vote across 100 rollouts and truncated to a top-k list.
-
-Protenix v1 **and** v2 appear as baselines, each with and without MSAs. v2 runs
-through the **official ByteDance implementation** (`protenix==2.0.0`, model
-`protenix-v2`) rather than Helico's reimplementation, since v2 changes the
-architecture. Both v2 arms use Protenix's own recommended inference settings
-(5 samples / 10 cycles / 200 steps) — more compute than the Helico arms get at
-3 samples / 6 cycles, which deliberately favours the baseline.
+The headline set is the FoldBench monomers that clear both filters: exp226's 23
+net-new plus the 15 survivors of the original 100, **n = 38**. CAMEO hard and
+CASP free modelling are benched and reported
+[by class](#where-the-gain-exists-and-where-it-does-not) but excluded here —
+their depositions fall inside Protenix v2's training window, so its baselines on
+them read high in a way the FoldBench slices do not.
 
 | arm | MSA? | lDDT |
 | --- | --- | --- |
-| Helico, no contacts | no | 0.368 |
-| Protenix v1, single sequence | no | 0.386 |
-| Helico + contacts read off v2's single-seq structure | no | 0.404 |
-| **Protenix v2, single sequence** | no | **0.409** |
-| Helico + single rollout, top-L | no | 0.566 |
-| **Helico + MarinFold, top-L/5** | no | **0.575** |
-| **Helico + MarinFold, top-L/2** | no | **0.626** |
-| **Helico + MarinFold, top-L** | no | **0.638** |
-| Protenix v1 + MSA | **yes** | 0.855 |
-| Helico + oracle contacts | no | 0.862 |
-| **Protenix v2 + MSA** | **yes** | **0.865** |
+| Helico, no contacts | no | 0.388 |
+| **Protenix v2, single sequence** | no | **0.421** |
+| Helico + MarinFold, top-L/5 | no | 0.480 |
+| Helico + MarinFold, top-L/2 | no | 0.508 |
+| **Helico + MarinFold, top-L** | no | **0.513** |
+| **Protenix v2 + MSA** | **yes** | **0.803** |
+| Helico + oracle contacts | no | 0.806 |
 
 | comparison | Δ lDDT | t | better on |
 | --- | --- | --- | --- |
-| Protenix v2 vs v1, single sequence | +0.023 ± 0.011 | 2.2 | 51/91 |
-| Protenix v2 vs v1, with MSA | +0.010 ± 0.004 | 2.5 | 60/91 |
-| **MarinFold vs v2 single sequence** | **+0.229 ± 0.022** | 10.4 | 76/91 |
-| **v2 + MSA vs MarinFold** | **+0.227 ± 0.019** | 11.8 | 87/91 |
-| **v2 + MSA vs oracle contacts** | +0.004 ± 0.006 | 0.6 | 59/91 |
+| **MarinFold contacts vs Protenix v2 single sequence** | **+0.091 ± 0.028** | 3.3 | 26/38 |
+| MarinFold contacts vs the same weights, contacts withheld | +0.124 ± 0.029 | 4.3 | 27/38 |
+| Protenix v2 + MSA vs MarinFold contacts | +0.291 ± 0.035 | 8.2 | 33/38 |
+| **Protenix v2 + MSA vs oracle contacts** | **−0.002 ± 0.028** | −0.1 | 14/38 |
 
 Three things follow.
 
-**Predicted contacts beat the strongest single-sequence baseline.** v2 is genuinely
-better than v1 without MSAs (+0.023), and MarinFold contacts still clear it
-by **+0.229 ± 0.022** on 76 of 91 targets. It holds at every contact budget, and
-even a single un-aggregated rollout beats it.
+**Contacts beat the strongest single-sequence model**, by +0.091 ± 0.028 on 26
+of 38 targets. This is like-for-like: both see one sequence and no alignment.
 
-**They still do not reach MSAs.** v2+MSA leads predicted contacts by
-**+0.227 ± 0.019** on 87 of 91.
+**Oracle contacts match Protenix v2 + MSA** — −0.002 ± 0.028, indistinguishable.
+A perfect contact map is worth as much as an alignment *on exactly the targets
+where alignments are hardest to build*, which is a stronger version of this claim
+than the unfiltered set could support. Nothing about the approach caps out below
+MSAs; **the entire shortfall is contact quality**.
 
-**Oracle contacts match the best MSA model.** v2+MSA vs oracle is
-+0.004 ± 0.006 — indistinguishable. A perfect contact map is worth as much as an
-alignment to the best available model, so nothing about the approach caps out
-below MSAs; **the entire shortfall is contact quality**.
+**They do not yet reach MSAs.** Protenix v2 + MSA leads real contacts by
++0.291 ± 0.035.
 
 The control that makes the first claim credible: **our own contacts-off arm
-scores 0.368, below Protenix v2's 0.409** (−0.042 ± 0.008, t=−5.0). The fine-tuned model
-has no intrinsic advantage in the no-information condition — if anything it gave
-up a little single-sequence capability during contact fine-tuning. All of the
-+0.229 comes from the contacts.
+scores 0.388, below Protenix v2's 0.421** (−0.033 ± 0.014). The fine-tuned model
+has no intrinsic advantage in the no-information condition, so the gain is the
+contacts, not the fine-tuning.
+
+### Where the gain exists, and where it does not
+
+![folding accuracy by target class](.agents/project/figures/folding_by_dataset.png)
+
+All 238 doubly-filtered targets, five arms each.
+
+| class | n | no contacts | v2 single seq | + MarinFold | v2 + MSA | oracle |
+| --- | --- | --- | --- | --- | --- | --- |
+| FoldBench, exp226 net-new | 23 | 0.348 | 0.399 | **0.495** | 0.829 | 0.781 |
+| FoldBench, original-100 survivors | 15 | 0.449 | 0.455 | **0.539** | 0.764 | 0.843 |
+| CAMEO hard | 24 | 0.570 | **0.631** | 0.553 | 0.745 | 0.783 |
+| CASP free modelling | 8 | 0.416 | **0.485** | 0.383 | 0.587 | 0.819 |
+| de novo designs | 168 | 0.807 | 0.810 | 0.751 | 0.815 | 0.854 |
+| **natural, pooled** | **67** | 0.437 | 0.491 | 0.500 | 0.761 | 0.800 |
+
+**The gain needs both a weak single-sequence baseline and accurate contacts, and
+only the FoldBench slices have both.** De novo designs have no headroom — Helico
+scores 0.807 with no contacts at all, because designed backbones are idealised
+and regular. CAMEO hard and CASP FM have plenty of headroom (oracle is worth
++0.21 and +0.40 there) but MarinFold's contacts are too inaccurate to claim it:
+R-precision 0.38 and 0.20, against 0.41–0.44 on FoldBench.
+
+Pooled over all 67 filtered natural targets, contacts are worth +0.063 ± 0.020
+against no contacts but only **+0.009 ± 0.022 against Protenix v2 single
+sequence** — a tie. That mirrors exp226's own contact-level finding on the same
+targets (+0.011 ± 0.029 R-precision), which is the strongest evidence in this
+project that **the folding model transmits contact quality faithfully**: it wins
+where the contacts are better and loses where they are worse, at almost exactly
+the measured margin.
+
+### How many contacts should be emitted
+
+| set | no contacts | top-L/5 | top-L/2 | top-L |
+| --- | --- | --- | --- | --- |
+| FoldBench (n=38) | 0.388 | 0.480 | 0.508 | **0.513** |
+| natural, pooled (n=67) | 0.437 | **0.505** | 0.505 | 0.500 |
+| designed (n=171) | 0.808 | 0.792 | 0.767 | 0.752 |
+
+On FoldBench more contacts is better. Pooled over natural targets the trend
+flattens and reverses, and on designed proteins **every extra contact costs
+accuracy monotonically**. At ~0.4 precision the highest-voted fifth carries most
+of the true contacts and the tail adds false positives faster than true ones.
+The unfiltered analysis showed a clean monotone gain to top-L and is what made
+top-L the default; the right truncation depends on precision, and precision
+varies sharply by target class.
 
 Other controls:
 
@@ -116,120 +160,108 @@ Other controls:
   arms are identical by construction. Measured: +0.0004 (sd 0.026).
 - **Zero-init no-op.** At step 0 the arms coincide — see
   [Training progress](#training-progress).
-- **No benchmark overlap.** 0 of the FoldBench targets appear among the 168,102
-  train-eligible structures.
+- **Independent pipeline agreement.** The by-class results run through
+  `modal/bench_byclass.py` against ground truths converted from MarinFold's own
+  PDB copies — a completely separate path from `modal/bench.py`. On the same
+  FoldBench targets the two agree to within 0.01 lDDT.
 
-## What we benchmark on, and how it was chosen
-
-FoldBench is far larger than this subset. The full chain:
+## What we benchmark on, and why it is this small
 
 | stage | targets |
 | --- | --- |
-| FoldBench, all categories | 1823 |
-| `monomer_protein` category | 334 |
-| MarinFold exp211's `foldbench100` subset (the targets predicted contacts exist for) | 100 |
-| index map verified end-to-end (2 dropped: sequences would not align) | 98 |
-| Protenix +MSA arm needs a pre-computed a3m (7 dropped) | **91** |
+| FoldBench monomers (exp12's 100 + exp226's 234) | 334 |
+| contacts and ground truth available (MarinFold exp211 / exp226) | 123 |
+| outside Helico's training window (released ≥ 2021-09-30) | 123 |
+| **< 40% identity to MarinFold's training data (exp226 `eval2`)** | **38** |
 
-All arms are restricted to the common 91 so every comparison stays paired. The
-full target list is in
-[`experiments/marinfold_contacts/arms/targets.csv`](experiments/marinfold_contacts/arms/targets.csv).
+**85% of the original FoldBench 100 has a ≥ 40% homolog in MarinFold's training
+data**; 15 survive. exp226's 23 net-new monomers are all natural and all clear
+the filter, which is why they nearly double the usable set.
 
-The 100 were **not** chosen by this project: `foldbench100` is MarinFold exp89's
-standing evaluation set, fixed long before this experiment existed, and exp211
-simply reran the current model on it. Checked for selection bias against the 236
-unselected monomers: lengths match (median 227 vs 226).
+The 100 were not chosen by this project — `foldbench100` is MarinFold exp89's
+standing evaluation set, fixed long before this experiment existed. The 234
+net-new are the rest of FoldBench's `monomer_protein.csv` at exp12's pinned
+commit.
 
-Monomers only, so these numbers are not comparable to the assembly-set results
-reported in earlier revisions of this document.
+Beyond FoldBench, 200 further targets clear both filters and are reported by
+class: 24 CAMEO hard, 8 CASP free modelling, 168 de novo designs. The full list
+with per-target filter flags is in
+[`experiments/marinfold_contacts/byclass/data/targets.csv`](experiments/marinfold_contacts/byclass/data/targets.csv).
+
+Monomers only.
 
 ## Is MarinFold actually supplying better contacts?
 
-If Protenix v2's own single-sequence structure already implies contacts as good
-as MarinFold's, then the gain would be Helico extracting more from equivalent
-information rather than the contact map being better. Measured directly: run
-Protenix v2 in single-sequence mode, run pyconfind on its predicted structure,
-and feed *those* contacts to Helico.
+If Protenix v2's own single-sequence structure already implied contacts as good
+as MarinFold's, the gain would be Helico extracting more from equivalent
+information rather than the contact map being better. It does not. R-precision
+on exp226's `eval2`, the same homology filter:
 
-| contact source | precision | recall | contacts emitted |
-| --- | --- | --- | --- |
-| Protenix v2 single-seq structure → pyconfind | 0.261 | 0.263 | 270 |
-| MarinFold exp199, top-L | **0.505** | **0.564** | 265 |
+| target class | n | Protenix v2 single seq | MarinFold exp199 | Protenix v2 + MSA |
+| --- | --- | --- | --- | --- |
+| FoldBench, exp226 net-new | 23 | 0.243 | **0.407** | 0.805 |
+| FoldBench, original-100 survivors | 15 | 0.385 | **0.440** | 0.763 |
+| CAMEO hard | 24 | **0.525** | 0.381 | 0.697 |
+| CASP free modelling | 19 | **0.215** | 0.201 | 0.546 |
+| de novo designs | 226 | **0.798** | 0.613 | 0.804 |
+| **natural, pooled** | **78** | 0.326 | 0.337 | 0.698 |
 
-(against 261 true contacts per target on average — a like-for-like budget.)
+MarinFold leads on both FoldBench slices — by +0.164 ± 0.052 and +0.055 ± 0.036 —
+and those are exactly the slices where the folding gain appears. It loses on
+designs and CAMEO hard, and those are exactly where folding loses too. The
+folding model transmits contact quality; it does not add or subtract much of its
+own.
 
-MarinFold is ~1.9× more precise at ~2.1× the recall. And feeding the
-v2-derived contacts to Helico gives **0.404**, versus **0.409** for Protenix v2
-itself — a deficit of 0.006 ± 0.001. Helico recovers essentially all of v2's
-accuracy from a contact map read off v2's own output, and adds nothing on top of
-it: it faithfully tracks contact quality. So the gain over single-sequence
-folding is the contact map, not the folding model.
+A direct version of the same control was run on the *unfiltered* 91-target set:
+contacts read off Protenix v2's single-sequence structure with pyconfind scored
+0.261 precision against MarinFold's 0.505 at a matched budget, and feeding those
+v2-derived contacts to Helico reproduced Protenix v2's own lDDT to within
+0.006. Those numbers are on targets the homology filter removes and are not part
+of the headline, but the conclusion — Helico adds nothing on top of a contact
+map, it tracks it — is the same one the filtered table above supports.
 
 ### Reconciling with MarinFold's own R-precision comparison
 
 MarinFold's internal evaluations report its models as on par with — or slightly
 worse than — Protenix v2 single sequence at contact recapitulation, which appears
-to contradict the 1.9× above. Both are correct. The aggregate is a mean over a
-target mix that is 71% designed proteins, and the two methods rank differently by
-target class.
+to contradict the FoldBench rows above. Both are correct: the aggregate is
+dominated by designed proteins.
 
 ![contact accuracy by target class](.agents/project/figures/contact_accuracy_by_dataset.png)
 
-R-precision (precision among the top-R predictions, R = the true contact count),
-554 targets scored by every arm, taken verbatim from MarinFold's own experiment
-outputs: exp199's rows for MarinFold, exp74's for Protenix v2. Protenix contacts
-are read off its predicted structure with pyconfind — the same route used for the
-v2-derived control above.
+**74% of `eval2` is designed protein** (226 of 307), and that is the one class
+where Protenix v2 single sequence is much the better contact predictor — 0.798
+against 0.613. Pooled, that produces a near-tie, and on the natural subset the
+tie is genuine (0.337 vs 0.326). The disagreement is entirely composition.
 
-| target class | n | MarinFold exp199 | Protenix v2, single seq | Protenix v2 + MSA | MarinFold − v2 SS |
-| --- | --- | --- | --- | --- | --- |
-| de novo designs (`denovo_pdb`) | 396 | 0.649 | **0.723** | 0.828 | −0.074 ± 0.014 |
-| natural: FoldBench monomers | 100 | **0.511** | 0.282 | 0.847 | **+0.230 ± 0.027** |
-| natural: CAMEO hard | 32 | 0.373 | **0.442** | 0.678 | −0.069 ± 0.054 |
-| natural: CASP free modelling | 26 | 0.198 | 0.211 | 0.596 | −0.013 ± 0.026 |
-| **pooled** | **554** | 0.587 | 0.603 | 0.812 | −0.016 ± 0.013 |
-
-The pooled row is the reported tie, and it is dominated by `denovo_pdb` — 71% of
-the targets, and the one class where Protenix v2 single sequence is much the
-better contact predictor. Designed proteins are idealised and highly regular, and
-a structure predictor handles them well without an alignment.
-
-**The advantage is confined to `foldbench100`, and "natural vs designed" does not
-explain it.** MarinFold wins there by +0.230, but loses on CAMEO hard (−0.069)
-and ties on CASP free modelling (−0.013) — both natural sets. What separates
-`foldbench100` from those two is difficulty and novelty: CAMEO hard and CASP FM
-are selected for low homology and novel folds, and MarinFold degrades sharply on
-them (0.373 and 0.198, against 0.511). So the honest statement is narrower than
-"natural proteins": *MarinFold supplies better contacts than Protenix v2 single
-sequence on ordinary, well-represented natural PDB monomers, and not elsewhere.*
-
-That is a real scope limitation on the folding result, since `foldbench100` is
-exactly the set it is measured on. It is not a discrepancy between the two
-measurements: the independent measurement here (0.261 for v2 SS on this set)
-matches MarinFold's own exp74 measurement of 0.282 within the difference in
-target subset (91 vs 100), and the pipelines agree.
-
-Two further notes from the same data:
-
-- **Protenix's distogram head is the wrong place to read contacts from.**
-  Single-sequence distogram R-precision is 0.434 / 0.227 / 0.321 / 0.210 across
-  the four classes — below the structure-derived numbers everywhere. Running
-  pyconfind on the predicted structure is the stronger baseline, and it is the
-  one used throughout.
-- **With an MSA, Protenix v2 is far ahead of everything on every class**
-  (0.596–0.847). Contact prediction is not where the alignment stops mattering.
+This is the load-bearing scope limit on the whole result: **MarinFold supplies
+better contacts than Protenix v2 single sequence on natural FoldBench monomers,
+and not on designed proteins or on the hardest natural sets.** The folding result
+inherits that limit exactly, which is why it is reported on FoldBench and broken
+out by class everywhere else.
 
 ## Training-set contamination
 
-MarinFold's training corpora were checked for homologs of the 98 benchmark
-targets with mmseqs (not the earlier coarse check, which reported 2/98 and was
-wrong).
+Handled by construction rather than as a caveat: every number in this document
+is restricted to
+[exp226's `eval2`](https://github.com/Open-Athena/MarinFold/issues/226), which
+searched all 776 candidate targets against **both** MarinFold training arms —
+4.13M AFDB (AlphaFold2 labels) and 66.76M ESM-Atlas (ESMFold2 distillation) —
+with mmseqs `-s 7.5`, counting a hit only at evalue ≤ 1e-3 and qcov ≥ 0.50.
 
-AFDB distillation corpus: **76/98 targets have a homolog at ≥25% identity, 27 at
-≥50%**. But identity does not predict accuracy — r = −0.044 between a target's
-best homolog identity and its lDDT — and dropping every target with a ≥50%
-homolog *strengthens* the headline (+0.2587 vs +0.229). The ESM-Atlas scan is
-still running.
+Two findings from that search are worth carrying over:
+
+- **Checking one corpus alone overcounts survivors by ~3×.** Among the 222
+  net-new FoldBench monomers, AFDB alone would have kept 76 and ESM-Atlas alone
+  62; against both, 23 survive. The arms are complementary, not redundant, and
+  every earlier overlap check in either project looked at AFDB only.
+- **FoldBench is the dirtiest slice available**: 85% of it fails a 40% filter,
+  against 43% of the de novo designs.
+
+An earlier in-house check reported that 76 of 98 FoldBench targets had an AFDB
+homolog at ≥ 25% identity while identity did not predict accuracy (r = −0.044).
+That analysis is superseded: it covered one arm, one threshold, and a target set
+that is no longer the reporting set.
 
 ## The index map, which nearly broke this
 
@@ -249,40 +281,39 @@ helico's own `oracle_contact_state` at mean Jaccard 0.998 (min 0.984), pinned by
 
 ![learning to use contacts](.agents/project/figures/contact_conditioning_accuracy.png)
 
-A checkpoint sweep of `contacts-msafree-01` on the same 91 targets, so it is
-directly comparable to everything above. Each checkpoint is benched with
-MarinFold contacts, with oracle contacts, and with contacts withheld.
+A checkpoint sweep of `contacts-msafree-01`, restricted to the 11 FoldBench
+monomers that clear the homology filter and are paired across every checkpoint
+and reference arm. Small, but the alternative is a training curve measured on
+targets MarinFold has memorised.
 
 | step | contacts withheld | MarinFold, top-L | oracle |
 | --- | --- | --- | --- |
-| 0 *(warm start)* | 0.310 | 0.307 | 0.307 |
-| 1000 | 0.362 | 0.626 | 0.829 |
-| 2000 | — | 0.629 | 0.848 |
-| 3000 | — | 0.637 | 0.855 |
-| 5000 | — | 0.637 | 0.861 |
-| final | 0.368 | 0.638 | 0.862 |
+| 0 *(warm start)* | 0.362 | 0.368 | 0.364 |
+| 1000 | 0.489 | 0.587 | 0.818 |
+| 2000 | — | 0.585 | 0.853 |
+| 3000 | — | 0.596 | 0.858 |
+| 5000 | — | 0.586 | 0.860 |
+| final | 0.485 | 0.595 | 0.859 |
 
 **Step 0 is the control.** It is the warm start itself — Protenix v1 weights with
 `use_msa=False` and the contact projection still at its zero initialisation, so
 conditioning is an exact no-op and all three arms must coincide. They do: the
-spread across the three is **0.003**, and oracle-vs-withheld is
-−0.004 ± 0.003 (t=−1.1). The warm start is lossless and nothing leaks contact
-information through another path.
+spread is **0.004**, and oracle-vs-withheld is +0.004 ± 0.008 (n.s.). The warm
+start is lossless and nothing leaks contact information through another path.
 
 **Almost all of the learning happens in the first 1000 steps.** Steps 1000 →
-final add +0.012 ± 0.004 (t=3.3) with predicted contacts and +0.033 with oracle ones —
-real and small, but the pathway is essentially trained within one thousand steps.
+final add +0.009 ± 0.007 with predicted contacts — the pathway is essentially
+trained within one thousand steps.
 
-The contacts-withheld arm rises from 0.310 to 0.368 over the same span. That is
+The contacts-withheld arm rises from 0.362 to 0.485 over the same span. That is
 not contact learning: step 0 is the harsher `use_msa=False` lesion (see
 ["Single sequence" meant three different things](#single-sequence-meant-three-different-things)),
 and fine-tuning recovers part of what removing the MSA module cost. It ends
 *below* both Protenix single-sequence baselines, which is the control that keeps
 the contact effect attributable to contacts.
 
-At the final checkpoint, MarinFold contacts are worth **+0.270 ± 0.021** (t=12.8) over
-the same weights with contacts withheld, on 83 of 91 targets.
-
+At the final checkpoint, contacts are worth **+0.110 ± 0.048** (t=2.3) over the
+same weights with contacts withheld, and oracle contacts a further +0.264.
 
 ## Two bugs that mattered
 
@@ -373,18 +404,20 @@ favours the 48-block arm. A from-scratch sweep is still open.
    much the fine-tuning itself could be worth.
 3. **Monomers only.** Not comparable to the assembly-set numbers in earlier
    revisions, and untested on complexes.
-4. **The contact-quality advantage is confined to this target class.** On
-   MarinFold's own evaluation sets it beats Protenix v2 single sequence on
-   `foldbench100` by +0.230 R-precision, but *loses* on designed proteins
-   (−0.074) and on CAMEO hard (−0.069), and ties on CASP free modelling. The
-   folding result is measured on `foldbench100`, so it inherits that limit
-   directly and should not be read as a general claim. See
+4. **The advantage is confined to natural FoldBench monomers.** MarinFold's
+   contacts beat Protenix v2 single sequence there and lose on designed
+   proteins, CAMEO hard, and CASP free modelling — and the folding result wins
+   and loses in exactly the same places. Read the headline as a claim about that
+   target class, not about proteins in general. See
    [the R-precision reconciliation](#reconciling-with-marinfolds-own-r-precision-comparison).
-5. **Training false positives are drawn uniformly**, while real predictor errors
+5. **n = 38 in the headline.** Homology filtering is what costs the sample size.
+   The effect is large relative to its standard error (t = 3.3), but this is a
+   small set and the per-class breakdowns are smaller still — CASP FM is n = 8.
+6. **Training false positives are drawn uniformly**, while real predictor errors
    cluster near true contacts. The model has never been trained against the
    error distribution it actually faces. See
    [Conditioning schedule](#conditioning-schedule).
-6. **The MSA module still exists.** `use_msa=False` removes the MSA *input*;
+7. **The MSA module still exists.** `use_msa=False` removes the MSA *input*;
    the module is still constructed (~3M dead parameters). Deliberate for now, to
    keep warm starting simple.
 
@@ -471,36 +504,34 @@ Remaining known gaps, not yet addressed:
   asserts a very large number of true negatives. This is why the 50% level
   tracks close to 100% rather than sitting midway.
 
+## Open questions
+
+1. **Improve contact accuracy on natural proteins.** That is the entire gap:
+   R-precision on the filtered natural set is 0.337 against a ceiling of 1.0,
+   and oracle contacts already match Protenix v2 + MSA.
+2. **Retrain with structured false positives** — sample training FPs from
+   near-miss pairs rather than uniformly, so the model is trained against the
+   error distribution it actually faces.
+3. **Revisit the emitted budget.** top-L is best on FoldBench, but the trend
+   reverses pooled over natural targets and every extra contact costs accuracy
+   on designs. The right truncation depends on precision, which varies by class
+   — so the emitted budget probably should too.
+4. **Depth from scratch**, to remove the warm-start confound
+   ([helico#12](https://github.com/Open-Athena/helico/issues/12)).
+5. **Complexes.** Everything here is monomers.
+
 ## Reproducing
 
 ```bash
-uv run python .agents/project/figures/marinfold_real_contacts.py
+uv run python .agents/project/figures/folding_by_dataset.py
+uv run python .agents/project/figures/contact_accuracy_by_dataset.py
 uv run python .agents/project/figures/contact_conditioning_accuracy.py
+uv run python .agents/project/slides/make_slides.py
 ```
 
-Benchmark arms are produced by `modal/bench.py`:
-
-```bash
-HELICO_BENCH_CONTACTS_ARM=rollout_L modal run --detach modal/bench.py --checkpoint /ckpts/contacts-msafree-01/final.pt --output-dir bench_real
-```
-
-`HELICO_BENCH_ORACLE_CONTACTS=1` substitutes the ground-truth contact map.
-Protenix single-sequence uses `HELICO_BENCH_SINGLE_SEQ=1` (depth-1 MSA whose one
-row is the query). `HELICO_BENCH_NO_MSA=1` is a *different*, harsher ablation
-that removes the MSA module outright — see
-["Single sequence" meant three different things](#single-sequence-meant-three-different-things).
-
-Protenix v2 baselines run through ByteDance's own implementation:
-`modal/bench_protenix_v2.py`.
-
-## Open questions
-
-1. **Retrain with structured false positives** — sample training FPs from
-   near-miss pairs rather than uniformly, so the model is trained against the
-   error distribution it actually faces.
-2. **How accurate must contacts be?** The measured points are top-L/5 (p=0.80,
-   r=0.18) → 0.575, top-L/2 (0.68/0.38) → 0.626, top-L (0.51/0.56) → 0.638.
-   Locating the knee sets how much predictor headroom is worth chasing.
-3. **Depth from scratch**, to remove the warm-start confound
-   ([helico#12](https://github.com/Open-Athena/helico/issues/12)).
-4. **Complexes.** Everything here is monomers.
+The by-class target set is rebuilt with, in order,
+`experiments/marinfold_contacts/byclass/`'s `build_targets.py`,
+`export_contacts.py`, and `add_foldbench_rest.py`; arms are run with
+`modal/bench_byclass.py` and the Protenix baselines with
+`modal/bench_protenix_v2.py --targets-file ... --gt-dir ...`, then scored by
+`byclass/score_protenix_byclass.py`.
