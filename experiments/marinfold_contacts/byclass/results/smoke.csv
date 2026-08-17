@@ -1,0 +1,7 @@
+target_id,dataset,stem,status,lddt,n_matched_atoms,n_contacts,error
+cameo_hard__8j4i_A,cameo_hard,8j4i_A,ok,0.5599841035709658,1491,190,
+cameo_hard__8jvx_B,cameo_hard,8jvx_B,ok,0.4899658411614005,297,39,
+cameo_hard__8raj_A,cameo_hard,8raj_A,ok,0.6287394415767246,465,62,
+cameo_hard__8s3m_A,cameo_hard,8s3m_A,ok,0.43261289316385654,2796,345,
+cameo_hard__8s89_A,cameo_hard,8s89_A,ok,0.855938409664883,3055,401,
+cameo_hard__8u1a_A,cameo_hard,8u1a_A,ok,0.36173041656904387,2759,324,

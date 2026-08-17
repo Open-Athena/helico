@@ -43,6 +43,10 @@ _cp = os.environ.get("HELICO_BENCH_CONTACT_PRECISION", "")
 _cr = os.environ.get("HELICO_BENCH_CONTACT_RECALL", "")
 CONTACT_PRECISION = float(_cp) if _cp else None
 CONTACT_RECALL = float(_cr) if _cr else None
+# Name of a real-predictor contact arm under experiments/marinfold_contacts/arms
+# (e.g. "rollout_L"). Pairs are already in Helico token indices; see that
+# directory's exporter for the prompt->token index map, which is not identity.
+CONTACTS_ARM = os.environ.get("HELICO_BENCH_CONTACTS_ARM", "")
 
 # Predictor image: GPU model inference. Ships with cuequivariance (pinned
 # to 0.8.x — 0.10 broke bench inference with cuDNN-frontend errors) and
@@ -91,7 +95,10 @@ predictor_image = (
           "HELICO_BENCH_NO_MSA": "1" if NO_MSA else "0",
           "HELICO_BENCH_SINGLE_SEQ": "1" if SINGLE_SEQ else "0",
           "HELICO_BENCH_CONTACT_PRECISION": _cp,
-          "HELICO_BENCH_CONTACT_RECALL": _cr})
+          "HELICO_BENCH_CONTACT_RECALL": _cr,
+          "HELICO_BENCH_CONTACTS_ARM": CONTACTS_ARM})
+    .add_local_dir(str(ROOT / "experiments/marinfold_contacts/arms"),
+                   remote_path="/root/helico/contact_arms")
     # Project code last (changes most frequently)
     .add_local_dir(str(ROOT / "src"), remote_path="/root/helico/src")
     .add_local_file(str(ROOT / "pyproject.toml"), remote_path="/root/helico/pyproject.toml")
@@ -179,6 +186,24 @@ class Predictor:
 
         import sys
         sys.path.insert(0, "/root/helico/src")
+
+        # Load the real-predictor contact arm, if one was selected. Failing
+        # loudly here beats silently benching with no contacts: a missing arm
+        # would otherwise look like "predicted contacts do not help".
+        self.contact_map = None
+        if CONTACTS_ARM:
+            import json as _json
+            from pathlib import Path as _Path
+
+            arm = _Path("/root/helico/contact_arms") / f"{CONTACTS_ARM}.json"
+            if not arm.exists():
+                raise FileNotFoundError(
+                    f"contact arm {CONTACTS_ARM!r} not found at {arm}; "
+                    f"available: {[p.stem for p in arm.parent.glob('*.json')]}"
+                )
+            self.contact_map = _json.loads(arm.read_text())
+            print(f"Loaded contact arm {CONTACTS_ARM}: {len(self.contact_map)} targets, "
+                  f"{sum(len(v) for v in self.contact_map.values())} pairs")
 
         from collections import OrderedDict
         import torch
@@ -349,6 +374,7 @@ class Predictor:
                     oracle_contacts_from=gt_structure if ORACLE_CONTACTS else None,
                     contact_precision=CONTACT_PRECISION,
                     contact_recall=CONTACT_RECALL,
+                    contact_pairs=(self.contact_map or {}).get(pdb_id),
                     # logged so the log always states which mode actually ran
                 )
                 if pred_result is None:
