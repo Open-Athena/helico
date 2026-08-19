@@ -8,10 +8,14 @@ accuracy? MarinFold supplies better contacts than Protenix v2 single sequence on
 `foldbench100` and worse on de novo designs -- so does Helico win and lose in
 the same places?
 
-Targets come from `experiments/marinfold_contacts/byclass/`, built by that
-directory's `build_targets.py` (ground truths converted to mmCIF) and
+Targets come from `experiments/marinfold_contacts/byclass/` by default, built by
+that directory's `build_targets.py` (ground truths converted to mmCIF) and
 `export_contacts.py` (MarinFold exp199 contacts in Helico token indices). That
 set is decontaminated: every target Helico could have trained on is dropped.
+
+`HELICO_TARGETS_DIR` points the app at a different set with the same layout --
+`targets.csv`, `gt/<target_id>.cif.gz`, `arms/<arm>.json` -- and results are
+written next to it, in `<targets-dir>/../results`.
 
 Everything downstream of "parse the ground truth" is the same code the FoldBench
 bench uses -- `structure_to_chains`, `predict_target`, `match_atoms`,
@@ -27,6 +31,9 @@ Run:
     HELICO_BYCLASS_CONTACTS_ARM=marinfold_L modal run --detach \\
         modal/bench_byclass.py --checkpoint /ckpts/contacts-msafree-01/final.pt \\
         --out-tag mf_L
+
+`helico.experiment.ensure_byclass_run` wraps this with idempotent caching and a
+cost estimate, and is what notebooks should call.
 """
 
 import os
@@ -35,7 +42,14 @@ from pathlib import Path
 import modal
 
 ROOT = Path(__file__).parent.parent
-BYCLASS = ROOT / "experiments/marinfold_contacts/byclass/data"
+
+# The target set is a directory of `targets.csv` + `gt/<target_id>.cif.gz` +
+# `arms/<arm>.json`. It defaults to the by-class set this app was written for;
+# any experiment with the same layout points at its own via the env var, which
+# is how exp14 runs exp245's FoldBench monomer sets through this same runner
+# rather than forking it.
+TARGETS_DIR = Path(os.environ.get(
+    "HELICO_TARGETS_DIR", str(ROOT / "experiments/marinfold_contacts/byclass/data")))
 
 N_WORKERS = int(os.environ.get("HELICO_BENCH_WORKERS", "8"))
 GPU_TYPE = os.environ.get("HELICO_BENCH_GPU", "H100")
@@ -75,7 +89,7 @@ image = (
     )
     .env({"HELICO_BYCLASS_CONTACTS_ARM": CONTACTS_ARM,
           "HELICO_BYCLASS_ORACLE": "1" if ORACLE else "0"})
-    .add_local_dir(str(BYCLASS), remote_path="/root/byclass")
+    .add_local_dir(str(TARGETS_DIR), remote_path="/root/byclass")
     .add_local_dir(str(ROOT / "src"), remote_path="/root/helico/src")
     .add_local_file(str(ROOT / "pyproject.toml"), remote_path="/root/helico/pyproject.toml")
     .add_local_file(str(ROOT / "README.md"), remote_path="/root/helico/README.md")
@@ -184,6 +198,14 @@ class Predictor:
             # of range and the arm scored as contacts-withheld.
             prot = [c for c in chains if c["type"] == "protein"]
             pairs = (self.contact_map or {}).get(target_id)
+            if CONTACTS_ARM and not pairs:
+                # A target the arm does not cover must not quietly fold without
+                # contacts: that scores exactly like the contacts-withheld arm
+                # and is indistinguishable from "predicted contacts do not
+                # help" once it reaches a mean. Report it and let the analysis
+                # drop the target from every arm.
+                row["status"] = "no_contacts"
+                return row
             if pairs:
                 if len(prot) != 1:
                     raise ValueError(
@@ -232,7 +254,7 @@ def run(checkpoint: str, out_tag: str, n_samples: int = 3, n_cycles: int = 6,
         datasets: str = "", limit: int = 0):
     import csv
 
-    with (BYCLASS / "targets.csv").open() as f:
+    with (TARGETS_DIR / "targets.csv").open() as f:
         targets = list(csv.DictReader(f))
     if datasets:
         keep = set(datasets.split(","))
@@ -249,7 +271,7 @@ def run(checkpoint: str, out_tag: str, n_samples: int = 3, n_cycles: int = 6,
         kwargs={"n_samples": n_samples, "n_cycles": n_cycles},
     ))
 
-    out = ROOT / "experiments/marinfold_contacts/byclass/results"
+    out = TARGETS_DIR.parent / "results"
     out.mkdir(parents=True, exist_ok=True)
     dest = out / f"{out_tag}.csv"
     fields = ["target_id", "dataset", "stem", "status", "lddt", "n_matched_atoms",

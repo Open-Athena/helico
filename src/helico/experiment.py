@@ -435,6 +435,207 @@ def _bench_complete_local(cache_dir: Path) -> bool:
     return (cache_dir / "meta.json").exists() and (cache_dir / "summary.csv").exists()
 
 
+# --------------------------------------------------------------------------
+# ensure_byclass_run
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class ByclassRun:
+    """Result of one arm of a `modal/bench_byclass.py` run.
+
+    Unlike `BenchRun`, whose shape follows FoldBench's nine categories, this is
+    a single flat table: one row per target, with `lddt`, `tm_score`, `status`
+    and the arm that produced it.
+    """
+
+    name: str
+    experiment: str
+    arm: str
+    cache_dir: Path
+    volume_path: str
+    cached: bool
+    meta: dict = field(default_factory=dict)
+
+    @property
+    def results_csv_path(self) -> Path:
+        return self.cache_dir / "results.csv"
+
+    @property
+    def results(self):  # -> pd.DataFrame
+        import pandas as pd
+
+        return pd.read_csv(self.results_csv_path)
+
+
+def _load_byclass_run(
+    name: str, slug: str, arm: str, cache_dir: Path, volume_path: str, *, cached: bool,
+) -> "ByclassRun":
+    meta: dict = {}
+    meta_path = cache_dir / "meta.json"
+    if meta_path.exists():
+        with open(meta_path) as f:
+            meta = json.load(f)
+    return ByclassRun(
+        name=name, experiment=slug, arm=meta.get("arm", arm), cache_dir=cache_dir,
+        volume_path=volume_path, cached=cached, meta=meta,
+    )
+
+
+def ensure_byclass_run(
+    name: str,
+    *,
+    targets_dir: Path,
+    checkpoint: str,
+    contacts_arm: str = "",
+    oracle_contacts: bool = False,
+    workers: int = 8,
+    gpu: str = "H100",
+    n_samples: int = 3,
+    n_cycles: int = 6,
+    max_tokens: int = 2048,
+    datasets: str = "",
+    limit: int = 0,
+    est_wall_hours: float = 1.0,
+    force: bool = False,
+) -> ByclassRun:
+    """Run one conditioning arm over a target-set directory, idempotently.
+
+    `targets_dir` holds `targets.csv`, `gt/<target_id>.cif.gz` and
+    `arms/<arm>.json`; `modal/bench_byclass.py` mounts it whole. Caching is
+    keyed by `(experiment_slug, name)` alone, as everywhere else here, so give
+    each arm its own `name`.
+
+    **The arm is an argument, not ambient state.** `bench_byclass.py` selects
+    its conditioning from environment variables that it also has to bake into
+    the Modal image, and both that app and `bench.py` carry scar-tissue
+    comments about benches that silently ran with no contacts and reported
+    success. Passing `contacts_arm` / `oracle_contacts` here sets those
+    variables from one place and records them in `meta.json`, so what a cached
+    result was conditioned on is recoverable after the fact.
+    """
+    if contacts_arm and oracle_contacts:
+        raise ValueError(
+            "contacts_arm and oracle_contacts are mutually exclusive: "
+            "predict_target ignores the oracle when explicit pairs are given"
+        )
+    targets_dir = Path(targets_dir).resolve()
+    arm = contacts_arm or ("oracle" if oracle_contacts else "off")
+    if contacts_arm:
+        arm_path = targets_dir / "arms" / f"{contacts_arm}.json"
+        if not arm_path.exists():
+            available = sorted(p.stem for p in (targets_dir / "arms").glob("*.json"))
+            raise FileNotFoundError(
+                f"contact arm {contacts_arm!r} not found at {arm_path}; "
+                f"available: {available}"
+            )
+
+    slug = _current_experiment()
+    volume_path = f"/experiments/{slug}/{name}"
+    est_cost = _estimate_bench_cost(gpu=gpu, workers=workers, wall_hours=est_wall_hours)
+
+    if is_dry_run():
+        _log_start("ensure_byclass_run", f"{name} [{arm}]", "dry-run", est_cost)
+        _record_dry_run("bench", name, est_cost)
+        scratch_dir = _cache_dir(slug) / "dry-run-scratch" / "byclass" / name
+        _write_placeholder_byclass(scratch_dir, targets_dir=targets_dir, arm=arm)
+        return _load_byclass_run(name, slug, arm, scratch_dir, volume_path, cached=False)
+
+    cache_dir = _cache_dir(slug) / "byclass" / name
+    if not force:
+        if (cache_dir / "meta.json").exists() and (cache_dir / "results.csv").exists():
+            _log_start("ensure_byclass_run", f"{name} [{arm}]", "cached (local)")
+            return _load_byclass_run(name, slug, arm, cache_dir, volume_path, cached=True)
+        if _volume_path_exists(EXPERIMENTS_VOLUME, f"{volume_path}/results.csv"):
+            _log_start("ensure_byclass_run", f"{name} [{arm}]", "cached (volume); fetching")
+            _volume_pull(EXPERIMENTS_VOLUME, volume_path, cache_dir.parent)
+            return _load_byclass_run(name, slug, arm, cache_dir, volume_path, cached=True)
+
+    _log_start("ensure_byclass_run", f"{name} [{arm}]", "launching", est_cost)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env["HELICO_BENCH_WORKERS"] = str(workers)
+    env["HELICO_BENCH_GPU"] = gpu
+    env["HELICO_TARGETS_DIR"] = str(targets_dir)
+    env["HELICO_BYCLASS_CONTACTS_ARM"] = contacts_arm
+    env["HELICO_BYCLASS_ORACLE"] = "1" if oracle_contacts else "0"
+
+    cmd = [
+        "modal", "run", "--detach", "modal/bench_byclass.py",
+        "--checkpoint", checkpoint,
+        "--out-tag", name,
+        "--n-samples", str(n_samples),
+        "--n-cycles", str(n_cycles),
+    ]
+    if datasets:
+        cmd += ["--datasets", datasets]
+    if limit:
+        cmd += ["--limit", str(limit)]
+
+    subprocess.run(cmd, check=True, env=env, cwd=str(REPO_ROOT))
+
+    # bench_byclass writes <targets_dir>/../results/<tag>.csv; copy it into the
+    # cache so the run is self-contained and can be pushed to the volume.
+    produced = targets_dir.parent / "results" / f"{name}.csv"
+    if not produced.exists():
+        raise FileNotFoundError(f"bench_byclass produced no results at {produced}")
+    shutil.copyfile(produced, cache_dir / "results.csv")
+
+    meta = {
+        "name": name,
+        "experiment": slug,
+        "arm": arm,
+        "contacts_arm": contacts_arm,
+        "oracle_contacts": oracle_contacts,
+        "targets_dir": str(targets_dir),
+        "checkpoint": checkpoint,
+        "gpu": gpu,
+        "workers": workers,
+        "n_samples": n_samples,
+        "n_cycles": n_cycles,
+        "max_tokens": max_tokens,
+        "git_sha": _git_sha(),
+        "est_cost_usd": est_cost,
+    }
+    with open(cache_dir / "meta.json", "w") as f:
+        json.dump(meta, f, indent=2)
+
+    try:
+        _volume_push(EXPERIMENTS_VOLUME, cache_dir, volume_path)
+    except subprocess.CalledProcessError as e:
+        logger.warning(
+            "Failed to push byclass run to Modal volume %s (%s). Local cache is intact.",
+            EXPERIMENTS_VOLUME, e,
+        )
+
+    return _load_byclass_run(name, slug, arm, cache_dir, volume_path, cached=False)
+
+
+def _write_placeholder_byclass(cache_dir: Path, *, targets_dir: Path, arm: str) -> None:
+    """Enough rows for a dry-run notebook to execute its analysis cells.
+
+    Real target ids, so groupbys over `eval_set` behave; placeholder scores.
+    """
+    import csv
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    targets_csv = targets_dir / "targets.csv"
+    rows = []
+    if targets_csv.exists():
+        with open(targets_csv) as f:
+            rows = list(csv.DictReader(f))
+    with open(cache_dir / "results.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["target_id", "dataset", "stem", "status", "lddt",
+                    "n_matched_atoms", "n_contacts", "error"])
+        for r in rows:
+            w.writerow([r["target_id"], r.get("eval_set", ""), r.get("stem", ""),
+                        "ok", 0.5, 100, 0, ""])
+    with open(cache_dir / "meta.json", "w") as f:
+        json.dump({"arm": arm, "placeholder": True}, f, indent=2)
+
+
 _BENCH_CATEGORIES = [
     "monomer_protein", "monomer_dna", "monomer_rna",
     "interface_protein_protein", "interface_antibody_antigen",
@@ -726,8 +927,10 @@ def _load_training_run(
 
 __all__ = [
     "BenchRun",
+    "ByclassRun",
     "TrainingRun",
     "ensure_bench_run",
+    "ensure_byclass_run",
     "ensure_training_run",
     "estimate_cost",
     "experiment_dir",

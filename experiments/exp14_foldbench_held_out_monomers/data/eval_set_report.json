@@ -1,0 +1,20 @@
+{
+  "n_units": 333,
+  "sets": {
+    "eval-denovo": 19,
+    "eval-test": 217,
+    "eval-val": 97
+  },
+  "released_before_helico_cutoff": 0,
+  "deposited_on_or_before_cutoff": {
+    "eval-denovo": 1,
+    "eval-val": 1
+  },
+  "viral": {
+    "eval-test": 13,
+    "eval-val": 6
+  },
+  "msa_available": 333,
+  "length_agrees_with_exp245": 52,
+  "max_L_helico": 917
+}

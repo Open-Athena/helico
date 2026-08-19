@@ -183,7 +183,12 @@ def run_v2(
     if staging_root.exists():
         shutil.rmtree(staging_root)
     staging_root.mkdir(parents=True)
-    out_root = ROOT / f"experiments/marinfold_contacts/upstream/{out_tag}"
+    # Predictions land beside the experiment that asked for them. The default
+    # is helico#11's tree; HELICO_UPSTREAM_DIR points a different experiment at
+    # its own, the same way HELICO_TARGETS_DIR does for bench_byclass.
+    upstream_root = Path(os.environ.get(
+        "HELICO_UPSTREAM_DIR", str(ROOT / "experiments/marinfold_contacts/upstream")))
+    out_root = upstream_root / out_tag
     out_root.mkdir(parents=True, exist_ok=True)
 
     staged = []
