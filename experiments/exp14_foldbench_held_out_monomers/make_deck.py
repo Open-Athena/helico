@@ -512,6 +512,83 @@ def main() -> int:
             metric_bars_val_test(fig, metrics, metric, split_arms)
             finish(pdf, fig)
 
+        # --- 20-21. MSA depth -----------------------------------------
+        depth_path = U.DATA / "depth_strata.csv"
+        if depth_path.exists():
+            depth = pd.read_csv(depth_path)
+            buckets = [b for b in ("<=10", "11-100", "101-1000", ">1000")
+                       if b in set(depth.bucket)]
+            fig = slide(
+                pdf, "Accuracy against the depth of the available alignment",
+                "Natural proteins only, binned by the number of sequences in "
+                "the alignment Protenix was given. Error bars are 95% "
+                "percentile bootstrap intervals over 10,000 resamples; the "
+                "shallowest bin holds 5 proteins, so its intervals are wide "
+                "and it is a direction rather than a measurement.")
+            axes = fig.subplots(1, len(buckets), gridspec_kw={
+                "left": 0.30, "right": 0.975, "top": 0.70, "bottom": 0.13,
+                "wspace": 0.16})
+            shades = ("#b8452f", "#c98a3a", "#4a90c4", "#4269d0")
+            for ax, bucket, color in zip(np.atleast_1d(axes), buckets, shades):
+                rows = depth[depth.bucket == bucket].set_index("arm")
+                present = [a for a in split_arms if a in rows.index]
+                positions = [len(present) - i for i, _ in enumerate(present)]
+                means = [rows.loc[a, "mean_lddt"] for a in present]
+                ax.barh(positions, means, height=0.66, color=color,
+                        xerr=[[rows.loc[a, "mean_lddt"] - rows.loc[a, "ci_lo"]
+                               for a in present],
+                              [rows.loc[a, "ci_hi"] - rows.loc[a, "mean_lddt"]
+                               for a in present]],
+                        error_kw={"ecolor": INK, "elinewidth": 1.0,
+                                  "capsize": 2, "capthick": 1.0})
+                ax.set_yticks(positions)
+                if ax is np.atleast_1d(axes)[0]:
+                    ax.set_yticklabels([SHORT[a] for a in present], fontsize=10)
+                else:
+                    ax.set_yticklabels([])
+                ax.set_ylim(0.35, len(present) + 0.65)
+                ax.set_xlim(0, 1.0)
+                ax.set_title(f"depth {bucket}\nn = {int(rows.n.iloc[0])}",
+                             fontsize=10.5, color=INK, pad=8)
+                tidy(ax, xlabel="lDDT")
+            finish(pdf, fig)
+
+            # Per protein, so the bins above can be read as a summary of
+            # something rather than as the whole picture.
+            fig = slide(
+                pdf, "Alignment depth against accuracy, per protein",
+                "One point per natural protein, log depth. No bootstrap here — "
+                "these are individual proteins.")
+            # per_target already carries `designed`, so take only the depth
+            # column across rather than colliding the two into _x / _y.
+            merged = per_target[per_target.status == "ok"].merge(
+                pd.read_csv(U.DATA / "msa_depth.csv")[
+                    ["target_id", "n_sequences"]],
+                on="target_id", how="inner")
+            merged = merged[merged.designed == 0]
+            ax = fig.add_axes((0.09, 0.14, 0.58, 0.60))
+            for arm, color in (("protenix_v2_msa", "#2e7d32"),
+                               ("esmfold2", "#7a6a3a"),
+                               ("mf_L", "#b8452f"),
+                               ("oracle", "#1b5e9c")):
+                part = merged[merged.arm == arm]
+                if part.empty:
+                    continue
+                ax.plot(part.n_sequences, part.lddt, "o", ms=3.4, alpha=0.5,
+                        color=color, ls="none", label=SHORT[arm])
+            ax.set_xscale("log")
+            ax.axvline(10, color=MUTE, lw=1, ls="--")
+            ax.annotate("depth 10", (10, ax.get_ylim()[1]),
+                        textcoords="offset points", xytext=(6, -12),
+                        fontsize=9, color=MUTE)
+            tidy(ax, xlabel="sequences in the alignment", ylabel="lDDT",
+                 ygrid=True)
+            # Outside the axes: the points fill every corner, so an inset
+            # legend sits on the data no matter where it is placed.
+            ax.legend(frameon=False, loc="upper left",
+                      bbox_to_anchor=(1.02, 1.0), labelcolor=INK, fontsize=9.5)
+            finish(pdf, fig)
+
     print(f"-> {OUT}")
     return 0
 

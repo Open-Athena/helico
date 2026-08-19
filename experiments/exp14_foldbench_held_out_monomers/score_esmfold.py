@@ -116,29 +116,46 @@ def main() -> int:
                 dropped.append((mode, stem, "prediction did not parse"))
                 continue
 
-            pred_coords, gt_coords, names, matched, total = [], [], [], 0, 0
-            for prompt_index, token in mapping.items():
-                # ESMFold numbers 1-based into the prompt sequence.
-                residue = predicted.get(prompt_index + 1)
-                if residue is None or token >= len(gt_residues):
-                    continue
-                truth = gt_residues[token]
-                total += 1
-                # UNK is how ESMFold2 represents a residue it did not model as
-                # a standard amino acid -- the modified residues -- so it
-                # matches anything rather than counting against the check.
-                if residue["__name__"] in (truth.name, "UNK"):
-                    matched += 1
-                truth_atoms = {a.name: np.asarray(a.coords, dtype=float)
-                               for a in truth.atoms}
-                for atom_name, coords in residue.items():
-                    if atom_name == "__name__" or atom_name not in truth_atoms:
+            # Two numbering conventions are present in exp78's outputs, and
+            # which one a file uses cannot be assumed: 316 of them number
+            # 1-based into the *prompt* sequence, while the rest -- every one
+            # of the eight designed monomers among them -- number 1-based into
+            # the *resolved* sequence, i.e. straight onto Helico's tokens.
+            # Read under the wrong one the residues do not line up at all, so
+            # both are tried and the residue-name check decides, rather than a
+            # guess about which pipeline produced the file.
+            candidates = {
+                "prompt": {token: prompt_index + 1
+                           for prompt_index, token in mapping.items()},
+                "resolved": {token: token + 1 for token in range(len(gt_residues))},
+            }
+            best = None
+            for convention, correspondence in candidates.items():
+                coords, truths, names, matched, total = [], [], [], 0, 0
+                for token, seqid in correspondence.items():
+                    residue = predicted.get(seqid)
+                    if residue is None or token >= len(gt_residues):
                         continue
-                    pred_coords.append(coords)
-                    gt_coords.append(truth_atoms[atom_name])
-                    names.append(atom_name)
+                    truth = gt_residues[token]
+                    total += 1
+                    # UNK is how ESMFold2 represents a residue it did not model
+                    # as a standard amino acid -- the modified residues -- so it
+                    # matches anything rather than counting against the check.
+                    if residue["__name__"] in (truth.name, "UNK"):
+                        matched += 1
+                    truth_atoms = {a.name: np.asarray(a.coords, dtype=float)
+                                   for a in truth.atoms}
+                    for atom_name, xyz in residue.items():
+                        if atom_name == "__name__" or atom_name not in truth_atoms:
+                            continue
+                        coords.append(xyz)
+                        truths.append(truth_atoms[atom_name])
+                        names.append(atom_name)
+                score = matched / total if total else 0.0
+                if best is None or score > best[0]:
+                    best = (score, convention, coords, truths, names, total)
 
-            identity = matched / total if total else 0.0
+            identity, convention, pred_coords, gt_coords, names, total = best
             if total == 0 or identity < MIN_IDENTITY or len(pred_coords) < 10:
                 dropped.append((mode, stem,
                                 f"residue identity {identity:.2f} over {total}"))
@@ -152,7 +169,7 @@ def main() -> int:
                 continue
             rows.append({
                 "target_id": stem, "eval_set": target["eval_set"],
-                "arm": mode,
+                "arm": mode, "numbering": convention,
                 "lddt": round(compute_lddt(pred, truth), 6),
                 "tm_score": round(compute_tm_score(pred[mask], truth[mask]), 6),
                 "gdt_ts": round(compute_gdt_ts(pred[mask], truth[mask]), 6),

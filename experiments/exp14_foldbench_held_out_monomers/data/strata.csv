@@ -30,8 +30,8 @@ designed,designed,v2msa,Helico + Protenix-v2 +MSA contacts,19,0.8188344666655091
 designed,designed,oracle,Helico + oracle contacts,19,0.8555400436737589,0.8372283102284319,0.8728557861963412
 designed,designed,protenix_v2_single_seq,"Protenix v2, single sequence",19,0.8283292105263158,0.8040923368421053,0.8506854618421053
 designed,designed,protenix_v2_msa,Protenix v2 + MSA,19,0.8138114736842106,0.7728195999999999,0.8450274618421054
-designed,designed,esmfold,ESMFold,19,,,
-designed,designed,esmfold2,ESMFold2,19,,,
+designed,designed,esmfold,ESMFold,19,0.8140898421052633,0.7512174328947367,0.8660769552631579
+designed,designed,esmfold2,ESMFold2,19,0.8758534736842105,0.8594958605263159,0.8908059671052633
 designed,natural,off,"Helico, no contacts",305,0.359270299120976,0.3443904016852044,0.37474197704820805
 designed,natural,mf_L5,"Helico + MarinFold, top-L/5",305,0.5598947017681454,0.5425364047876201,0.5768257546798327
 designed,natural,mf_L2,"Helico + MarinFold, top-L/2",305,0.6012562257249787,0.5823703910116194,0.6196466701649535
@@ -52,8 +52,8 @@ homology,50% id or more,v2msa,Helico + Protenix-v2 +MSA contacts,255,0.834929330
 homology,50% id or more,oracle,Helico + oracle contacts,255,0.8612265698293309,0.8557315240085716,0.8663155190524137
 homology,50% id or more,protenix_v2_single_seq,"Protenix v2, single sequence",255,0.4330751568627451,0.4102966556862745,0.45662106833333344
 homology,50% id or more,protenix_v2_msa,Protenix v2 + MSA,255,0.8644381843137254,0.8553322434313726,0.872399309117647
-homology,50% id or more,esmfold,ESMFold,255,,,
-homology,50% id or more,esmfold2,ESMFold2,255,,,
+homology,50% id or more,esmfold,ESMFold,255,0.8136896705882354,0.7988408356862745,0.8276705657843136
+homology,50% id or more,esmfold2,ESMFold2,255,0.8570473529411765,0.8445364017647058,0.8681865645098039
 homology,under 50% id,off,"Helico, no contacts",69,0.3562243509827221,0.32457623165227595,0.3920182650420372
 homology,under 50% id,mf_L5,"Helico + MarinFold, top-L/5",69,0.5458467395704837,0.5083320152376525,0.5824756377868575
 homology,under 50% id,mf_L2,"Helico + MarinFold, top-L/2",69,0.5673033653318502,0.525030526604073,0.6080651112256824

@@ -240,6 +240,41 @@ def main() -> int:
                                "label": label[arm], "n": n,
                                "mean_lddt": values.mean(), "ci_lo": lo, "ci_hi": hi})
 
+    # --- MSA depth ----------------------------------------------------
+    # The one cut in this set that separates predictors by what they depend on
+    # rather than by how hard the protein is. Natural proteins only: 15 of the
+    # 20 shallowest alignments belong to designed monomers, which behave
+    # differently for reasons that have nothing to do with depth.
+    depth_rows = []
+    depth_path = U.DATA / "msa_depth.csv"
+    if depth_path.exists():
+        depth = pd.read_csv(depth_path).set_index("target_id")
+        natural = meta.index[meta.eval_set != "eval-denovo"]
+        buckets = [("<=10", 0, 10), ("11-100", 11, 100),
+                   ("101-1000", 101, 1000), (">1000", 1001, 10 ** 9)]
+        for name, low, high in buckets:
+            inside = depth.index[(depth.n_sequences >= low)
+                                 & (depth.n_sequences <= high)]
+            members = complete.index.intersection(inside).intersection(natural)
+            if len(members) < 3:
+                continue
+            idx = boot_indices(len(members))
+            for arm in arms:
+                values = complete.loc[members, arm].to_numpy()
+                values = values[~np.isnan(values)]
+                if not len(values):
+                    continue
+                arm_idx = (idx if len(values) == len(members)
+                           else boot_indices(len(values)))
+                lo, hi = interval(values, arm_idx)
+                depth_rows.append({
+                    "bucket": name, "arm": arm, "label": label[arm],
+                    "n": int(len(values)), "mean_lddt": values.mean(),
+                    "ci_lo": lo, "ci_hi": hi,
+                })
+        pd.DataFrame(depth_rows).to_csv(U.DATA / "depth_strata.csv", index=False)
+        print(f"-> {U.DATA / 'depth_strata.csv'}")
+
     for path, records in (
         (U.DATA / "headline.csv", headline),
         (U.DATA / "paired_deltas.csv", deltas),

@@ -36,12 +36,38 @@ free.
 **These are not end-to-end prediction numbers.** The contacts are derived from
 the ground-truth structure, exactly or degraded with a synthetic noise model
 whose false positives are drawn uniformly. Real predictor errors cluster near
-true contacts and may be harder to reject. Feeding real MarinFold output is
-[issue #11](https://github.com/Open-Athena/helico/issues/11).
+true contacts and may be harder to reject.
+
+**With real predicted contacts** ([exp14](experiments/exp14_foldbench_held_out_monomers/),
+333 held-out FoldBench monomers, contacts from a MarinFold checkpoint
+decontaminated against every protein scored):
+
+| Arm | lDDT (eval-test) |
+| --- | --- |
+| Helico, no contacts | 0.364 |
+| Protenix v2, single sequence | 0.400 |
+| **Helico + MarinFold contacts, top-L** | **0.619** |
+| ESMFold / ESMFold2 | 0.797 / 0.833 |
+| Helico + oracle contacts | 0.860 |
+| Protenix v2 + MSA | 0.860 |
+
+Contacts beat the strongest single-sequence structure predictor by
+**+0.218 lDDT [+0.192, +0.245]**, and a perfect contact map matches
+Protenix-with-MSAs exactly, from one sequence. lDDT tracks the *precision* of
+the contacts supplied (per-target r = 0.81–0.97) almost independently of which
+model produced them, so the remaining gap is contact accuracy rather than the
+conditioning channel.
 
 Weights: [timodonnell/helico](https://huggingface.co/timodonnell/helico) ·
 Full writeup: [`RESULTS_contact_conditioning.md`](RESULTS_contact_conditioning.md) ·
 Try it: [Colab notebook](https://colab.research.google.com/github/Open-Athena/helico/blob/main/notebooks/helico_contact_conditioned_folding.ipynb)
+
+**exp14 in detail** —
+[notebook](experiments/exp14_foldbench_held_out_monomers/README.md) ·
+[slide deck](experiments/exp14_foldbench_held_out_monomers/exp14_deck.pdf) ·
+[structure viewer in Colab](https://colab.research.google.com/github/Open-Athena/helico/blob/main/notebooks/exp14_structure_viewer.ipynb) ·
+[predictions and scores](https://huggingface.co/buckets/timodonnell/helico-experiments/exp14_foldbench_held_out_monomers) ·
+[issue #14](https://github.com/Open-Athena/helico/issues/14)
 
 ```python
 from helico.inference import load_model, contacts_from_pairs, fold
@@ -460,6 +486,7 @@ per target, and the GPU it ran on.
 | Per-experiment run outputs (authoritative) | `helico-experiments` Modal volume at `/experiments/<slug>/<run-name>/` |
 | Local cache of the same | `experiments/<slug>/.cache/` (gitignored) |
 | Published artifacts | `hf://buckets/timodonnell/helico-experiments/<slug>/` |
+| exp14's predictions, scores and metadata | [helico-experiments/exp14_foldbench_held_out_monomers](https://huggingface.co/buckets/timodonnell/helico-experiments/exp14_foldbench_held_out_monomers) — every predictor's structures, per-target scores, timings and run manifests |
 | Small tables that feed the figures | `experiments/<slug>/data/*.csv`, committed |
 
 A published experiment prefix looks like this — the layout
@@ -495,6 +522,12 @@ uv run python publish_artifacts.py
 
 So re-running one method and re-plotting against the others costs one arm, not
 the whole benchmark.
+
+To look at individual predictions rather than aggregates, open the
+[structure viewer](https://colab.research.google.com/github/Open-Athena/helico/blob/main/notebooks/exp14_structure_viewer.ipynb):
+it pulls the same artifacts, shows the full protein-by-predictor score table,
+and renders any prediction superimposed on its ground truth. No GPU, no
+authentication.
 
 
 ## References

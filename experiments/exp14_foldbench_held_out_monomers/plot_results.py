@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -147,6 +148,34 @@ def contact_quality(per_target: pd.DataFrame, precision: pd.DataFrame) -> None:
     plt.show()
 
 
+def msa_depth(depth: pd.DataFrame, arms) -> None:
+    """The depth buckets, as a standalone figure for the notebook."""
+    buckets = [b for b in ("<=10", "11-100", "101-1000", ">1000")
+               if b in set(depth.bucket)]
+    fig, axes = plt.subplots(1, len(buckets), figsize=(13, 4.6), sharey=True)
+    shades = ("#b8452f", "#c98a3a", "#4a90c4", "#4269d0")
+    for ax, bucket, color in zip(np.atleast_1d(axes), buckets, shades):
+        rows = depth[depth.bucket == bucket].set_index("arm")
+        present = [a for a in arms if a in rows.index]
+        positions = [len(present) - i for i, _ in enumerate(present)]
+        ax.barh(positions, [rows.loc[a, "mean_lddt"] for a in present],
+                height=0.66, color=color,
+                xerr=[[rows.loc[a, "mean_lddt"] - rows.loc[a, "ci_lo"] for a in present],
+                      [rows.loc[a, "ci_hi"] - rows.loc[a, "mean_lddt"] for a in present]],
+                error_kw={"ecolor": INK, "elinewidth": 1.0, "capsize": 2})
+        ax.set_yticks(positions)
+        ax.set_yticklabels([rows.loc[a, "label"] for a in present], fontsize=9)
+        ax.set_xlim(0, 1.0)
+        ax.set_title(f"depth {bucket}  (n={int(rows.n.iloc[0])})", fontsize=10,
+                     color=INK)
+        style(ax, xlabel="lDDT")
+    fig.suptitle("Natural proteins by alignment depth", color=INK, x=0.02,
+                 ha="left", fontsize=13)
+    fig.tight_layout()
+    fig.savefig(PLOTS / "msa_depth.png", dpi=200)
+    plt.show()
+
+
 def main() -> int:
     argparse.ArgumentParser(
         description=__doc__,
@@ -170,6 +199,12 @@ def main() -> int:
         v2 = pd.read_csv(v2_path)
         frames.append(v2[["target_id", "arm", "precision"]])
     contact_quality(per_target, pd.concat(frames, ignore_index=True))
+
+    depth_path = U.DATA / "depth_strata.csv"
+    if depth_path.exists():
+        order = ("protenix_v2_msa", "esmfold2", "esmfold",
+                 "protenix_v2_single_seq", "off", "mf_L", "oracle")
+        msa_depth(pd.read_csv(depth_path), order)
 
     print(f"-> {PLOTS}")
     return 0

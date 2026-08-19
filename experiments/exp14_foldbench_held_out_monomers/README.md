@@ -303,6 +303,41 @@ scores *below* its single-sequence mode (0.828) on the same 19 proteins.
 n = 19 and the interval is about ±0.09, so this is a direction rather than a
 measurement. It is reported separately for exactly that reason.
 
+### 7. Where the alignment runs out
+
+Of the 20 proteins whose alignment holds 10 sequences or fewer, **15 are de
+novo designs** — designed proteins have no homologs by construction, so the
+low-depth cut is mostly the designed cut unless it is taken on natural proteins
+alone. Restricted to those, five proteins remain, and the direction is worth
+stating even at that n:
+
+| MSA depth | n | Protenix v2 + MSA | ESMFold2 | ESMFold | Helico + MarinFold top-L | Helico + oracle |
+|---|---:|---:|---:|---:|---:|---:|
+| <= 10 | 5 | 0.510 | 0.733 | 0.577 | 0.447 | **0.858** |
+| 11-100 | 21 | 0.827 | 0.627 | 0.559 | 0.502 | **0.862** |
+| 101-1000 | 62 | 0.844 | 0.789 | 0.730 | 0.525 | **0.856** |
+| > 1000 | 226 | 0.876 | 0.869 | 0.840 | 0.652 | **0.861** |
+
+![MSA depth](plots/msa_depth.png)
+
+**Every predictor that reaches for homology degrades as it runs out, and the
+contact-conditioned folder does not.** Protenix-with-MSA falls 0.876 to 0.510
+between the deepest and shallowest bins; ESMFold falls 0.840 to 0.577 and
+ESMFold2 0.869 to 0.733, which is the language model's absorbed evolutionary
+signal thinning out rather than an alignment failing. Helico given the true
+contact map sits at 0.858, 0.862, 0.856, 0.861 — flat, because a contact map is
+not something you have to find homologs to obtain.
+
+At depth <= 10 a perfect contact map is worth **+0.35 lDDT over the best
+MSA-based predictor**, where on the full natural set the two are equal. That is
+the argument for the approach in one number, and the caveat is the same one as
+everywhere else here: MarinFold's *predicted* contacts fall too (0.652 to
+0.447), because contact prediction is itself homology-dependent today. Nothing
+about the folding model requires that.
+
+n = 5 in the shallowest bin. This is a direction, and the way to settle it is
+more shallow-alignment natural proteins, not a tighter interval on these five.
+
 ## Conclusion
 
 **Contacts from a decontaminated MarinFold checkpoint beat the strongest
