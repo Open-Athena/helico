@@ -1047,7 +1047,19 @@ def match_atoms(
 
 
 def extract_backbone_coords(matched: MatchedAtoms) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Extract CA (protein) or C3' (nucleic acid) backbone atoms for TM-score/GDT-TS.
+    """One representative atom per residue: CA (protein) or C3' (nucleic acid).
+
+    Despite the name this is **not** the backbone in the usual sense (N, CA, C,
+    O). It is deliberately one atom per residue, because that is what the
+    metrics it feeds require: `compute_tm_score` hands the array to
+    `tmtools.tm_align` with one dummy sequence character per coordinate, so a
+    four-atom backbone would present a 100-residue chain as a 400-residue one,
+    and GDT-TS is defined as the fraction of *residues* within each cutoff.
+
+    Two consequences worth stating: the `rmsd` that `score_monomer` returns is a
+    **CA RMSD**, not an N/CA/C/O backbone RMSD; and anything scoring a predictor
+    outside this module has to select the same atoms or its TM-score and GDT-TS
+    are not comparable.
 
     Returns (pred_bb, gt_bb, mask) where mask is boolean.
     """

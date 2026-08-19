@@ -187,6 +187,10 @@ val_vs_test.round(3)
 
 ## Results
 
+**Slide deck:** [`exp14_deck.pdf`](exp14_deck.pdf) — every metric, per-eval-set
+means with bootstrap intervals, and the per-protein scatters. Rebuild with
+`uv run python make_deck.py`.
+
 ### 1. The scoreboard
 
 Mean lDDT over the 324 units every arm covers, 95% percentile bootstrap over

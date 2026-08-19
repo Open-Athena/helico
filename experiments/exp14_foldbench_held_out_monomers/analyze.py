@@ -51,17 +51,27 @@ ARMS = (
 
 #: The comparisons the issue's hypotheses are stated in.
 DELTAS = (
+    # Every comparison keeps MarinFold top-L as the first term so the deck can
+    # show them on one axis with a consistent sign; `oracle - mf_L` written the
+    # other way round would silently drop out of that slide's filter.
     ("mf_L", "off"),
     ("mf_L", "protenix_v2_single_seq"),
     ("mf_L", "v2ss"),
     ("mf_L", "mf_L2"),
     ("mf_L", "mf_L5"),
+    ("mf_L", "v2msa"),
+    ("mf_L", "oracle"),
+    ("mf_L", "protenix_v2_msa"),
     ("oracle", "protenix_v2_msa"),
-    ("oracle", "mf_L"),
-    ("protenix_v2_msa", "mf_L"),
 )
 
 SETS = ("eval-val", "eval-test", "eval-denovo")
+
+#: Every metric score_monomer computes. `lower_is_better` matters for reading
+#: the tables, not for the bootstrap: an interval on a mean is an interval
+#: either way.
+METRICS = (("lddt", False), ("tm_score", False), ("gdt_ts", False),
+           ("rmsd", True))
 
 
 def boot_indices(n: int) -> np.ndarray:
@@ -96,9 +106,13 @@ def load_arms(cache_root: Path) -> pd.DataFrame:
     if baseline_path.exists():
         baseline = pd.read_csv(baseline_path)
         baseline["status"] = "ok"
-        baseline["arm"] = baseline["arm"].str.replace("protenix_v2_msa", "protenix_v2_msa")
-        frames = [helico, baseline[["target_id", "eval_set", "arm", "lddt", "status"]]]
-        helico = pd.concat(frames, ignore_index=True)
+        # Carry every metric the baselines were scored on, not just lDDT:
+        # selecting one column here is what previously left TM-score, GDT-TS
+        # and RMSD unavailable for the two predictors the arms are compared to.
+        columns = ["target_id", "eval_set", "arm", "status"]
+        columns += [c for c in ("lddt", "tm_score", "gdt_ts", "rmsd")
+                    if c in baseline.columns]
+        helico = pd.concat([helico, baseline[columns]], ignore_index=True)
     return helico
 
 
@@ -208,6 +222,36 @@ def main() -> int:
     ):
         pd.DataFrame(records).to_csv(path, index=False)
         print(f"-> {path}")
+
+    # The same tables for TM-score, GDT-TS and RMSD, on the same paired
+    # resamples, so the deck can show every metric with a comparable interval.
+    metric_rows = []
+    for metric, lower_better in METRICS:
+        wide_metric = ok.pivot_table(index="target_id", columns="arm", values=metric)
+        arms_here = [a for a in arms if a in wide_metric.columns]
+        frame = wide_metric.dropna(subset=arms_here)
+        meta_metric = targets.set_index("target_id").loc[frame.index]
+        for eval_set in (*SETS, "all-natural", "all"):
+            if eval_set == "all":
+                mask = np.ones(len(frame), bool)
+            elif eval_set == "all-natural":
+                mask = (meta_metric.eval_set != "eval-denovo").to_numpy()
+            else:
+                mask = (meta_metric.eval_set == eval_set).to_numpy()
+            n = int(mask.sum())
+            if n == 0:
+                continue
+            idx = boot_indices(n)
+            for arm in arms_here:
+                values = frame[arm].to_numpy()[mask]
+                lo, hi = interval(values, idx)
+                metric_rows.append({
+                    "metric": metric, "lower_is_better": int(lower_better),
+                    "eval_set": eval_set, "arm": arm, "label": label[arm],
+                    "n": n, "mean": values.mean(), "ci_lo": lo, "ci_hi": hi,
+                })
+    pd.DataFrame(metric_rows).to_csv(U.DATA / "headline_metrics.csv", index=False)
+    print(f"-> {U.DATA / 'headline_metrics.csv'}")
 
     summary = {
         "n_units_scored": int(len(complete)),
