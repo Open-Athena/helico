@@ -10,7 +10,9 @@
     "v2msa",
     "oracle",
     "protenix_v2_single_seq",
-    "protenix_v2_msa"
+    "protenix_v2_msa",
+    "esmfold",
+    "esmfold2"
   ],
   "n_boot": 10000
 }

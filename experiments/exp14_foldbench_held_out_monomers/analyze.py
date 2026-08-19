@@ -47,7 +47,17 @@ ARMS = (
     ("oracle", "Helico + oracle contacts"),
     ("protenix_v2_single_seq", "Protenix v2, single sequence"),
     ("protenix_v2_msa", "Protenix v2 + MSA"),
+    ("esmfold", "ESMFold"),
+    ("esmfold2", "ESMFold2"),
 )
+
+#: The arms every target must have for a row to enter the paired set. ESMFold
+#: and ESMFold2 are deliberately not in it: they cover 318 of the 324, and
+#: requiring them would move every number already published for the sake of six
+#: proteins. They are reported over their own coverage *within* the paired set,
+#: with their own n, and left out of the paired-delta table where the pairing
+#: would actually matter.
+CORE_ARMS = tuple(a for a, _ in ARMS if not a.startswith("esmfold"))
 
 #: The comparisons the issue's hypotheses are stated in.
 DELTAS = (
@@ -102,6 +112,14 @@ def load_arms(cache_root: Path) -> pd.DataFrame:
     helico = pd.concat(frames, ignore_index=True)
     helico = helico.rename(columns={"dataset": "eval_set"})
 
+    esmfold_path = U.DATA / "esmfold_baseline.csv"
+    if esmfold_path.exists():
+        esm = pd.read_csv(esmfold_path)
+        esm["status"] = "ok"
+        helico = pd.concat([helico, esm[["target_id", "eval_set", "arm", "status",
+                                         "lddt", "tm_score", "gdt_ts", "rmsd"]]],
+                           ignore_index=True)
+
     baseline_path = U.DATA / "protenix_v2_baseline.csv"
     if baseline_path.exists():
         baseline = pd.read_csv(baseline_path)
@@ -136,11 +154,12 @@ def main() -> int:
 
     ok = rows[rows.status == "ok"]
     arms = [a for a, _ in ARMS if a in set(ok.arm)]
+    core = [a for a in CORE_ARMS if a in set(ok.arm)]
     wide = ok.pivot_table(index="target_id", columns="arm", values="lddt")
 
-    # Every arm must cover every target, or the means are not comparable and
-    # the paired bootstrap is not paired. Report the shortfall loudly.
-    complete = wide.dropna(subset=arms)
+    # Every core arm must cover every target, or the means are not comparable
+    # and the paired bootstrap is not paired. Report the shortfall loudly.
+    complete = wide.dropna(subset=core)
     dropped = sorted(set(wide.index) - set(complete.index))
     if dropped:
         print(f"WARNING: {len(dropped)} targets missing from at least one arm and "
@@ -163,10 +182,17 @@ def main() -> int:
         idx = boot_indices(n)
         for arm in arms:
             values = complete[arm].to_numpy()[mask]
-            lo, hi = interval(values, idx)
+            present = ~np.isnan(values)
+            values = values[present]
+            # ESMFold covers a subset, so it gets its own resamples and its own
+            # n rather than being compared on rows it does not have.
+            arm_idx = idx if present.all() else boot_indices(len(values))
+            if not len(values):
+                continue
+            lo, hi = interval(values, arm_idx)
             headline.append({"eval_set": eval_set, "arm": arm, "label": label[arm],
-                             "n": n, "mean_lddt": values.mean(), "ci_lo": lo,
-                             "ci_hi": hi})
+                             "n": int(len(values)), "mean_lddt": values.mean(),
+                             "ci_lo": lo, "ci_hi": hi})
         for a, b in DELTAS:
             if a not in arms or b not in arms:
                 continue
@@ -229,7 +255,8 @@ def main() -> int:
     for metric, lower_better in METRICS:
         wide_metric = ok.pivot_table(index="target_id", columns="arm", values=metric)
         arms_here = [a for a in arms if a in wide_metric.columns]
-        frame = wide_metric.dropna(subset=arms_here)
+        core_here = [a for a in core if a in wide_metric.columns]
+        frame = wide_metric.dropna(subset=core_here)
         meta_metric = targets.set_index("target_id").loc[frame.index]
         for eval_set in (*SETS, "all-natural", "all"):
             if eval_set == "all":
@@ -244,11 +271,17 @@ def main() -> int:
             idx = boot_indices(n)
             for arm in arms_here:
                 values = frame[arm].to_numpy()[mask]
-                lo, hi = interval(values, idx)
+                present = ~np.isnan(values)
+                values = values[present]
+                if not len(values):
+                    continue
+                arm_idx = idx if present.all() else boot_indices(len(values))
+                lo, hi = interval(values, arm_idx)
                 metric_rows.append({
                     "metric": metric, "lower_is_better": int(lower_better),
                     "eval_set": eval_set, "arm": arm, "label": label[arm],
-                    "n": n, "mean": values.mean(), "ci_lo": lo, "ci_hi": hi,
+                    "n": int(len(values)), "mean": values.mean(),
+                    "ci_lo": lo, "ci_hi": hi,
                 })
     pd.DataFrame(metric_rows).to_csv(U.DATA / "headline_metrics.csv", index=False)
     print(f"-> {U.DATA / 'headline_metrics.csv'}")

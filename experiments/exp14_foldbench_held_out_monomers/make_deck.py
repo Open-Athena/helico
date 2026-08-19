@@ -45,7 +45,7 @@ SET_ORDER = ("eval-val", "eval-test", "eval-denovo")
 
 #: Reporting order, top to bottom.
 ARM_ORDER = ("off", "v2ss", "mf_L5", "mf_L2", "mf_L", "v2msa", "oracle",
-             "protenix_v2_single_seq", "protenix_v2_msa")
+             "protenix_v2_single_seq", "protenix_v2_msa", "esmfold", "esmfold2")
 SHORT = {
     "off": "Helico, no contacts",
     "v2ss": "Helico + Protenix-v2 SS contacts",
@@ -56,6 +56,8 @@ SHORT = {
     "oracle": "Helico + oracle contacts",
     "protenix_v2_single_seq": "Protenix v2, single sequence",
     "protenix_v2_msa": "Protenix v2 + MSA",
+    "esmfold": "ESMFold",
+    "esmfold2": "ESMFold2",
 }
 METRIC_LABEL = {"lddt": "lDDT", "tm_score": "TM-score", "gdt_ts": "GDT-TS",
                 "rmsd": "CA RMSD (Å)"}
@@ -65,8 +67,8 @@ METRIC_LABEL = {"lddt": "lDDT", "tm_score": "TM-score", "gdt_ts": "GDT-TS",
 #: eval sets. The arms conditioned on contacts read off a Protenix structure
 #: are left out here: they answer "is the conditioning channel faithful", not
 #: "how good are the predictors", which is what this ordering is for.
-SPLIT_ORDER = ("protenix_v2_msa", "protenix_v2_single_seq", "off",
-               "mf_L5", "mf_L2", "mf_L", "oracle")
+SPLIT_ORDER = ("protenix_v2_msa", "protenix_v2_single_seq", "esmfold2",
+               "esmfold", "off", "mf_L5", "mf_L2", "mf_L", "oracle")
 #: eval-val + eval-test pooled, against the designed monomers.
 SPLIT_PANELS = (("all-natural", "natural proteins (eval-val + eval-test)",
                  "#4269d0"),
@@ -90,6 +92,37 @@ def slide(pdf, title, subtitle=None):
 def finish(pdf, fig):
     pdf.savefig(fig)
     plt.close(fig)
+
+
+def arm_label(arm, rows, panel_n):
+    """Arm name, with its own n appended when it differs from the panel's."""
+    if arm in rows.index and int(rows.loc[arm, "n"]) != panel_n:
+        return f"{SHORT[arm]}  (n={int(rows.loc[arm, 'n'])})"
+    return SHORT[arm]
+
+
+def mark_odd_n(ax, rows, arms, positions, means, panel_n):
+    """Write n beside any bar whose coverage differs from the panel's.
+
+    ESMFold and ESMFold2 fold only 11 of the 19 designed monomers -- the rest
+    carry non-standard residues whose index map could not be verified -- so
+    their bars are means over a different set and have to say so where they
+    are drawn rather than only in a table.
+    """
+    for arm, y, x in zip(arms, positions, means):
+        if arm not in rows.index:
+            continue
+        n = int(rows.loc[arm, "n"])
+        if n == panel_n:
+            continue
+        ax.annotate(f"n={n}", (x, y), textcoords="offset points",
+                    xytext=(26, 0), va="center", fontsize=8.5, color=MUTE)
+
+
+def panel_count(rows, arms):
+    """The n most arms share, so the odd one out is the one that gets labelled."""
+    counts = [int(rows.loc[a, "n"]) for a in arms if a in rows.index]
+    return max(set(counts), key=counts.count) if counts else 0
 
 
 def tidy(ax, *, xlabel=None, ylabel=None, xgrid=True, ygrid=False):
@@ -126,11 +159,13 @@ def metric_bars(fig, frame, metric, arms):
             means.append(rows.loc[arm, "mean"])
             los.append(rows.loc[arm, "mean"] - rows.loc[arm, "ci_lo"])
             his.append(rows.loc[arm, "ci_hi"] - rows.loc[arm, "mean"])
-        n = int(rows.n.iloc[0]) if len(rows) else 0
+        n = panel_count(rows, arms)
         ax.barh(ys, means, height=height * 0.9, color=SET_COLOR[eval_set],
                 label=f"{eval_set} (n={n})",
                 xerr=[los, his], error_kw={"ecolor": INK, "elinewidth": 1.1,
                                           "capsize": 2.5, "capthick": 1.1})
+        drawn = [a for a in arms if a in rows.index]
+        mark_odd_n(ax, rows, drawn, ys, means, n)
     ax.set_yticks([positions[a] for a in arms])
     ax.set_yticklabels([SHORT[a] for a in arms], fontsize=11)
     ax.set_ylim(0.4, len(arms) + 0.8)
@@ -156,13 +191,16 @@ def metric_bars_split(fig, frame, metric, arms):
         ax.barh(positions, means, height=0.62, color=color,
                 xerr=[lo, hi], error_kw={"ecolor": INK, "elinewidth": 1.1,
                                         "capsize": 3, "capthick": 1.1})
+        mark_odd_n(ax, rows, present, positions, means,
+                   panel_count(rows, present))
         ax.set_yticks(positions)
         if k == 0:
-            ax.set_yticklabels([SHORT[a] for a in present], fontsize=10.5)
+            ax.set_yticklabels([arm_label(a, rows, panel_count(rows, present))
+                                for a in present], fontsize=10.5)
         else:
             ax.set_yticklabels([])
         ax.set_ylim(0.35, len(present) + 0.65)
-        n = int(rows.n.iloc[0]) if len(rows) else 0
+        n = panel_count(rows, present)
         ax.set_title(f"{panel_title}\nn = {n}", fontsize=11, color=INK, pad=8)
         tidy(ax, xlabel=METRIC_LABEL[metric])
         axes.append(ax)
@@ -210,9 +248,13 @@ def metric_bars_val_test(fig, frame, metric, arms):
                     label=f"{eval_set} (n={n})",
                     xerr=[lo, hi], error_kw={"ecolor": INK, "elinewidth": 1.0,
                                             "capsize": 2.5, "capthick": 1.0})
+            mark_odd_n(ax, rows, here, positions, means, n)
         ax.set_yticks([len(present) - i for i in range(len(present))])
         if k == 0:
-            ax.set_yticklabels([SHORT[a] for a in present], fontsize=10.5)
+            reference = sub[sub.eval_set == groups[-1][0]].set_index("arm")
+            ax.set_yticklabels(
+                [arm_label(a, reference, panel_count(reference, present))
+                 for a in present], fontsize=10.5)
         else:
             ax.set_yticklabels([])
         ax.set_ylim(0.35, len(present) + 0.65)

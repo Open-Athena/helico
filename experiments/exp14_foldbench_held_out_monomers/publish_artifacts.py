@@ -59,7 +59,8 @@ PROTENIX = U.CACHE / "protenix_v2"
 SCORE_TABLES = (
     "per_target.csv", "headline.csv", "paired_deltas.csv", "val_vs_test.csv",
     "strata.csv", "analysis_summary.json", "marinfold_arm_accuracy.csv",
-    "v2_arm_accuracy.csv", "protenix_v2_baseline.csv", "index_map_report.csv",
+    "v2_arm_accuracy.csv", "protenix_v2_baseline.csv", "esmfold_baseline.csv",
+    "headline_metrics.csv", "index_map_report.csv",
     "eval_set_report.json", "exp245_inputs.json", "marinfold_inputs.json",
 )
 
@@ -157,6 +158,25 @@ def stage(dry_run: bool) -> Path:
             size = tar_directory(predictions,
                                  STAGE / "structures/helico" / f"{name}.tar.gz", name)
             inventory[f"structures/helico/{name}.tar.gz"] = size
+
+    # Ground truths: the notebook superimposes on them, and without them
+    # published nothing downstream can reproduce a score or draw a comparison.
+    if U.GT_DIR.is_dir() and any(U.GT_DIR.iterdir()):
+        inventory["structures/ground_truth.tar.gz"] = tar_directory(
+            U.GT_DIR, STAGE / "structures/ground_truth.tar.gz", "ground_truth")
+
+    # ESMFold / ESMFold2, scored here from exp78's existing predictions.
+    for name in ("esmfold", "esmfold2"):
+        source = U.CACHE / "esmfold" / name
+        if not source.is_dir():
+            continue
+        dest = STAGE / "structures" / name / f"{name}.tar.gz"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(dest, "w:gz") as tar:
+            for path in sorted(source.rglob("*")):
+                if path.is_file() and path.suffix in (".cif", ".pdb", ".json"):
+                    tar.add(path, arcname=str(path.relative_to(source)))
+        inventory[f"structures/{name}/{name}.tar.gz"] = dest.stat().st_size
 
     for mode in ("single_seq", "msa"):
         root = PROTENIX / mode
