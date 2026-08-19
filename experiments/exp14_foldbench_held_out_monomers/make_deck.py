@@ -175,6 +175,64 @@ def metric_bars_split(fig, frame, metric, arms):
     return axes
 
 
+def metric_bars_val_test(fig, frame, metric, arms):
+    """As metric_bars_split, but the natural panel separates its two sets.
+
+    Same layout and same x range as the pooled version, so the two slides can
+    be flipped between; the only change is that eval-val and eval-test get
+    their own hue instead of being averaged together.
+    """
+    sub = frame[frame.metric == metric]
+    axes = []
+    panels = (
+        ((("eval-val", "#4269d0"), ("eval-test", "#b8452f")),
+         "natural proteins, split by set"),
+        ((("eval-denovo", "#3ca951"),), "de novo designed proteins"),
+    )
+    for k, (groups, panel_title) in enumerate(panels):
+        left = 0.285 + k * 0.375
+        ax = fig.add_axes((left, 0.135, 0.30, 0.595))
+        present = [a for a in arms if a in set(sub.arm)]
+        height = 0.72 / max(len(groups), 1)
+        counts = []
+        for g, (eval_set, color) in enumerate(groups):
+            rows = sub[sub.eval_set == eval_set].set_index("arm")
+            offset = ((len(groups) - 1) / 2 - g) * height
+            positions = [len(present) - i + offset
+                         for i, a in enumerate(present) if a in rows.index]
+            here = [a for a in present if a in rows.index]
+            means = [rows.loc[a, "mean"] for a in here]
+            lo = [rows.loc[a, "mean"] - rows.loc[a, "ci_lo"] for a in here]
+            hi = [rows.loc[a, "ci_hi"] - rows.loc[a, "mean"] for a in here]
+            n = int(rows.n.iloc[0]) if len(rows) else 0
+            counts.append(f"{eval_set} n={n}")
+            ax.barh(positions, means, height=height * 0.88, color=color,
+                    label=f"{eval_set} (n={n})",
+                    xerr=[lo, hi], error_kw={"ecolor": INK, "elinewidth": 1.0,
+                                            "capsize": 2.5, "capthick": 1.0})
+        ax.set_yticks([len(present) - i for i in range(len(present))])
+        if k == 0:
+            ax.set_yticklabels([SHORT[a] for a in present], fontsize=10.5)
+        else:
+            ax.set_yticklabels([])
+        ax.set_ylim(0.35, len(present) + 0.65)
+        ax.set_title(f"{panel_title}\n{'  ·  '.join(counts)}", fontsize=11,
+                     color=INK, pad=8)
+        tidy(ax, xlabel=METRIC_LABEL[metric])
+        axes.append(ax)
+    lo = min(ax.get_xlim()[0] for ax in axes)
+    hi = max(ax.get_xlim()[1] for ax in axes)
+    for ax in axes:
+        ax.set_xlim(lo, hi)
+    handles = [plt.Rectangle((0, 0), 1, 1, color=c) for c in
+               ("#4269d0", "#b8452f", "#3ca951")]
+    fig.legend(handles=handles,
+               labels=["eval-val", "eval-test", "eval-denovo"],
+               frameon=False, ncol=3, loc="lower center",
+               bbox_to_anchor=(0.6, 0.005), fontsize=11, labelcolor=INK)
+    return axes
+
+
 def scatter_panel(ax, frame, x_arm, y_arm, metric, lower_better):
     merged = frame.pivot_table(index="target_id", columns="arm", values=metric)
     meta = frame.drop_duplicates("target_id").set_index("target_id")
@@ -395,6 +453,21 @@ def main() -> int:
                 f"every arm sees the same resamples. Both panels share an "
                 f"x range.")
             metric_bars_split(fig, metrics, metric, split_arms)
+            finish(pdf, fig)
+
+        # --- 16-19. the same, with the two natural sets kept apart ----
+        for metric, lower_better in (("lddt", False), ("tm_score", False),
+                                     ("gdt_ts", False), ("rmsd", True)):
+            direction = "lower is better" if lower_better else "higher is better"
+            fig = slide(
+                pdf, f"{METRIC_LABEL[metric]}: eval-val and eval-test shown "
+                     f"separately",
+                f"Mean per set, {direction}. eval-val is the working set, "
+                f"eval-test the held-out one. Error bars are 95% percentile "
+                f"bootstrap intervals over 10,000 resamples of the proteins; "
+                f"every arm sees the same resamples. Both panels share an "
+                f"x range.")
+            metric_bars_val_test(fig, metrics, metric, split_arms)
             finish(pdf, fig)
 
     print(f"-> {OUT}")
