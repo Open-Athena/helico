@@ -159,12 +159,17 @@ def main() -> int:
                            "n_better": int((diff > 0).sum()), "n": n})
 
     # H2: does the working set stand in for the held-out one?
-    for arm in arms:
-        val = complete[arm].to_numpy()[(meta.eval_set == "eval-val").to_numpy()]
-        test = complete[arm].to_numpy()[(meta.eval_set == "eval-test").to_numpy()]
-        val_test.append({"arm": arm, "label": label[arm],
-                         "eval_val": val.mean(), "eval_test": test.mean(),
-                         "change": test.mean() - val.mean()})
+    val_mask = (meta.eval_set == "eval-val").to_numpy()
+    test_mask = (meta.eval_set == "eval-test").to_numpy()
+    if val_mask.any() and test_mask.any():
+        for arm in arms:
+            val = complete[arm].to_numpy()[val_mask]
+            test = complete[arm].to_numpy()[test_mask]
+            val_test.append({"arm": arm, "label": label[arm],
+                             "eval_val": val.mean(), "eval_test": test.mean(),
+                             "change": test.mean() - val.mean()})
+    else:
+        print("skipping val-vs-test: one of the two sets has no scored targets")
 
     # The cuts exp245 found interpretable: homology to MarinFold's corpus, viral
     # status, designed vs natural.

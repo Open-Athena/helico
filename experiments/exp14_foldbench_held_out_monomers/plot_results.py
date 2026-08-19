@@ -65,9 +65,11 @@ def scoreboard(headline: pd.DataFrame) -> None:
     positions = {arm: len(arms) - i for i, arm in enumerate(arms)}
     offsets = {"eval-val": 0.24, "eval-test": 0.0, "eval-denovo": -0.24}
 
-    fig, ax = plt.subplots(figsize=(9, 0.62 * len(arms) + 1.6))
+    fig, ax = plt.subplots(figsize=(9, 0.62 * len(arms) + 2.1))
     for eval_set in SET_ORDER:
         sub = frame[frame.eval_set == eval_set]
+        if sub.empty:
+            continue
         y = [positions[a] + offsets[eval_set] for a in sub.arm]
         ax.hlines(y, sub.ci_lo, sub.ci_hi, color=SET_COLOR[eval_set], lw=2,
                   alpha=0.85)
@@ -79,7 +81,10 @@ def scoreboard(headline: pd.DataFrame) -> None:
     ax.set_yticklabels([labels[a] for a in arms])
     ax.set_ylim(0.4, len(arms) + 0.7)
     style(ax, xlabel="mean lDDT (95% bootstrap interval over proteins)")
-    ax.legend(frameon=False, loc="lower right", labelcolor=INK)
+    # Below the axes, not inside them: with nine rows there is no empty corner
+    # the legend can sit in without landing on an interval.
+    ax.legend(frameon=False, ncol=3, loc="upper center",
+              bbox_to_anchor=(0.5, -0.10), labelcolor=INK)
     ax.set_title("Folding accuracy by conditioning arm, on exp245's held-out "
                  "FoldBench monomers", color=INK, loc="left", pad=12)
     fig.tight_layout()
@@ -88,9 +93,12 @@ def scoreboard(headline: pd.DataFrame) -> None:
 
 
 def val_vs_test(frame: pd.DataFrame) -> None:
+    if frame.empty:
+        print("no val-vs-test rows to plot")
+        return
     frame = frame.iloc[::-1].reset_index(drop=True)
     y = range(len(frame))
-    fig, ax = plt.subplots(figsize=(8, 0.55 * len(frame) + 1.6))
+    fig, ax = plt.subplots(figsize=(8, 0.55 * len(frame) + 2.1))
     ax.hlines(y, frame.eval_val, frame.eval_test, color=GRID, lw=2)
     ax.plot(frame.eval_val, y, "o", ms=8, color=SET_COLOR["eval-val"],
             markeredgecolor="white", markeredgewidth=1.2, ls="none",
@@ -106,7 +114,8 @@ def val_vs_test(frame: pd.DataFrame) -> None:
     ax.set_yticks(list(y))
     ax.set_yticklabels(frame.label)
     style(ax, xlabel="mean lDDT")
-    ax.legend(frameon=False, loc="lower right", labelcolor=INK)
+    ax.legend(frameon=False, ncol=2, loc="upper center",
+              bbox_to_anchor=(0.5, -0.10), labelcolor=INK)
     ax.set_title("The working set against the held-out set", color=INK,
                  loc="left", pad=12)
     fig.tight_layout()
@@ -144,7 +153,9 @@ def main() -> int:
     PLOTS.mkdir(exist_ok=True)
 
     scoreboard(pd.read_csv(U.DATA / "headline.csv"))
-    val_vs_test(pd.read_csv(U.DATA / "val_vs_test.csv"))
+    val_vs_test(pd.read_csv(U.DATA / "val_vs_test.csv")
+                if (U.DATA / "val_vs_test.csv").stat().st_size > 1
+                else pd.DataFrame())
 
     per_target = pd.read_csv(U.DATA / "per_target.csv")
     per_target = per_target[per_target.status == "ok"]

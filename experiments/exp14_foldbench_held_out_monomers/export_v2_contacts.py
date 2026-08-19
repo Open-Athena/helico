@@ -58,6 +58,28 @@ ACCURACY = U.DATA / "v2_arm_accuracy.csv"
 MIN_REPLACED = 0.9
 
 
+def find_target_dirs(root: Path) -> dict[str, Path]:
+    """stem -> the directory holding that target's Protenix output.
+
+    Located by walking for the sample files rather than by assuming a depth:
+    `modal volume get` reproduces the remote prefix under the destination, so
+    the tree is one level deeper than the upload path, and exp74's own dumps
+    nest a `seed_*` level that later ones do not. Anchoring on the mmCIFs
+    themselves survives all three.
+    """
+    found: dict[str, Path] = {}
+    for cif in root.rglob("*_sample_*.cif"):
+        for parent in cif.parents:
+            if parent == root:
+                break
+            # The target directory is the one named after the stem; every
+            # layout puts `predictions/` (and optionally `seed_N/`) inside it.
+            if parent.name.count("_") == 1 and len(parent.name.split("_")[0]) == 4:
+                found.setdefault(parent.name, parent)
+                break
+    return found
+
+
 def best_prediction(target_dir: Path) -> Path | None:
     """The mmCIF this target is scored on -- Protenix's own top-ranked sample."""
     seeds = sorted(target_dir.glob("seed_*"))
@@ -65,7 +87,9 @@ def best_prediction(target_dir: Path) -> Path | None:
     candidates = [c for c in candidates if c is not None]
     if candidates:
         return candidates[0]
-    # Some dumps put predictions directly under the target directory.
+    direct = ranked_sample(target_dir)
+    if direct is not None:
+        return direct
     loose = sorted(target_dir.rglob("*_sample_*.cif"))
     return loose[0] if loose else None
 
@@ -102,11 +126,14 @@ def main() -> int:
         if not root.exists():
             raise SystemExit(f"no Protenix predictions at {root}; "
                              f"run run_protenix_v2.py --mode {mode} first")
+        target_dirs = find_target_dirs(root)
+        print(f"{arm_name}: found predictions for {len(target_dirs)} targets "
+              f"under {root}")
         arm, skipped = {}, []
         for target in targets:
             stem = target["target_id"]
-            target_dir = root / stem
-            cif = best_prediction(target_dir) if target_dir.is_dir() else None
+            target_dir = target_dirs.get(stem)
+            cif = best_prediction(target_dir) if target_dir is not None else None
             if cif is None:
                 skipped.append((stem, "no prediction"))
                 continue

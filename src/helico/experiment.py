@@ -445,8 +445,8 @@ class ByclassRun:
     """Result of one arm of a `modal/bench_byclass.py` run.
 
     Unlike `BenchRun`, whose shape follows FoldBench's nine categories, this is
-    a single flat table: one row per target, with `lddt`, `tm_score`, `status`
-    and the arm that produced it.
+    a single flat table: one row per target, with `lddt`, `status`, the number
+    of contacts it was conditioned on, and the arm that produced it.
     """
 
     name: str
