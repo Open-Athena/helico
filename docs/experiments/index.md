@@ -12,14 +12,13 @@ _`gh issue list --label experiment` + each notebook's frontmatter._
 
 ## Open
 
-| Issue | Title | Branch | Notebook |
-|---|---|---|---|
-| [#14](https://github.com/Open-Athena/helico/issues/14) | exp: Helico on MarinFold exp245's held-out FoldBench monomer sets (eval-val / eval-test / eval-denovo) | `—` | _no notebook yet_ |
+_(No open experiments.)_
 
 ## Closed
 
 | Issue | Title | Branch | Notebook |
 |---|---|---|---|
+| [#14](https://github.com/Open-Athena/helico/issues/14) | exp: Helico on MarinFold exp245's held-out FoldBench monomer sets (eval-val / eval-test / eval-denovo) | `main` | [`exp14_foldbench_held_out_monomers`](https://github.com/Open-Athena/helico/blob/main/experiments/exp14_foldbench_held_out_monomers/README.md) |
 | [#9](https://github.com/Open-Athena/helico/issues/9) | exp: Train diffusion module to work from distogram rather than pair representation | `—` | _no notebook yet_ |
 | [#8](https://github.com/Open-Athena/helico/issues/8) | Triage antibody-antigen interface underperformance | `main` | [`exp8_ab_ag_triage`](https://github.com/Open-Athena/helico/blob/main/experiments/exp8_ab_ag_triage/README.md) |
 | [#7](https://github.com/Open-Athena/helico/issues/7) | exp: direct A/B of Helico vs upstream Protenix v1 on same 679 targets | `—` | _no notebook yet_ |
