@@ -277,12 +277,15 @@ def main() -> int:
         # --- 10. how it was run ---------------------------------------
         fig = slide(pdf, "How each number was produced", None)
         lines = [
-            ("Helico", "contacts-msafree-01 step 6000 · 3 diffusion samples · "
-                       "6 trunk recycles · 1 trunk run · seed 42 · bfloat16 · "
-                       "no MSA"),
-            ("Protenix v2", "protenix 2.0.0, model protenix-v2 · built-in "
-                            "sampling defaults · 1 seed · 5 samples per seed · "
-                            "top-1 by the model's own ranking score"),
+            ("Helico", "contacts-msafree-01 step 6000 · 6 trunk recycles · "
+                       "1 trunk run · 3 diffusion samples · seed 42 · bfloat16 "
+                       "· no MSA · best of the 3 by the confidence head's own "
+                       "ranking score (pTM for a single chain)"),
+            ("Protenix v2", "protenix 2.0.0, model protenix-v2 · 10 trunk "
+                            "recycles · 1 seed · 5 diffusion samples · 200 "
+                            "diffusion steps · top-1 of the 5 by the model's "
+                            "own ranking score. More inference compute than "
+                            "the Helico arms get, which is conservative here."),
             ("MarinFold contacts", "exp232 m2-p06 step 145199 · 100 rollouts per "
                                    "protein · occurrence-frequency voting · "
                                    "cut at top-L, L/2, L/5 of the prompt length"),
