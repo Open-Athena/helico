@@ -80,6 +80,10 @@ def load_arms(cache_root: Path) -> pd.DataFrame:
     frames = []
     for path in sorted(cache_root.glob("*/results.csv")):
         arm = path.parent.name
+        if arm.startswith("smoke-"):
+            # Smoke runs cover a handful of targets and would otherwise appear
+            # as an arm with 4 proteins next to arms with 333.
+            continue
         frame = pd.read_csv(path)
         frame["arm"] = arm
         frames.append(frame)

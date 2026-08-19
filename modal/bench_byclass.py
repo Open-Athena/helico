@@ -195,14 +195,20 @@ class Predictor:
             "contacts_arm": CONTACTS_ARM,
             "oracle_contacts": ORACLE,
             "n_contact_arm_targets": len(self.contact_map or {}),
-            "gpu_name": properties.name,
+            "gpu_name": str(properties.name),
             "gpu_total_memory_gb": round(properties.total_memory / 1e9, 2),
             "gpu_compute_capability": f"{properties.major}.{properties.minor}",
-            "gpu_count": torch.cuda.device_count(),
+            "gpu_count": int(torch.cuda.device_count()),
             "hostname": socket.gethostname(),
             "platform": platform.platform(),
             "python_version": platform.python_version(),
-            "torch_version": torch.__version__,
+            # str(): torch.__version__ is a TorchVersion, a str subclass living
+            # in torch.torch_version. Returning it unwrapped pickles that module
+            # reference into the result, and the launching client has no torch
+            # to unpickle it with -- every call then dies in deserialization
+            # *after* the GPU work is done, and with --detach the containers
+            # keep running with nobody collecting the results.
+            "torch_version": str(torch.__version__),
             "model_load_seconds": round(self.model_load_seconds, 3),
         }
         print(f"run metadata: {self.run_meta}", flush=True)

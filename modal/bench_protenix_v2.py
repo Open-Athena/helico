@@ -113,12 +113,14 @@ class UpstreamPredictor:
 
         properties = torch.cuda.get_device_properties(0)
         environment = {
-            "gpu_name": properties.name,
+            "gpu_name": str(properties.name),
             "gpu_total_memory_gb": round(properties.total_memory / 1e9, 2),
             "gpu_compute_capability": f"{properties.major}.{properties.minor}",
             "hostname": socket.gethostname(),
             "platform": platform.platform(),
-            "torch_version": torch.__version__,
+            # str(): a bare torch.__version__ pickles a reference to
+            # torch.torch_version, which the launching client cannot import.
+            "torch_version": str(torch.__version__),
             "protenix_version": PROTENIX_VERSION,
             "model_name": model_name,
         }
