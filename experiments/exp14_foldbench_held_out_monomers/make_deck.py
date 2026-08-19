@@ -60,6 +60,19 @@ SHORT = {
 METRIC_LABEL = {"lddt": "lDDT", "tm_score": "TM-score", "gdt_ts": "GDT-TS",
                 "rmsd": "CA RMSD (Å)"}
 
+#: A second pass over the same numbers, requested in a different reading order
+#: and with natural and designed proteins separated rather than shown as three
+#: eval sets. The arms conditioned on contacts read off a Protenix structure
+#: are left out here: they answer "is the conditioning channel faithful", not
+#: "how good are the predictors", which is what this ordering is for.
+SPLIT_ORDER = ("protenix_v2_msa", "protenix_v2_single_seq", "off",
+               "mf_L5", "mf_L2", "mf_L", "oracle")
+#: eval-val + eval-test pooled, against the designed monomers.
+SPLIT_PANELS = (("all-natural", "natural proteins (eval-val + eval-test)",
+                 "#4269d0"),
+                ("eval-denovo", "de novo designed proteins (eval-denovo)",
+                 "#3ca951"))
+
 
 def slide(pdf, title, subtitle=None):
     """Title and a wrapped subtitle. Matplotlib does not wrap `fig.text`, so a
@@ -125,6 +138,41 @@ def metric_bars(fig, frame, metric, arms):
     ax.legend(frameon=False, ncol=3, loc="upper center",
               bbox_to_anchor=(0.5, -0.075), labelcolor=INK, fontsize=11)
     return ax
+
+
+def metric_bars_split(fig, frame, metric, arms):
+    """Two panels on one slide: natural proteins, then designed ones."""
+    axes = []
+    for k, (eval_set, panel_title, color) in enumerate(SPLIT_PANELS):
+        rows = frame[(frame.metric == metric)
+                     & (frame.eval_set == eval_set)].set_index("arm")
+        left = 0.285 + k * 0.375
+        ax = fig.add_axes((left, 0.135, 0.30, 0.595))
+        present = [a for a in arms if a in rows.index]
+        positions = [len(present) - i for i, a in enumerate(present)]
+        means = [rows.loc[a, "mean"] for a in present]
+        lo = [rows.loc[a, "mean"] - rows.loc[a, "ci_lo"] for a in present]
+        hi = [rows.loc[a, "ci_hi"] - rows.loc[a, "mean"] for a in present]
+        ax.barh(positions, means, height=0.62, color=color,
+                xerr=[lo, hi], error_kw={"ecolor": INK, "elinewidth": 1.1,
+                                        "capsize": 3, "capthick": 1.1})
+        ax.set_yticks(positions)
+        if k == 0:
+            ax.set_yticklabels([SHORT[a] for a in present], fontsize=10.5)
+        else:
+            ax.set_yticklabels([])
+        ax.set_ylim(0.35, len(present) + 0.65)
+        n = int(rows.n.iloc[0]) if len(rows) else 0
+        ax.set_title(f"{panel_title}\nn = {n}", fontsize=11, color=INK, pad=8)
+        tidy(ax, xlabel=METRIC_LABEL[metric])
+        axes.append(ax)
+    # One shared x range so the two panels are read against each other rather
+    # than each auto-scaling to its own spread.
+    lo = min(ax.get_xlim()[0] for ax in axes)
+    hi = max(ax.get_xlim()[1] for ax in axes)
+    for ax in axes:
+        ax.set_xlim(lo, hi)
+    return axes
 
 
 def scatter_panel(ax, frame, x_arm, y_arm, metric, lower_better):
@@ -334,6 +382,20 @@ def main() -> int:
             fig.text(0.055, y - 0.036, body, fontsize=12, color=MUTE, va="top",
                      wrap=True)
         finish(pdf, fig)
+
+        # --- 12-15. the same metrics, natural and designed separated ---
+        split_arms = [a for a in SPLIT_ORDER if a in set(metrics.arm)]
+        for metric, lower_better in (("lddt", False), ("tm_score", False),
+                                     ("gdt_ts", False), ("rmsd", True)):
+            direction = "lower is better" if lower_better else "higher is better"
+            fig = slide(
+                pdf, f"{METRIC_LABEL[metric]}: natural against designed proteins",
+                f"Mean per group, {direction}. Error bars are 95% percentile "
+                f"bootstrap intervals over 10,000 resamples of the proteins; "
+                f"every arm sees the same resamples. Both panels share an "
+                f"x range.")
+            metric_bars_split(fig, metrics, metric, split_arms)
+            finish(pdf, fig)
 
     print(f"-> {OUT}")
     return 0
