@@ -236,7 +236,12 @@ def _ensure_volume_exists(volume_name: str) -> None:
     try:
         import modal
 
-        modal.Volume.from_name(volume_name, create_if_missing=True)
+        # .hydrate() is what actually creates it. `from_name` is lazy in
+        # modal 1.x and returns an unhydrated handle, so on its own this
+        # function created nothing and every `modal volume put` that followed
+        # failed with "volume not found" -- reported as a warning, so runs
+        # completed with the local cache only and no authoritative copy.
+        modal.Volume.from_name(volume_name, create_if_missing=True).hydrate()
     except Exception as e:
         logger.warning("Could not ensure Modal volume %s: %s", volume_name, e)
 
