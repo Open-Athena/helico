@@ -198,14 +198,27 @@ def main() -> int:
         for stem, why in skipped:
             print(f"    skipped {stem}: {why}")
 
-    for path, rows in ((BASELINE, baseline_rows), (ACCURACY, accuracy_rows)):
+    # Merge rather than overwrite. Both modes write to these two files, so a
+    # single-mode run used to silently delete the other mode's rows -- and the
+    # only symptom was a predictor quietly missing from the scoreboard.
+    for path, rows, key in ((BASELINE, baseline_rows, ("target_id", "arm")),
+                            (ACCURACY, accuracy_rows, ("target_id", "arm"))):
         if not rows:
             continue
+        merged = {}
+        if path.exists():
+            with path.open() as handle:
+                for existing in csv.DictReader(handle):
+                    merged[tuple(existing[k] for k in key)] = existing
+        for row in rows:
+            merged[tuple(str(row[k]) for k in key)] = row
+        fieldnames = list(rows[0])
         with path.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer = csv.DictWriter(handle, fieldnames=fieldnames,
+                                    extrasaction="ignore")
             writer.writeheader()
-            writer.writerows(rows)
-        print(f"-> {path}")
+            writer.writerows([merged[k] for k in sorted(merged)])
+        print(f"-> {path} ({len(merged)} rows)")
     return 0
 
 

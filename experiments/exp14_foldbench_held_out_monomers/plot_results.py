@@ -85,8 +85,9 @@ def scoreboard(headline: pd.DataFrame) -> None:
     # the legend can sit in without landing on an interval.
     ax.legend(frameon=False, ncol=3, loc="upper center",
               bbox_to_anchor=(0.5, -0.10), labelcolor=INK)
-    ax.set_title("Folding accuracy by conditioning arm, on exp245's held-out "
-                 "FoldBench monomers", color=INK, loc="left", pad=12)
+    ax.set_title("Folding accuracy by conditioning arm\n"
+                 "exp245's held-out FoldBench monomers, Helico MSA-free throughout",
+                 color=INK, loc="left", pad=14, fontsize=12)
     fig.tight_layout()
     fig.savefig(PLOTS / "scoreboard.png", dpi=200)
     plt.show()
