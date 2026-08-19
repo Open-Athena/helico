@@ -503,6 +503,54 @@ class TestOracleContacts:
         assert state.shape == (predicted.n_tokens, predicted.n_tokens)
         assert torch.equal(state, state.T)
 
+    def test_modified_residues_do_not_shift_the_mapping(self, ccd, rotamer_library):
+        """A capped, non-standard peptide must still index its contacts.
+
+        5SBJ is a designed miniprotein with ACE and NH2 caps and two AIB
+        residues. Those tokenize per-atom from the structure and as one UNK
+        token from the sequence, so pairing the two sides token by token
+        desynchronises at the first of them and every later contact lands on the
+        wrong residue. The identity check caught that and returned None, which
+        silently turns an oracle-contacts bench into a contacts-withheld one —
+        it did so for 30 of exp245's 333 FoldBench monomers. Pairing residues
+        rather than tokens is what fixes it.
+        """
+        from helico.bench import oracle_contact_state, structure_to_chains
+        from helico.data import tokenize_sequences
+
+        gt = parse_mmcif(_pdb_path("5SBJ"))
+        predicted = tokenize_sequences(structure_to_chains(gt), ccd)
+        state = oracle_contact_state(gt, predicted, rotamer_library)
+        assert state is not None, "modified residues defeated the index mapping"
+
+        # Independent projection: group the structure tokenization's contacts by
+        # residue rank within the chain and count the distinct residue pairs.
+        # That is what the re-indexed matrix should contain.
+        structure_tokens = tokenize_structure(gt, ccd=None)
+        edges, _ = compute_contacts(structure_tokens.tokens, rotamer_library)
+        rank: dict[int, int] = {}
+        for ti, tok in enumerate(structure_tokens.tokens):
+            if tok.chain_idx != structure_tokens.tokens[0].chain_idx:
+                continue
+            rank.setdefault(tok.res_idx, len(rank))
+        by_residue = {
+            tuple(sorted((rank[structure_tokens.tokens[i].res_idx],
+                          rank[structure_tokens.tokens[j].res_idx])))
+            for i, j in edges
+            if structure_tokens.tokens[i].res_idx in rank
+            and structure_tokens.tokens[j].res_idx in rank
+        }
+        # _build_contact_state drops pairs closer than MIN_SEQ_SEPARATION, so
+        # the projection has to as well or it counts contacts the matrix never
+        # claims.
+        by_residue = {(i, j) for i, j in by_residue
+                      if j - i >= MIN_SEQ_SEPARATION}
+        n_mapped = int((state == CONTACT_PRESENT).sum()) // 2
+        assert n_mapped == len(by_residue), (
+            f"re-indexed {n_mapped} contacts, residue-wise projection has "
+            f"{len(by_residue)}"
+        )
+
     def test_returns_none_for_protein_free_structure(self, ccd, rotamer_library):
         from helico.bench import oracle_contact_state, structure_to_chains
         from helico.data import tokenize_sequences

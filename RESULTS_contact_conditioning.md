@@ -2,6 +2,26 @@
 
 **Status:** exploratory. Results below are from a *warm-started* model.
 
+> **Superseded for the headline comparison.**
+> [exp14](experiments/exp14_foldbench_held_out_monomers/) re-ran this question on
+> MarinFold [exp245](https://github.com/Open-Athena/MarinFold/tree/main/experiments/exp245_evals_foldbench_held_out_monomers)'s
+> held-out FoldBench monomer sets: **333 proteins instead of 38**, none released
+> inside Helico's training window, with contacts from a checkpoint whose
+> training corpus was provably decontaminated against them. Every claim below
+> reproduces there and most get larger:
+>
+> | | here (38 targets) | exp14 (210 held-out) |
+> | --- | --- | --- |
+> | MarinFold contacts vs Protenix-v2 single sequence | +0.119 ± 0.031 | **+0.218 [+0.192, +0.245]** |
+> | MarinFold contacts vs contacts withheld | +0.152 ± 0.032 | **+0.255 [+0.231, +0.280]** |
+> | oracle contacts vs Protenix-v2 + MSA | −0.002 ± 0.028 | **0.860 vs 0.860** |
+>
+> exp14 also answers what this document could not: lDDT tracks the *precision*
+> of the contacts (r = 0.81–0.97) almost independently of which model produced
+> them, and Helico's own folding is flat at 0.861 across homology and viral
+> strata that move the contact predictor by 0.05. The numbers in this document
+> remain correct for the 38-target homology-filtered set they describe.
+
 **Every number here is homology-filtered.** A target is reported only if it
 survives both of:
 

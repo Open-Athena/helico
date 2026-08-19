@@ -229,3 +229,11 @@ experiments/marinfold_contacts/arms/*.json
 # runs are reproducible from modal/bench*.py.
 experiments/marinfold_contacts/upstream/*/
 bench_*/
+
+# exp14: ground truths are copied from the FoldBench cache, the arms are
+# exported by this directory's scripts, and the Protenix predictions are
+# pulled from Modal. All reproducible, all too large for git.
+experiments/exp14_foldbench_held_out_monomers/data/gt/
+experiments/exp14_foldbench_held_out_monomers/data/arms/
+experiments/exp14_foldbench_held_out_monomers/data/token_map.json
+experiments/exp14_foldbench_held_out_monomers/results/

@@ -403,16 +403,32 @@ def oracle_contact_state(
         logger.warning(f"oracle contacts: ground-truth tokenization failed: {e}")
         return None
 
-    def _protein_residues_by_chain(tokens):
-        """chain_id -> [token_idx] for standard protein residue tokens, in order."""
-        out: dict[str, list[int]] = {}
-        for ti, tok in enumerate(tokens):
-            if tok.token_type <= 20:
-                out.setdefault(tok.chain_idx, []).append(ti)
-        return out
+    def _residues_by_chain(tokens):
+        """chain_idx -> [[token_idx, ...], ...], one inner list per residue, in order.
 
-    gt_by_chain = _protein_residues_by_chain(gt_tokenized.tokens)
-    pred_by_chain = _protein_residues_by_chain(predicted.tokens)
+        Grouped by residue rather than by token because a modified residue
+        (ACE, AIB, MSE, ...) tokenizes per-atom in the ground truth and as a
+        single UNK token in the sequence-derived tokenization. Zipping *tokens*
+        therefore desynchronises the two sides at the first modified residue and
+        shifts every contact after it; zipping residues does not. Only chains
+        carrying at least one standard protein residue take part, which is what
+        keeps ligand and ion chains out of the pairing.
+        """
+        out: dict[int, list[list[int]]] = {}
+        has_protein: set[int] = set()
+        last: dict[int, int] = {}
+        for ti, tok in enumerate(tokens):
+            residues = out.setdefault(tok.chain_idx, [])
+            if last.get(tok.chain_idx) != tok.res_idx or not residues:
+                residues.append([])
+                last[tok.chain_idx] = tok.res_idx
+            residues[-1].append(ti)
+            if tok.token_type <= 20:
+                has_protein.add(tok.chain_idx)
+        return {c: r for c, r in out.items() if c in has_protein}
+
+    gt_by_chain = _residues_by_chain(gt_tokenized.tokens)
+    pred_by_chain = _residues_by_chain(predicted.tokens)
 
     # Chains are emitted in the same order on both sides, so pair them by the
     # sorted chain_idx sequence rather than by id (the predicted tokenization
@@ -429,11 +445,29 @@ def oracle_contact_state(
     gt_to_pred: dict[int, int] = {}
     matched = total = 0
     for gt_c, pred_c in zip(gt_chains, pred_chains):
-        gt_toks, pred_toks = gt_by_chain[gt_c], pred_by_chain[pred_c]
-        for gt_ti, pred_ti in zip(gt_toks, pred_toks):
-            gt_to_pred[gt_ti] = pred_ti
+        gt_residues, pred_residues = gt_by_chain[gt_c], pred_by_chain[pred_c]
+        if len(gt_residues) != len(pred_residues):
+            # structure_to_chains derives the input sequence from these same
+            # resolved residues, so the counts agree by construction. If they
+            # ever don't, zipping would silently misalign the tail.
+            logger.warning(
+                f"oracle contacts: chain {gt_c}/{pred_c} has {len(gt_residues)} "
+                f"ground-truth residues vs {len(pred_residues)} predicted; skipping"
+            )
+            return None
+        for gt_res, pred_res in zip(gt_residues, pred_residues):
+            # Every token of a multi-atom ground-truth residue maps onto that
+            # residue's single predicted token, so a contact involving one of
+            # its atoms becomes a contact with the residue.
+            for gt_ti in gt_res:
+                gt_to_pred[gt_ti] = pred_res[0]
             total += 1
-            if gt_tokenized.tokens[gt_ti].res_name == predicted.tokens[pred_ti].res_name:
+            gt_name = gt_tokenized.tokens[gt_res[0]].res_name
+            pred_name = predicted.tokens[pred_res[0]].res_name
+            # UNK is how the sequence side represents a residue it could not
+            # name -- exactly the modified residues that differ here -- so it
+            # matches anything rather than counting against the identity check.
+            if gt_name == pred_name or pred_name == "UNK":
                 matched += 1
 
     identity = matched / total if total else 0.0
@@ -452,12 +486,19 @@ def oracle_contact_state(
 
     # Re-index onto the predicted tokenization, then densify with the same
     # rules to_features() uses so the matrix means exactly what training saw.
-    pred_eligible = [gt_to_pred[t] for t in eligible if t in gt_to_pred]
-    pred_edges = [
+    # dict.fromkeys: several ground-truth tokens of one modified residue now
+    # collapse onto a single predicted token, and _build_contact_state expects
+    # each eligible token once.
+    pred_eligible = list(dict.fromkeys(
+        gt_to_pred[t] for t in eligible if t in gt_to_pred))
+    pred_edges = list(dict.fromkeys(
         (min(gt_to_pred[i], gt_to_pred[j]), max(gt_to_pred[i], gt_to_pred[j]))
         for i, j in edges
         if i in gt_to_pred and j in gt_to_pred
-    ]
+        # Two atoms of one modified residue contacting each other collapse to a
+        # self-edge, which is not a contact.
+        and gt_to_pred[i] != gt_to_pred[j]
+    ))
     if not pred_eligible:
         return None
 
@@ -1006,7 +1047,19 @@ def match_atoms(
 
 
 def extract_backbone_coords(matched: MatchedAtoms) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Extract CA (protein) or C3' (nucleic acid) backbone atoms for TM-score/GDT-TS.
+    """One representative atom per residue: CA (protein) or C3' (nucleic acid).
+
+    Despite the name this is **not** the backbone in the usual sense (N, CA, C,
+    O). It is deliberately one atom per residue, because that is what the
+    metrics it feeds require: `compute_tm_score` hands the array to
+    `tmtools.tm_align` with one dummy sequence character per coordinate, so a
+    four-atom backbone would present a 100-residue chain as a 400-residue one,
+    and GDT-TS is defined as the fraction of *residues* within each cutoff.
+
+    Two consequences worth stating: the `rmsd` that `score_monomer` returns is a
+    **CA RMSD**, not an N/CA/C/O backbone RMSD; and anything scoring a predictor
+    outside this module has to select the same atoms or its TM-score and GDT-TS
+    are not comparable.
 
     Returns (pred_bb, gt_bb, mask) where mask is boolean.
     """

@@ -36,12 +36,54 @@ free.
 **These are not end-to-end prediction numbers.** The contacts are derived from
 the ground-truth structure, exactly or degraded with a synthetic noise model
 whose false positives are drawn uniformly. Real predictor errors cluster near
-true contacts and may be harder to reject. Feeding real MarinFold output is
-[issue #11](https://github.com/Open-Athena/helico/issues/11).
+true contacts and may be harder to reject.
+
+**With real predicted contacts** ([exp14](experiments/exp14_foldbench_held_out_monomers/),
+333 held-out FoldBench monomers, contacts from a MarinFold checkpoint
+decontaminated against every protein scored):
+
+| Arm | lDDT (eval-test) |
+| --- | --- |
+| Helico, no contacts | 0.364 |
+| Protenix v2, single sequence | 0.400 |
+| **Helico + MarinFold contacts, top-L** | **0.619** |
+| ESMFold / ESMFold2 | 0.797 / 0.833 |
+| Helico + oracle contacts | 0.860 |
+| Protenix v2 + MSA | 0.860 |
+
+Contacts beat the strongest single-sequence structure predictor by
+**+0.218 lDDT [+0.192, +0.245]**, and a perfect contact map matches
+Protenix-with-MSAs exactly, from one sequence. lDDT tracks the *precision* of
+the contacts supplied (per-target r = 0.81–0.97) almost independently of which
+model produced them, so the remaining gap is contact accuracy rather than the
+conditioning channel.
 
 Weights: [timodonnell/helico](https://huggingface.co/timodonnell/helico) ·
 Full writeup: [`RESULTS_contact_conditioning.md`](RESULTS_contact_conditioning.md) ·
 Try it: [Colab notebook](https://colab.research.google.com/github/Open-Athena/helico/blob/main/notebooks/helico_contact_conditioned_folding.ipynb)
+
+Where the alignment runs out, the gap widens: on natural proteins whose MSA
+holds 10 sequences or fewer, Protenix-with-MSA drops to 0.510 and ESMFold to
+0.577, while Helico given the true contact map is unmoved at 0.858. A contact
+map is not something you have to find homologs to obtain. (n = 5 — a direction,
+not a measurement.)
+
+**exp14 in detail** —
+[notebook](experiments/exp14_foldbench_held_out_monomers/README.md) ·
+[slide deck](experiments/exp14_foldbench_held_out_monomers/exp14_deck.pdf) ·
+[structure viewer in Colab](https://colab.research.google.com/github/Open-Athena/helico/blob/main/notebooks/exp14_structure_viewer.ipynb) ·
+[predictions and scores](https://huggingface.co/buckets/timodonnell/helico-experiments/exp14_foldbench_held_out_monomers) ·
+[issue #14](https://github.com/Open-Athena/helico/issues/14)
+
+**Models compared.** Helico `contacts-msafree-01` step 6000
+([timodonnell/helico](https://huggingface.co/timodonnell/helico)), 6 trunk
+recycles, 3 diffusion samples, best of the three by its own confidence head, no
+MSA. Contacts from MarinFold
+`marinfold-exp232-decontam-m2-p06-step145199` — #232's decontaminated
+checkpoint, 100 rollouts per protein, vote-aggregated, cut at top-L. Baselines:
+`protenix-v2` (protenix 2.0.0, 10 recycles, 5 diffusion samples, 200 steps),
+`facebook/esmfold_v1` and `biohub/ESMFold2`. Full settings on the deck's last
+slide and in each run's `manifest.json`.
 
 ```python
 from helico.inference import load_model, contacts_from_pairs, fold
@@ -443,6 +485,65 @@ HELICO_BENCH_WORKERS=8 HELICO_BENCH_GPU=H100 modal run modal/bench.py
 ```
 
 Prediction caches (`predictions/*.pkl`) are compatible between `helico-bench` and `modal/bench.py`, so `--resume` works across both.
+
+
+## Where results are saved
+
+Every benchmark run persists three things, so a re-analysis never means a
+re-run: the **predicted structures**, the **per-target scores**, and a
+**manifest** recording how each number was produced — model and checkpoint
+step, trunk recycles, trunk runs, diffusion samples, MSA on or off, wall time
+per target, and the GPU it ran on.
+
+| what | where |
+|---|---|
+| Training data and CCD cache | `timodonnell/helico-data` on HuggingFace → `~/.cache/helico/data/` |
+| Checkpoints | `helico-checkpoints` Modal volume; released weights at [`timodonnell/helico`](https://huggingface.co/timodonnell/helico) |
+| Per-experiment run outputs (authoritative) | `helico-experiments` Modal volume at `/experiments/<slug>/<run-name>/` |
+| Local cache of the same | `experiments/<slug>/.cache/` (gitignored) |
+| Published artifacts | `hf://buckets/timodonnell/helico-experiments/<slug>/` |
+| exp14's predictions, scores and metadata | [helico-experiments/exp14_foldbench_held_out_monomers](https://huggingface.co/buckets/timodonnell/helico-experiments/exp14_foldbench_held_out_monomers) — every predictor's structures, per-target scores, timings and run manifests |
+| Small tables that feed the figures | `experiments/<slug>/data/*.csv`, committed |
+
+A published experiment prefix looks like this — the layout
+[`exp14_foldbench_held_out_monomers`](experiments/exp14_foldbench_held_out_monomers)
+uses:
+
+```
+<slug>/
+  manifest.json                       run metadata per method + file digests
+  targets.csv                         the evaluation units
+  arms/*.json                         the conditioning inputs, per arm
+  scores/per_target.csv               every arm x target: lDDT, TM-score, GDT-TS, RMSD
+  scores/arm_<name>.csv               raw per-run result tables
+  timings/<name>.csv                  per-target wall time + GPU
+  runs/<name>.json                    per-run manifest as recorded by the worker
+  structures/helico/<arm>.tar.gz      one gzipped PDB per target
+  structures/protenix_v2/<mode>.tar.gz  every diffusion sample + confidence JSON
+```
+
+Fetching the scores and metadata is seconds; the structures are the large part
+and are fetched only when needed:
+
+```bash
+cd experiments/exp14_foldbench_held_out_monomers
+uv run python publish_artifacts.py --fetch    # scores + manifest only
+uv run python analyze.py                      # rebuilds every table
+uv run python plot_results.py
+
+# and to publish after a run
+uv run python publish_artifacts.py --dry-run  # stage and list sizes
+uv run python publish_artifacts.py
+```
+
+So re-running one method and re-plotting against the others costs one arm, not
+the whole benchmark.
+
+To look at individual predictions rather than aggregates, open the
+[structure viewer](https://colab.research.google.com/github/Open-Athena/helico/blob/main/notebooks/exp14_structure_viewer.ipynb):
+it pulls the same artifacts, shows the full protein-by-predictor score table,
+and renders any prediction superimposed on its ground truth. No GPU, no
+authentication.
 
 
 ## References
