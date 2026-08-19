@@ -8,10 +8,13 @@ would put any discrepancy in our code rather than in the comparison.
 Two arms, both on the same 98 FoldBench monomer targets used everywhere else in
 helico#11: `--use_msa true` and `--use_msa false` (single sequence).
 
-Protenix runs at its own recommended defaults (N_cycle/N_sample/N_step chosen by
-`--use_default_params`), which is more inference compute than the Helico arms
-get. That is deliberate -- a baseline should be given its best shot, so a win
-against it is conservative.
+Protenix runs at its own built-in defaults for the chosen model -- the command
+overrides only the MSA, template and seed flags, so N_cycle / N_sample / N_step
+are whatever `protenix pred` picks. That is more inference compute than the
+Helico arms get, deliberately: a baseline should be given its best shot, so a
+win against it is conservative. The values that actually ran are recorded in
+`<out-tag>.manifest.json`, and the per-seed sample count is visible in the
+output tree.
 
 Usage:
     modal run modal/bench_protenix_v2.py --use-msa true  --out-tag v2_msa
@@ -88,24 +91,44 @@ class UpstreamPredictor:
         model_name: str = PROTENIX_MODEL_NAME,
         use_msa: str = "true",
     ) -> dict:
-        """Run Protenix 1.0.9 inference. Uses the `protenix pred` CLI.
+        """Run Protenix inference through the `protenix pred` CLI.
 
-        With `--use_default_params=true` (the default), Protenix picks its
-        recommended N_cycle / N_sample / N_step for the chosen model, which
-        for protenix_base_default_v1.0.0 matches the published protocol
-        (5 samples, 200 steps, 10 cycles).
+        Nothing here overrides N_cycle / N_sample / N_step, so the model's own
+        defaults apply. Wall time, GPU and the flags that were passed come back
+        in the return value and land in `<out-tag>.timings.csv`.
         """
         import logging
+        import platform
+        import socket
         import subprocess
+        import time
 
         logger = logging.getLogger(__name__)
+        started = time.monotonic()
+
+        # Hardware and wall time per prediction, so a baseline number can be
+        # traced to the machine that produced it and the cost of re-running is
+        # known before it is paid. Same fields the Helico arms record.
+        import torch
+
+        properties = torch.cuda.get_device_properties(0)
+        environment = {
+            "gpu_name": properties.name,
+            "gpu_total_memory_gb": round(properties.total_memory / 1e9, 2),
+            "gpu_compute_capability": f"{properties.major}.{properties.minor}",
+            "hostname": socket.gethostname(),
+            "platform": platform.platform(),
+            "torch_version": torch.__version__,
+            "protenix_version": PROTENIX_VERSION,
+            "model_name": model_name,
+        }
 
         input_path = Path(DATA_CACHE) / input_json_relpath
         dump_dir = Path(DATA_CACHE) / dump_relpath
         dump_dir.mkdir(parents=True, exist_ok=True)
 
         if not input_path.exists():
-            return {"pdb_id": pdb_id, "status": "error",
+            return {"pdb_id": pdb_id, "status": "error", **environment,
                     "error": f"missing input json at {input_path}"}
 
         # Per Protenix docs, the CLI auto-downloads the named model into
@@ -131,12 +154,19 @@ class UpstreamPredictor:
                 "dump_relpath": dump_relpath,
                 "n_cifs": len(produced),
                 "cif_paths": produced,
+                "use_msa": use_msa,
+                "seeds": seeds_csv,
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                **environment,
             }
         except subprocess.CalledProcessError as e:
-            return {"pdb_id": pdb_id, "status": "error",
+            return {"pdb_id": pdb_id, "status": "error", **environment,
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
                     "error": f"returncode={e.returncode}"}
         except Exception as e:
-            return {"pdb_id": pdb_id, "status": "error", "error": repr(e)}
+            return {"pdb_id": pdb_id, "status": "error", **environment,
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                    "error": repr(e)}
 
 
 @app.local_entrypoint()
@@ -225,6 +255,48 @@ def run_v2(
     ))
     ok = sum(1 for r in results if r.get("status") == "ok")
     print(f"predictions ok: {ok}/{len(results)}")
+
+    # Per-target timings + the run manifest, beside the predictions.
+    import csv as _csv
+    import json as _json
+
+    out_root.mkdir(parents=True, exist_ok=True)
+    timing_fields = ["pdb_id", "status", "elapsed_seconds", "n_cifs", "gpu_name",
+                     "gpu_total_memory_gb", "gpu_compute_capability", "hostname",
+                     "platform", "torch_version", "protenix_version", "error"]
+    with (out_root.parent / f"{out_tag}.timings.csv").open("w", newline="") as f:
+        w = _csv.DictWriter(f, fieldnames=timing_fields, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(results)
+    sample = next((r for r in results if r.get("gpu_name")), {})
+    elapsed = [r["elapsed_seconds"] for r in results if r.get("elapsed_seconds")]
+    (out_root.parent / f"{out_tag}.manifest.json").write_text(_json.dumps({
+        "tag": out_tag,
+        "predictor": "protenix",
+        "model": PROTENIX_MODEL_NAME,
+        "protenix_version": PROTENIX_VERSION,
+        "use_msa": use_msa,
+        "use_template": False,
+        # Read back from the workers rather than from a launch argument: these
+        # are the values the CLI actually ran with. N_cycle / N_sample / N_step
+        # are not overridden anywhere, so they are protenix-v2's own built-in
+        # defaults for this model -- the sample count is observable in the
+        # output tree (`*_sample_N.cif` per seed).
+        "seeds": sample.get("seeds"),
+        "sampling_params": "protenix-v2 built-in defaults (not overridden)",
+        "n_samples_per_seed": max((r.get("n_cifs", 0) for r in results), default=0),
+        "n_targets": len(target_list),
+        "n_staged": len(staged),
+        "n_ok": ok,
+        "hardware": {k: sample.get(k) for k in
+                     ("gpu_name", "gpu_total_memory_gb", "gpu_compute_capability",
+                      "hostname", "platform", "torch_version")},
+        "timing_seconds": {
+            "total_gpu": round(sum(elapsed), 1),
+            "per_target_mean": round(sum(elapsed) / max(len(elapsed), 1), 2),
+            "per_target_max": round(max(elapsed), 2) if elapsed else None,
+        },
+    }, indent=2) + "\n")
     for r in results:
         if r.get("status") != "ok":
             print(f"  FAILED {r.get('pdb_id')}: {r.get('error')}")

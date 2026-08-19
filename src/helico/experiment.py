@@ -575,12 +575,23 @@ def ensure_byclass_run(
 
     subprocess.run(cmd, check=True, env=env, cwd=str(REPO_ROOT))
 
-    # bench_byclass writes <targets_dir>/../results/<tag>.csv; copy it into the
-    # cache so the run is self-contained and can be pushed to the volume.
-    produced = targets_dir.parent / "results" / f"{name}.csv"
+    # bench_byclass writes into <targets_dir>/../results/; copy the whole set
+    # into the cache so the run is self-contained and can be pushed to the
+    # volume: scores, per-target timings, the run manifest, and the predicted
+    # structures themselves.
+    results_dir = targets_dir.parent / "results"
+    produced = results_dir / f"{name}.csv"
     if not produced.exists():
         raise FileNotFoundError(f"bench_byclass produced no results at {produced}")
     shutil.copyfile(produced, cache_dir / "results.csv")
+    for suffix, dest in (("timings.csv", "timings.csv"),
+                         ("manifest.json", "run_manifest.json")):
+        side = results_dir / f"{name}.{suffix}"
+        if side.exists():
+            shutil.copyfile(side, cache_dir / dest)
+    structures = results_dir / "predictions" / name
+    if structures.is_dir():
+        shutil.copytree(structures, cache_dir / "predictions", dirs_exist_ok=True)
 
     meta = {
         "name": name,
@@ -592,12 +603,23 @@ def ensure_byclass_run(
         "checkpoint": checkpoint,
         "gpu": gpu,
         "workers": workers,
-        "n_samples": n_samples,
-        "n_cycles": n_cycles,
+        # Named for what they are rather than for the flag that sets them: a
+        # reader a year from now should not have to know that `n_samples` means
+        # diffusion draws and `n_cycles` means trunk recycles.
+        "n_diffusion_samples": n_samples,
+        "n_trunk_recycles": n_cycles,
+        "n_trunk_runs": 1,
+        "seed": 42,
+        "single_sequence": True,
         "max_tokens": max_tokens,
         "git_sha": _git_sha(),
         "est_cost_usd": est_cost,
     }
+    # The worker-side manifest records what actually ran -- checkpoint step,
+    # GPU, wall time -- as opposed to what was requested here.
+    run_manifest = cache_dir / "run_manifest.json"
+    if run_manifest.exists():
+        meta["run"] = json.loads(run_manifest.read_text())
     with open(cache_dir / "meta.json", "w") as f:
         json.dump(meta, f, indent=2)
 

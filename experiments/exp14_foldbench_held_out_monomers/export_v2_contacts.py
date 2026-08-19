@@ -58,23 +58,27 @@ ACCURACY = U.DATA / "v2_arm_accuracy.csv"
 MIN_REPLACED = 0.9
 
 
-def find_target_dirs(root: Path) -> dict[str, Path]:
+def find_target_dirs(root: Path, stems: set[str]) -> dict[str, Path]:
     """stem -> the directory holding that target's Protenix output.
 
-    Located by walking for the sample files rather than by assuming a depth:
-    `modal volume get` reproduces the remote prefix under the destination, so
-    the tree is one level deeper than the upload path, and exp74's own dumps
-    nest a `seed_*` level that later ones do not. Anchoring on the mmCIFs
-    themselves survives all three.
+    Located by walking up from the sample mmCIFs rather than by assuming a
+    depth. The actual tree is
+    ``<root>/<tag>/<stem>/predictions/<stem>/seed_N/predictions/*.cif``: `modal
+    volume get` reproduces the remote prefix under the destination, so the tag
+    appears twice, and the stem appears twice as well.
+
+    Matching against the *known stems* rather than a name pattern matters --
+    `seed_42` satisfies any reasonable pattern for "four characters, underscore,
+    suffix" -- and taking the innermost match lands on the directory that
+    actually holds the `seed_*` level, which is what `ranked_sample` needs to
+    read the per-seed confidence files.
     """
     found: dict[str, Path] = {}
     for cif in root.rglob("*_sample_*.cif"):
         for parent in cif.parents:
             if parent == root:
                 break
-            # The target directory is the one named after the stem; every
-            # layout puts `predictions/` (and optionally `seed_N/`) inside it.
-            if parent.name.count("_") == 1 and len(parent.name.split("_")[0]) == 4:
+            if parent.name in stems:
                 found.setdefault(parent.name, parent)
                 break
     return found
@@ -126,7 +130,7 @@ def main() -> int:
         if not root.exists():
             raise SystemExit(f"no Protenix predictions at {root}; "
                              f"run run_protenix_v2.py --mode {mode} first")
-        target_dirs = find_target_dirs(root)
+        target_dirs = find_target_dirs(root, {t["target_id"] for t in targets})
         print(f"{arm_name}: found predictions for {len(target_dirs)} targets "
               f"under {root}")
         arm, skipped = {}, []

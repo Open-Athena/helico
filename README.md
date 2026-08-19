@@ -445,6 +445,58 @@ HELICO_BENCH_WORKERS=8 HELICO_BENCH_GPU=H100 modal run modal/bench.py
 Prediction caches (`predictions/*.pkl`) are compatible between `helico-bench` and `modal/bench.py`, so `--resume` works across both.
 
 
+## Where results are saved
+
+Every benchmark run persists three things, so a re-analysis never means a
+re-run: the **predicted structures**, the **per-target scores**, and a
+**manifest** recording how each number was produced — model and checkpoint
+step, trunk recycles, trunk runs, diffusion samples, MSA on or off, wall time
+per target, and the GPU it ran on.
+
+| what | where |
+|---|---|
+| Training data and CCD cache | `timodonnell/helico-data` on HuggingFace → `~/.cache/helico/data/` |
+| Checkpoints | `helico-checkpoints` Modal volume; released weights at [`timodonnell/helico`](https://huggingface.co/timodonnell/helico) |
+| Per-experiment run outputs (authoritative) | `helico-experiments` Modal volume at `/experiments/<slug>/<run-name>/` |
+| Local cache of the same | `experiments/<slug>/.cache/` (gitignored) |
+| Published artifacts | `hf://buckets/timodonnell/helico-experiments/<slug>/` |
+| Small tables that feed the figures | `experiments/<slug>/data/*.csv`, committed |
+
+A published experiment prefix looks like this — the layout
+[`exp14_foldbench_held_out_monomers`](experiments/exp14_foldbench_held_out_monomers)
+uses:
+
+```
+<slug>/
+  manifest.json                       run metadata per method + file digests
+  targets.csv                         the evaluation units
+  arms/*.json                         the conditioning inputs, per arm
+  scores/per_target.csv               every arm x target: lDDT, TM-score, GDT-TS, RMSD
+  scores/arm_<name>.csv               raw per-run result tables
+  timings/<name>.csv                  per-target wall time + GPU
+  runs/<name>.json                    per-run manifest as recorded by the worker
+  structures/helico/<arm>.tar.gz      one gzipped PDB per target
+  structures/protenix_v2/<mode>.tar.gz  every diffusion sample + confidence JSON
+```
+
+Fetching the scores and metadata is seconds; the structures are the large part
+and are fetched only when needed:
+
+```bash
+cd experiments/exp14_foldbench_held_out_monomers
+uv run python publish_artifacts.py --fetch    # scores + manifest only
+uv run python analyze.py                      # rebuilds every table
+uv run python plot_results.py
+
+# and to publish after a run
+uv run python publish_artifacts.py --dry-run  # stage and list sizes
+uv run python publish_artifacts.py
+```
+
+So re-running one method and re-plotting against the others costs one arm, not
+the whole benchmark.
+
+
 ## References
 
 - **AlphaFold3**: [paper](https://www.nature.com/articles/s41586-024-07487-w) / [code](https://github.com/google-deepmind/alphafold3)

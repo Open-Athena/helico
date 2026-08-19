@@ -171,9 +171,41 @@ class Predictor:
         cfg = HelicoConfig(**overrides)
         print(f"checkpoint step {ckpt.get('step')} ({len(overrides)} config fields), "
               f"use_contacts={cfg.use_contacts}, use_msa={cfg.use_msa}", flush=True)
+        import platform
+        import socket
+        import time
+
+        load_started = time.monotonic()
         self.model = Helico(cfg).cuda().to(torch.bfloat16).eval()
         self.model.load_state_dict(ckpt["model_state_dict"])
         self.ccd = parse_ccd()
+        self.model_load_seconds = time.monotonic() - load_started
+
+        # Recorded per run so a number can always be traced back to the model,
+        # the sampling settings and the hardware that produced it. Without this
+        # a results CSV is uninterpretable a month later, and re-running to find
+        # out costs what the original run cost.
+        properties = torch.cuda.get_device_properties(0)
+        self.run_meta = {
+            "checkpoint_path": self.checkpoint_path,
+            "checkpoint_step": ckpt.get("step"),
+            "use_contacts": bool(cfg.use_contacts),
+            "use_msa": bool(cfg.use_msa),
+            "dtype": "bfloat16",
+            "contacts_arm": CONTACTS_ARM,
+            "oracle_contacts": ORACLE,
+            "n_contact_arm_targets": len(self.contact_map or {}),
+            "gpu_name": properties.name,
+            "gpu_total_memory_gb": round(properties.total_memory / 1e9, 2),
+            "gpu_compute_capability": f"{properties.major}.{properties.minor}",
+            "gpu_count": torch.cuda.device_count(),
+            "hostname": socket.gethostname(),
+            "platform": platform.platform(),
+            "python_version": platform.python_version(),
+            "torch_version": torch.__version__,
+            "model_load_seconds": round(self.model_load_seconds, 3),
+        }
+        print(f"run metadata: {self.run_meta}", flush=True)
 
     @modal.method()
     def predict(self, target_id: str, n_samples: int = 3, n_cycles: int = 6,
@@ -184,8 +216,14 @@ class Predictor:
         from helico.bench import match_atoms, predict_target, score_monomer, structure_to_chains
         from helico.data import parse_mmcif
 
+        import time
+
         logging.basicConfig(level=logging.INFO)
-        row = {"target_id": target_id, "status": "error"}
+        row = {"target_id": target_id, "status": "error",
+               "n_samples": n_samples, "n_cycles": n_cycles,
+               "n_seeds": 1, "seed": 42, "max_tokens": max_tokens,
+               **self.run_meta}
+        started = time.monotonic()
         try:
             gt_path = Path("/root/byclass/gt") / f"{target_id}.cif.gz"
             gt = parse_mmcif(gt_path, max_resolution=float("inf"))
@@ -216,6 +254,7 @@ class Predictor:
 
             torch.manual_seed(42)
             torch.cuda.manual_seed_all(42)
+            predict_started = time.monotonic()
             pred = predict_target(
                 self.model, chains, self.ccd, target_name=target_id,
                 n_samples=n_samples, max_tokens=max_tokens,
@@ -227,8 +266,11 @@ class Predictor:
             )
             if pred is None:
                 row["status"] = "too_large"
+                row["elapsed_seconds"] = round(time.monotonic() - started, 3)
                 return row
             tokenized, res = pred
+            row["predict_seconds"] = round(time.monotonic() - predict_started, 3)
+            row["n_tokens"] = int(tokenized.n_tokens)
 
             # Scoring runs here rather than in a separate CPU class: these are
             # monomers, so score_monomer's lDDT is all that is needed and it
@@ -242,10 +284,25 @@ class Predictor:
             row["n_matched_atoms"] = len(matched.pred_coords)
             row["n_contacts"] = len(pairs or [])
             row["status"] = "ok"
+
+            # The structure itself, returned rather than written to a volume:
+            # eight containers committing concurrently is a conflict waiting to
+            # happen, and a gzipped PDB of a few hundred residues is tens of
+            # kilobytes. Re-scoring, re-plotting, or computing a metric nobody
+            # thought of yet then costs nothing instead of a full re-run.
+            import gzip
+
+            from helico.train import coords_to_pdb
+
+            pdb = coords_to_pdb(res["coords"][0], res["plddt"][0], tokenized)
+            row["pdb_gz"] = gzip.compress(pdb.encode())
+            row["mean_plddt"] = float(res["plddt"][0].mean())
+            row["elapsed_seconds"] = round(time.monotonic() - started, 3)
             return row
         except Exception as e:  # noqa: BLE001 - one bad target must not kill the fan-out
             logging.exception(f"{target_id} failed")
             row["error"] = f"{type(e).__name__}: {e}"
+            row["elapsed_seconds"] = round(time.monotonic() - started, 3)
             return row
 
 
@@ -271,17 +328,87 @@ def run(checkpoint: str, out_tag: str, n_samples: int = 3, n_cycles: int = 6,
         kwargs={"n_samples": n_samples, "n_cycles": n_cycles},
     ))
 
+    import gzip
+    import json
+
     out = TARGETS_DIR.parent / "results"
     out.mkdir(parents=True, exist_ok=True)
     dest = out / f"{out_tag}.csv"
-    fields = ["target_id", "dataset", "stem", "status", "lddt", "n_matched_atoms",
-              "n_contacts", "error"]
+    # score_monomer returns four metrics; the earlier field list kept only
+    # lDDT and silently dropped the rest, which meant re-running to answer
+    # "what was the TM-score?".
+    fields = ["target_id", "dataset", "stem", "status", "lddt", "tm_score",
+              "gdt_ts", "rmsd", "n_matched_atoms", "n_contacts", "n_tokens",
+              "mean_plddt", "error"]
     with dest.open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         w.writeheader()
         for r in rows:
             m = meta.get(r["target_id"], {})
             w.writerow({**r, "dataset": m.get("dataset", ""), "stem": m.get("stem", "")})
+
+    # Predicted structures, one gzipped PDB per target. Re-scoring against a
+    # different metric, or a reviewer looking at a specific prediction, then
+    # costs nothing rather than another full run.
+    structures = out / "predictions" / out_tag
+    structures.mkdir(parents=True, exist_ok=True)
+    n_written = 0
+    for r in rows:
+        blob = r.get("pdb_gz")
+        if not blob:
+            continue
+        (structures / f"{r['target_id']}.pdb.gz").write_bytes(blob)
+        n_written += 1
+
+    # Per-target timing and the hardware it ran on, in exp245's timings shape.
+    timing_fields = ["target_id", "dataset", "n_tokens", "status",
+                     "elapsed_seconds", "predict_seconds", "model_load_seconds",
+                     "gpu_name", "gpu_total_memory_gb", "gpu_compute_capability",
+                     "hostname", "platform", "torch_version"]
+    with (out / f"{out_tag}.timings.csv").open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=timing_fields, extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            m = meta.get(r["target_id"], {})
+            w.writerow({**r, "dataset": m.get("dataset", "")})
+
+    # One run manifest: what was run, on what, with which sampling settings.
+    # Taken from the workers rather than from the launch arguments, so it
+    # records what actually executed.
+    sample = next((r for r in rows if r.get("gpu_name")), {})
+    elapsed = [r["elapsed_seconds"] for r in rows if r.get("elapsed_seconds")]
+    manifest = {
+        "tag": out_tag,
+        "targets_dir": str(TARGETS_DIR),
+        "n_targets": len(targets),
+        "n_ok": sum(1 for r in rows if r.get("status") == "ok"),
+        "n_structures": n_written,
+        "arm": CONTACTS_ARM or ("oracle" if ORACLE else "off"),
+        "sampling": {
+            "n_diffusion_samples": n_samples,
+            "n_trunk_recycles": n_cycles,
+            "n_trunk_runs": 1,
+            "seed": 42,
+            "single_sequence": True,
+            "msa": False,
+        },
+        "model": {k: sample.get(k) for k in
+                  ("checkpoint_path", "checkpoint_step", "use_contacts",
+                   "use_msa", "dtype")},
+        "hardware": {k: sample.get(k) for k in
+                     ("gpu_name", "gpu_total_memory_gb", "gpu_compute_capability",
+                      "hostname", "platform", "python_version", "torch_version")},
+        "timing_seconds": {
+            "total_gpu": round(sum(elapsed), 1),
+            "per_target_mean": round(sum(elapsed) / max(len(elapsed), 1), 2),
+            "per_target_max": round(max(elapsed), 2) if elapsed else None,
+            "model_load": sample.get("model_load_seconds"),
+        },
+        "workers": N_WORKERS,
+        "gpu_type": GPU_TYPE,
+    }
+    (out / f"{out_tag}.manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"{n_written} structures -> {structures}")
 
     ok = [r for r in rows if r.get("status") == "ok"]
     print(f"ok {len(ok)}/{len(rows)} -> {dest}")
