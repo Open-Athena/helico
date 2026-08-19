@@ -274,7 +274,37 @@ def main() -> int:
         ax.legend(frameon=False, loc="upper left", labelcolor=INK, fontsize=10)
         finish(pdf, fig)
 
-        # --- 10. how it was run ---------------------------------------
+        # --- 10. does the confidence head still work without an MSA? ---
+        fig = slide(
+            pdf, "Predicted confidence against measured accuracy",
+            "One point per protein: the mean pLDDT Helico's confidence head "
+            "reported, against the lDDT that was measured. This is the score "
+            "used to pick one of the three diffusion samples. No bootstrap "
+            "here — these are individual proteins.")
+        ax = fig.add_axes((0.09, 0.13, 0.55, 0.64))
+        conf_arms = (("off", "#5c5c5c"), ("v2ss", "#7a4fbf"),
+                     ("mf_L", "#b8452f"), ("v2msa", "#1a7f5a"),
+                     ("oracle", "#4269d0"))
+        summary = []
+        for arm, color in conf_arms:
+            part = per_target[(per_target.arm == arm) & per_target.mean_plddt.notna()]
+            if part.empty:
+                continue
+            ax.plot(part.mean_plddt, part.lddt, "o", ms=3.4, alpha=0.5,
+                    color=color, ls="none", label=SHORT[arm])
+            summary.append((arm, part.mean_plddt.mean(), part.lddt.mean(),
+                            part.mean_plddt.corr(part.lddt, method="spearman")))
+        tidy(ax, xlabel="mean pLDDT reported", ylabel="lDDT measured", ygrid=True)
+        ax.legend(frameon=False, loc="upper left", labelcolor=INK, fontsize=9.5)
+        fig.text(0.70, 0.74, "mean pLDDT · mean lDDT · Spearman",
+                 fontsize=10.5, color=INK, va="top", fontweight="bold")
+        for i, (arm, plddt, lddt, rho) in enumerate(summary):
+            fig.text(0.70, 0.685 - i * 0.052,
+                     f"{SHORT[arm]}\n{plddt:.1f}  ·  {lddt:.3f}  ·  {rho:.2f}",
+                     fontsize=9.5, color=MUTE, va="top", linespacing=1.5)
+        finish(pdf, fig)
+
+        # --- 11. how it was run ---------------------------------------
         fig = slide(pdf, "How each number was produced", None)
         lines = [
             ("Helico", "contacts-msafree-01 step 6000 · 6 trunk recycles · "
