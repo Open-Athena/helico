@@ -104,11 +104,18 @@ def main() -> int:
             if gt is None or not chains:
                 dropped.append((mode, stem, "ground truth did not parse"))
                 continue
-            gt_residues = [r for c in gt.chains for r in c.residues][:]
-            # structure_to_chains derives its sequence from the residues of the
-            # first protein chain, in order, so the k-th of those is Helico
+            # structure_to_chains derives its sequence from the residues of
+            # the *protein* chain, in order, so the k-th of those is Helico
             # token k -- which is what token_map maps prompt positions onto.
-            gt_chain = next(c for c in gt.chains if c.residues)
+            # Selecting the protein chain by id rather than taking the first
+            # chain that has residues: the two coincide on all 333 of these
+            # ground truths, but a ligand or nucleic chain ordered first would
+            # silently shift every residue.
+            chain_id = chains[0]["id"]
+            gt_chain = next((c for c in gt.chains if c.chain_id == chain_id), None)
+            if gt_chain is None:
+                dropped.append((mode, stem, f"chain {chain_id} not in the structure"))
+                continue
             gt_residues = list(gt_chain.residues)
 
             predicted = predicted_residues(path)

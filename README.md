@@ -62,12 +62,28 @@ Weights: [timodonnell/helico](https://huggingface.co/timodonnell/helico) ·
 Full writeup: [`RESULTS_contact_conditioning.md`](RESULTS_contact_conditioning.md) ·
 Try it: [Colab notebook](https://colab.research.google.com/github/Open-Athena/helico/blob/main/notebooks/helico_contact_conditioned_folding.ipynb)
 
+Where the alignment runs out, the gap widens: on natural proteins whose MSA
+holds 10 sequences or fewer, Protenix-with-MSA drops to 0.510 and ESMFold to
+0.577, while Helico given the true contact map is unmoved at 0.858. A contact
+map is not something you have to find homologs to obtain. (n = 5 — a direction,
+not a measurement.)
+
 **exp14 in detail** —
 [notebook](experiments/exp14_foldbench_held_out_monomers/README.md) ·
 [slide deck](experiments/exp14_foldbench_held_out_monomers/exp14_deck.pdf) ·
 [structure viewer in Colab](https://colab.research.google.com/github/Open-Athena/helico/blob/main/notebooks/exp14_structure_viewer.ipynb) ·
 [predictions and scores](https://huggingface.co/buckets/timodonnell/helico-experiments/exp14_foldbench_held_out_monomers) ·
 [issue #14](https://github.com/Open-Athena/helico/issues/14)
+
+**Models compared.** Helico `contacts-msafree-01` step 6000
+([timodonnell/helico](https://huggingface.co/timodonnell/helico)), 6 trunk
+recycles, 3 diffusion samples, best of the three by its own confidence head, no
+MSA. Contacts from MarinFold
+`marinfold-exp232-decontam-m2-p06-step145199` — #232's decontaminated
+checkpoint, 100 rollouts per protein, vote-aggregated, cut at top-L. Baselines:
+`protenix-v2` (protenix 2.0.0, 10 recycles, 5 diffusion samples, 200 steps),
+`facebook/esmfold_v1` and `biohub/ESMFold2`. Full settings on the deck's last
+slide and in each run's `manifest.json`.
 
 ```python
 from helico.inference import load_model, contacts_from_pairs, fold

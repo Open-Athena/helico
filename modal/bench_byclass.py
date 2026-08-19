@@ -314,7 +314,7 @@ class Predictor:
 
 @app.local_entrypoint()
 def run(checkpoint: str, out_tag: str, n_samples: int = 3, n_cycles: int = 6,
-        datasets: str = "", limit: int = 0):
+        max_tokens: int = 2048, datasets: str = "", limit: int = 0):
     import csv
 
     with (TARGETS_DIR / "targets.csv").open() as f:
@@ -331,11 +331,13 @@ def run(checkpoint: str, out_tag: str, n_samples: int = 3, n_cycles: int = 6,
     predictor = Predictor(checkpoint_path=checkpoint)
     rows = list(predictor.predict.map(
         [t["target_id"] for t in targets],
-        kwargs={"n_samples": n_samples, "n_cycles": n_cycles},
+        kwargs={"n_samples": n_samples, "n_cycles": n_cycles,
+                "max_tokens": max_tokens},
     ))
 
     import gzip
     import json
+    import shutil
 
     out = TARGETS_DIR.parent / "results"
     out.mkdir(parents=True, exist_ok=True)
@@ -356,7 +358,13 @@ def run(checkpoint: str, out_tag: str, n_samples: int = 3, n_cycles: int = 6,
     # Predicted structures, one gzipped PDB per target. Re-scoring against a
     # different metric, or a reviewer looking at a specific prediction, then
     # costs nothing rather than another full run.
+    # Cleared, not merged: a re-run over a smaller target list would otherwise
+    # leave the previous run's structures in place, and they would be cached,
+    # published and read back as this run's output -- possibly from a different
+    # checkpoint.
     structures = out / "predictions" / out_tag
+    if structures.exists():
+        shutil.rmtree(structures)
     structures.mkdir(parents=True, exist_ok=True)
     n_written = 0
     for r in rows:

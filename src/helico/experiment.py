@@ -572,6 +572,7 @@ def ensure_byclass_run(
         "--out-tag", name,
         "--n-samples", str(n_samples),
         "--n-cycles", str(n_cycles),
+        "--max-tokens", str(max_tokens),
     ]
     if datasets:
         cmd += ["--datasets", datasets]
@@ -596,7 +597,12 @@ def ensure_byclass_run(
             shutil.copyfile(side, cache_dir / dest)
     structures = results_dir / "predictions" / name
     if structures.is_dir():
-        shutil.copytree(structures, cache_dir / "predictions", dirs_exist_ok=True)
+        # Replace rather than merge, for the same reason the runner clears its
+        # own output directory: a shorter re-run must not inherit the previous
+        # run's structures.
+        if (cache_dir / "predictions").exists():
+            shutil.rmtree(cache_dir / "predictions")
+        shutil.copytree(structures, cache_dir / "predictions")
 
     meta = {
         "name": name,
