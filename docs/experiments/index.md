@@ -12,7 +12,9 @@ _`gh issue list --label experiment` + each notebook's frontmatter._
 
 ## Open
 
-_(No open experiments.)_
+| Issue | Title | Branch | Notebook |
+|---|---|---|---|
+| [#14](https://github.com/Open-Athena/helico/issues/14) | exp: Helico on MarinFold exp245's held-out FoldBench monomer sets (eval-val / eval-test / eval-denovo) | `—` | _no notebook yet_ |
 
 ## Closed
 
