@@ -42,6 +42,7 @@ ARMS = (
     ("mf_L5", "Helico + MarinFold, top-L/5"),
     ("mf_L2", "Helico + MarinFold, top-L/2"),
     ("mf_L", "Helico + MarinFold, top-L"),
+    ("mf_L_363k", "Helico + MarinFold, top-L (step 363k)"),
     ("v2ss", "Helico + Protenix-v2 single-seq contacts"),
     ("v2msa", "Helico + Protenix-v2 +MSA contacts"),
     ("oracle", "Helico + oracle contacts"),
