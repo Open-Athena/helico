@@ -17,6 +17,22 @@ multiple sequence alignment. Contacts are computed by
 predicts, so a contact predictor can drive the folding model directly and the
 alignment search comes out of the critical path.
 
+<img src="docs/images/contact_conditioning_architecture.png" alt="Helico's contact conditioning: sequence, reference conformers and token bonds enter the input embedder, which feeds the single and pair representations, the Pairformer stack and the diffusion module. The MSA input is struck out. A three-state contact matrix — present, absent, unknown — is one-hot encoded and added to the pair representation through a zero-initialised linear 3 to 128 projection." width="100%">
+
+Contacts enter as a three-state matrix — present / absent / unknown — one-hot
+encoded and added to `z_init` through a zero-initialised `3 → 128` projection
+([`helico.py`](src/helico/model/helico.py)). The Pairformer blocks are untouched;
+what changes is the tensor they read, and `z_init` is re-added at the top of every
+recycling iteration, so the signal reaches the template, MSA, Pairformer,
+distogram, diffusion and confidence paths. Because the projection is zero-init it
+is an exact no-op at step 0, so a checkpoint trained without contacts loads and
+behaves identically until it learns.
+
+`use_msa=False` removes the alignment by two routes, not one: it skips the MSA
+module *and* zeroes the MSA-derived profile and deletion-mean columns of
+`s_inputs` ([`features.py`](src/helico/model/features.py)). Gating the module
+alone would leave alignment-derived conservation in the single representation.
+
 On FoldBench (27 paired protein targets), given contacts at the accuracy a
 current predictor delivers — 60% precision, 60% recall — an MSA-free model
 scores within noise of Protenix-with-MSAs:
