@@ -137,6 +137,7 @@ ARMS = [
     ("off", {}),
     ("oracle", {"oracle_contacts": True}),
     ("mf_L", {"contacts_arm": "mf_L"}),
+    ("mf_L_363k", {"contacts_arm": "mf_L_363k"}),
     ("mf_L2", {"contacts_arm": "mf_L2"}),
     ("mf_L5", {"contacts_arm": "mf_L5"}),
     ("v2ss", {"contacts_arm": "v2ss"}),
@@ -203,10 +204,18 @@ Mean lDDT over the 324 units every arm covers, 95% percentile bootstrap over
 | Helico + MarinFold, top-L/5 | 0.81 | 0.564 | 0.558 | 0.819 |
 | Helico + MarinFold, top-L/2 | 0.68 | 0.597 | 0.603 | 0.768 |
 | **Helico + MarinFold, top-L** | **0.51** | **0.605** | **0.619** | 0.768 |
+| **Helico + MarinFold, top-L (step 363k)** | **0.54** | **0.630** | **0.642** | 0.768 |
 | Helico + Protenix-v2 +MSA contacts | 0.84 | 0.834 | 0.828 | 0.819 |
 | **Helico + oracle contacts** | 1.00 | **0.864** | **0.860** | 0.856 |
 | *Protenix v2, single sequence* | — | *0.395* | *0.400* | *0.828* |
 | *Protenix v2 + MSA* | — | *0.864* | *0.860* | *0.814* |
+
+**Two MarinFold top-L arms.** `mf_L` conditions on MarinFold #232's *sweep* checkpoint, which
+was the best decontaminated model when this experiment ran. #232 later continued that run to step
+363,000, and MarinFold #250 scored all 333 monomers with it; `mf_L_363k` is the same arm rebuilt
+on those contacts. Better contacts (precision@L 0.542 against 0.510) buy +0.024 lDDT on eval-val
+and +0.023 on eval-test, and nothing on the designs. Only the MarinFold arm was re-run — every
+other arm is unchanged, so the comparison stays paired on the same 324 targets.
 
 ![Scoreboard](plots/scoreboard.png)
 

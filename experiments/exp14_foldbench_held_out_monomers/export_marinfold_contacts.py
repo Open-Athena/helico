@@ -22,9 +22,17 @@ wrong enough to change the experiment.
 length, so `mf_L` is exactly the list whose precision is published, re-seated
 onto Helico token indices by `build_index_map.py`.
 
-Writes `data/arms/mf_{L,L2,L5}.json` -- `{target_id: [[i, j], ...]}` in Helico
-token indices, the shape `modal/bench_byclass.py` consumes -- plus
-`data/marinfold_arm_accuracy.csv` and the input pins.
+Writes `data/arms/mf_{L,L2,L5}<suffix>.json` -- `{target_id: [[i, j], ...]}` in
+Helico token indices, the shape `modal/bench_byclass.py` consumes -- plus
+`data/marinfold_arm_accuracy<suffix>.csv` and the input pins.
+
+**A newer checkpoint.** MarinFold #232 continued the `m2-p06` training run to
+step 363,000 and it scores better than the sweep final above; MarinFold #250
+scored all 333 monomers with it and wrote the same dense matrices. Point
+`--dense-dir` at those, `--precision-csv` at the metrics written beside them,
+and `--suffix` at a name for the arm. The reproduction check then holds the arm
+to *that* run's per-protein precision, which is the same guarantee: the arm's
+contact quality is a published number by construction, not a re-derivation.
 
 Run:
     set -a; . ~/.config/marin/cw-rno2a.env; set +a
@@ -73,16 +81,27 @@ def mirror_dense() -> dict[str, dict]:
     return pins
 
 
-def published_precision() -> dict[tuple[str, str], float]:
-    """exp245's `contact_precision_all.csv`, all-range rows for this checkpoint."""
-    path = U.CACHE / "upstream/contact_precision_all.csv"
+def published_precision(path: Path | None = None) -> dict[tuple[str, str], float]:
+    """The per-protein precision this arm must reproduce, keyed by (stem, cut).
+
+    Either exp245's `contact_precision_all.csv` (rows for the checkpoint it
+    scored) or a #250 rescore's metrics table, which names its value column
+    `value` and carries no `model` column because it holds one model.
+    """
+    path = path or (U.CACHE / "upstream/contact_precision_all.csv")
     out = {}
     with path.open() as handle:
         for row in csv.DictReader(handle):
-            if row["model"] == U.CHECKPOINT_LABEL and row["range"] == "all":
-                out[(row["stem"], row["cut"])] = float(row["precision"])
+            if row.get("range") != "all":
+                continue
+            if "model" in row and row["model"] != U.CHECKPOINT_LABEL:
+                continue
+            value = row.get("precision", row.get("value"))
+            if value in (None, "", "nan"):
+                continue
+            out[(row["stem"], row["cut"])] = float(value)
     if not out:
-        raise SystemExit(f"no rows for {U.CHECKPOINT_LABEL} in {path}")
+        raise SystemExit(f"no usable all-range rows in {path}")
     return out
 
 
@@ -90,13 +109,33 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tolerance", type=float, default=1e-9,
-                        help="allowed drift from exp245's published precision")
+                        help="allowed drift from the reference precision")
+    parser.add_argument("--dense-dir", type=Path, default=None,
+                        help="local directory of <dataset>__<stem>.npz score matrices; "
+                             "without it the exp245 matrices are mirrored from CoreWeave")
+    parser.add_argument("--precision-csv", type=Path, default=None,
+                        help="per-protein metrics to reproduce (a #250 rescore's "
+                             "metrics-shard*.csv, concatenated); defaults to exp245's")
+    parser.add_argument("--suffix", default="",
+                        help="appended to the arm and accuracy filenames, e.g. _363k")
     args = parser.parse_args()
 
-    pins = mirror_dense()
-    PINS.write_text(json.dumps(
-        {"source": f"s3://{U.CW_BUCKET}/{U.CW_RUN_ROOT}/dense_scores/{U.CHECKPOINT_DIR}/",
-         "checkpoint": U.CHECKPOINT_LABEL, "n_files": len(pins), "files": pins},
+    if args.dense_dir:
+        dense_dir = args.dense_dir.expanduser().resolve()
+        pins = {path.name: {"size": path.stat().st_size, "sha256": U.sha256(path)}
+                for path in sorted(dense_dir.glob("*.npz"))}
+        if not pins:
+            raise SystemExit(f"no .npz score matrices in {dense_dir}")
+        source, checkpoint = str(dense_dir), f"local:{dense_dir.parent.name}"
+    else:
+        dense_dir = DENSE
+        pins = mirror_dense()
+        source = f"s3://{U.CW_BUCKET}/{U.CW_RUN_ROOT}/dense_scores/{U.CHECKPOINT_DIR}/"
+        checkpoint = U.CHECKPOINT_LABEL
+    pins_path = PINS if not args.suffix else PINS.with_name(
+        f"{PINS.stem}{args.suffix}{PINS.suffix}")
+    pins_path.write_text(json.dumps(
+        {"source": source, "checkpoint": checkpoint, "n_files": len(pins), "files": pins},
         indent=2) + "\n")
 
     universe = U.load_gt_universe()
@@ -105,7 +144,7 @@ def main() -> int:
                  json.loads((U.DATA / "token_map.json").read_text()).items()}
     with (U.DATA / "targets.csv").open() as handle:
         targets = list(csv.DictReader(handle))
-    published = published_precision()
+    published = published_precision(args.precision_csv)
 
     arms: dict[str, dict[str, list]] = {label: {} for label, _ in CUTS}
     rows, drift, dropped = [], [], []
@@ -117,7 +156,7 @@ def main() -> int:
             continue
         record = universe[stem]
         length = record["L"]
-        score = np.load(DENSE / f"foldbench_monomer__{stem}.npz")["score"]
+        score = np.load(dense_dir / f"foldbench_monomer__{stem}.npz")["score"]
         score = score.astype(np.float64)
         if score.shape != (length, length):
             dropped.append((stem, f"score shape {score.shape} != L={length}"))
@@ -130,7 +169,10 @@ def main() -> int:
         for label, cut in CUTS:
             top = ranked[:min(cut(length), len(ranked))]
             mine = float(np.mean([truth[i, j] for i, j in top])) if top else float("nan")
-            want = published[(stem, CUT_LABEL[label])]
+            want = published.get((stem, CUT_LABEL[label]))
+            if want is None:
+                raise SystemExit(f"no reference precision for {stem} at {CUT_LABEL[label]}; "
+                                 "the metrics table does not cover this target")
             if abs(mine - want) > args.tolerance:
                 drift.append((stem, label, mine, want))
             pairs = []
@@ -147,16 +189,18 @@ def main() -> int:
 
     if drift:
         raise SystemExit(
-            f"{len(drift)} (stem, cut) precisions do not reproduce exp245's "
-            f"published values, e.g. {drift[:5]}. The ranking or the ground "
-            f"truth differs from upstream; do not run this arm."
+            f"{len(drift)} (stem, cut) precisions do not reproduce the reference "
+            f"values, e.g. {drift[:5]}. The ranking or the ground truth differs "
+            f"from the run that produced these matrices; do not run this arm."
         )
 
     U.ARMS.mkdir(parents=True, exist_ok=True)
     for label, mapping in arms.items():
-        (U.ARMS / f"mf_{label}.json").write_text(json.dumps(mapping))
+        (U.ARMS / f"mf_{label}{args.suffix}.json").write_text(json.dumps(mapping))
 
-    with ACCURACY.open("w", newline="") as handle:
+    accuracy_path = ACCURACY if not args.suffix else ACCURACY.with_name(
+        f"{ACCURACY.stem}{args.suffix}{ACCURACY.suffix}")
+    with accuracy_path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
@@ -164,8 +208,8 @@ def main() -> int:
     print(f"{len(rows)} targets, {len(dropped)} dropped")
     for stem, why in dropped:
         print(f"  dropped {stem}: {why}")
-    print(f"precision reproduces exp245 exactly on {len(rows)}/{len(rows)} targets "
-          f"at every cut")
+    print(f"precision reproduces the reference exactly on {len(rows)}/{len(rows)} "
+          f"targets at every cut")
     for label, _ in CUTS:
         total = sum(len(v) for v in arms[label].values())
         unmapped = sum(r[f"n_unmapped_{label}"] for r in rows)
@@ -173,7 +217,7 @@ def main() -> int:
         print(f"  mf_{label}: {total} pairs "
               f"({total / max(len(rows), 1):.0f}/target), {unmapped} unmapped, "
               f"mean precision {mean:.4f}")
-    print(f"\narms -> {U.ARMS}")
+    print(f"\narms -> {U.ARMS} (suffix {args.suffix!r}), accuracy -> {accuracy_path}")
     return 0
 
 
