@@ -15,10 +15,19 @@ import torch
 from helico.contacts import MIN_SEQ_SEPARATION
 from helico.data import CONTACT_ABSENT, CONTACT_PRESENT, CONTACT_UNKNOWN
 from helico.inference import contacts_from_pairs
+from helico.train import pdb_chain_id_map
 
 cuda_only = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 
 SEP = MIN_SEQ_SEPARATION
+
+
+def test_pdb_chain_id_map_handles_multicharacter_mmcif_ids():
+    assert pdb_chain_id_map(["A", "A-2", "A", "C"]) == {
+        "A": "A",
+        "A-2": "B",
+        "C": "C",
+    }
 
 
 class TestContactsFromPairs:
