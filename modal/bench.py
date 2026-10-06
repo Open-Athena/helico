@@ -362,7 +362,9 @@ class Predictor:
                 "mode": CONTACTS_ARM or ("oracle" if ORACLE_CONTACTS else "off"),
                 "elapsed_seconds": round(inference_seconds, 3),
                 "model_load_seconds": round(self.model_load_seconds, 3),
-                "total_seconds": round(time.monotonic() - started, 3),
+                "total_seconds": round(
+                    self.model_load_seconds + time.monotonic() - started, 3
+                ),
                 **self.worker_meta,
                 "timestamp_utc": datetime.datetime.now(
                     datetime.timezone.utc
