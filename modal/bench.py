@@ -172,7 +172,10 @@ class Predictor:
     @modal.enter()
     def setup(self):
         import os
+        import platform
+        import socket
         import subprocess
+        import time
 
         # Point HELICO cache at the shared Volume so CCD + FoldBench are persisted.
         os.environ["HELICO_DATA_DIR"] = DATA_CACHE
@@ -247,6 +250,8 @@ class Predictor:
         #     "config": TrainConfig-dict, ...} — load directly after
         #     constructing Helico with matching n_pairformer_blocks etc.
         ckpt_path = self.checkpoint_path or "protenix-v1"
+        model_load_started = time.monotonic()
+        checkpoint_step = None
         if ckpt_path in ("", "protenix-v1"):
             print(f"Loading Protenix v1 checkpoint: {PROTENIX_CKPT_PATH}")
             ckpt = torch.load(PROTENIX_CKPT_PATH, map_location="cpu", weights_only=False)
@@ -266,6 +271,7 @@ class Predictor:
             from helico.model import HelicoConfig
             print(f"Loading Helico checkpoint: {ckpt_path}")
             state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            checkpoint_step = state.get("step")
             if "model_state_dict" not in state:
                 raise RuntimeError(
                     f"checkpoint {ckpt_path} is not a Helico checkpoint "
@@ -299,6 +305,19 @@ class Predictor:
         # FoldBench dirs are already populated on the Volume by the chunk
         # downloads above; this call is a no-op lookup.
         self.foldbench_dir = download_foldbench()
+        self.model_load_seconds = time.monotonic() - model_load_started
+        properties = torch.cuda.get_device_properties(0)
+        self.worker_meta = {
+            "model_nickname": ckpt_path,
+            "checkpoint_step": checkpoint_step,
+            "runner_tag": "modal",
+            "gpu_name": str(properties.name),
+            "gpu_total_memory_gb": round(properties.total_memory / 1e9, 2),
+            "gpu_compute_capability": f"{properties.major}.{properties.minor}",
+            "hostname": socket.gethostname(),
+            "platform": platform.platform(),
+            "torch_version": str(torch.__version__),
+        }
 
     @modal.method()
     def predict(
@@ -311,8 +330,10 @@ class Predictor:
         n_cycles: int = 10,
     ) -> dict | None:
         """Run prediction for a single target. Returns serializable result dict or None."""
+        import datetime
         import logging
         import numpy as np
+        import time
         import torch
         from helico.data import parse_mmcif
         from helico.bench import (
@@ -330,6 +351,26 @@ class Predictor:
         # if the sequence tuple isn't cached.
         server_cache_dir = self.foldbench_dir / "foldbench-msas-server"
         msa_server_url = "https://api.colabfold.com"
+        started = time.monotonic()
+        inference_seconds = 0.0
+
+        def timing_row(*, n_tokens: int = 0, n_contacts: int = 0) -> dict:
+            return {
+                "stem": pdb_id,
+                "n_residues": n_tokens,
+                "n_pairs": n_contacts,
+                "mode": CONTACTS_ARM or ("oracle" if ORACLE_CONTACTS else "off"),
+                "elapsed_seconds": round(inference_seconds, 3),
+                "model_load_seconds": round(self.model_load_seconds, 3),
+                "total_seconds": round(time.monotonic() - started, 3),
+                **self.worker_meta,
+                "timestamp_utc": datetime.datetime.now(
+                    datetime.timezone.utc
+                ).isoformat(),
+                "n_samples_per_seed": n_samples,
+                "n_seeds": n_seeds,
+                "n_cycles": n_cycles,
+            }
 
         try:
             gt_path = _find_gt_path(gt_dir, pdb_id)
@@ -339,6 +380,13 @@ class Predictor:
                 f"[{pdb_id}] oracle_contacts={'ON' if ORACLE_CONTACTS else 'OFF'}"
             )
             chains = structure_to_chains(gt_structure)
+            contact_pairs = None
+            if self.contact_map is not None:
+                if pdb_id not in self.contact_map:
+                    raise KeyError(
+                        f"Contact arm {CONTACTS_ARM!r} has no entry for {pdb_id}"
+                    )
+                contact_pairs = self.contact_map[pdb_id]
 
             # Multi-seed sampling: published FoldBench protocol uses 5 seeds
             # × 5 samples = 25 predictions/target. One call per seed, seeds
@@ -360,6 +408,7 @@ class Predictor:
                 torch.manual_seed(seed)
                 if torch.cuda.is_available():
                     torch.cuda.manual_seed_all(seed)
+                inference_started = time.monotonic()
                 pred_result = predict_target(
                     self.model,
                     chains,
@@ -374,11 +423,17 @@ class Predictor:
                     oracle_contacts_from=gt_structure if ORACLE_CONTACTS else None,
                     contact_precision=CONTACT_PRECISION,
                     contact_recall=CONTACT_RECALL,
-                    contact_pairs=(self.contact_map or {}).get(pdb_id),
+                    contact_pairs=contact_pairs,
                     # logged so the log always states which mode actually ran
                 )
+                inference_seconds += time.monotonic() - inference_started
                 if pred_result is None:
-                    return {"pdb_id": pdb_id, "category": category, "status": "too_large"}
+                    return {
+                        "pdb_id": pdb_id,
+                        "category": category,
+                        "status": "too_large",
+                        "timing": timing_row(),
+                    }
                 tok_i, res_i = pred_result
 
                 rs_i = float(res_i["ranking_score"][0].item())
@@ -463,18 +518,37 @@ class Predictor:
                 "all_has_clash": all_has_clash_np,
                 "seeds": seeds,
                 "n_samples_per_seed": n_samples,
+                "timing": timing_row(
+                    n_tokens=int(tokenized.n_tokens),
+                    n_contacts=len(contact_pairs or []),
+                ),
             }
 
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
                 logger.warning(f"OOM on {pdb_id}")
                 torch.cuda.empty_cache()
-                return {"pdb_id": pdb_id, "category": category, "status": "oom"}
+                return {
+                    "pdb_id": pdb_id,
+                    "category": category,
+                    "status": "oom",
+                    "timing": timing_row(),
+                }
             logger.error(f"RuntimeError on {pdb_id}: {e}")
-            return {"pdb_id": pdb_id, "category": category, "status": "error"}
+            return {
+                "pdb_id": pdb_id,
+                "category": category,
+                "status": "error",
+                "timing": timing_row(),
+            }
         except Exception as e:
             logger.error(f"Error on {pdb_id}: {e}")
-            return {"pdb_id": pdb_id, "category": category, "status": "error"}
+            return {
+                "pdb_id": pdb_id,
+                "category": category,
+                "status": "error",
+                "timing": timing_row(),
+            }
 
 
 @app.cls(image=scorer_image, cpu=2.0, memory=8192, timeout=900,
@@ -860,4 +934,17 @@ def run_bench(
 
     print_summary(category_summaries)
     write_summary_csv(category_summaries, output_path / "summary.csv")
+    timing_rows = [
+        result["timing"]
+        for result in prediction_results.values()
+        if result.get("timing")
+    ]
+    if timing_rows:
+        import csv
+
+        fields = list(dict.fromkeys(key for row in timing_rows for key in row))
+        with (output_path / "timings.csv").open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(sorted(timing_rows, key=lambda row: row["stem"]))
     logger.info(f"Results written to {output_path}")
