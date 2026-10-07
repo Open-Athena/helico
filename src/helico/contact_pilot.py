@@ -113,7 +113,7 @@ def measure(features, state, result, base_contacts=None):
 
 
 @torch.no_grad()
-def evaluate(model, examples, output, rank, world, arm, phase="final"):
+def evaluate(model, examples, output, rank, world, arm, phase="final", step=0):
     model.eval(); model.config.use_msa = True
     records = []
     predictions = output / "predictions"; predictions.mkdir(exist_ok=True)
@@ -151,7 +151,7 @@ def evaluate(model, examples, output, rank, world, arm, phase="final"):
                 if mode == "none":
                     base_contacts = contacts
                     base_probs = result["contact_probs"][0, :n, :n].float().cpu()
-                record = dict(arm=arm, phase=phase, pdb_id=example["id"], kind=example["kind"],
+                record = dict(arm=arm, phase=phase, step=step, pdb_id=example["id"], kind=example["kind"],
                               seed=seed, mode=mode, **metrics)
                 records.append(record)
                 torch.save({"coords": result["coords"].float().cpu(), "contact_state": state,
@@ -168,14 +168,37 @@ def write_csv(path, records):
         writer = csv.DictWriter(f, fieldnames=list(records[0])); writer.writeheader(); writer.writerows(records)
 
 
+def save_checkpoint(path, model, optimizer, step, arm, world):
+    """Keep optimizer state for future continuation; atomically publish each file."""
+    pending = path.with_suffix(".tmp")
+    torch.save({"model_state_dict": model.state_dict(), "model_config": asdict(model.config),
+                "optimizer_state_dict": optimizer.state_dict(), "step": step, "arm": arm,
+                "world_size": world, "training_seed_scheme": "contact-pilot-per-step-v1"}, pending)
+    pending.replace(path)
+
+
+def collect_evaluations(output, phases):
+    records = []
+    for phase in phases:
+        for path in sorted(output.glob(f"{phase}-rank*.csv")):
+            with path.open() as f: records.extend(csv.DictReader(f))
+    write_csv(output / "evaluation.csv", records)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--assets", type=Path, required=True)
     p.add_argument("--arm", choices=["masked", "unknown"], required=True)
     p.add_argument("--steps", type=int, default=256)
     p.add_argument("--train-seconds", type=int, default=3300)
+    p.add_argument("--eval-steps", type=int, nargs="*", default=[],
+                   help="Save checkpoints and run held-out evaluation at these updates")
     p.add_argument("--smoke", action="store_true")
     args = p.parse_args()
+    if args.steps <= 0 or args.train_seconds <= 0:
+        p.error("--steps and --train-seconds must be positive")
+    if any(step <= 0 or step >= args.steps for step in args.eval_steps):
+        p.error("--eval-steps must be strictly between zero and --steps")
     rank = int(os.environ.get("RANK", 0)); world = int(os.environ.get("WORLD_SIZE", 1))
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     torch.set_num_threads(2); torch.cuda.set_device(local_rank)
@@ -227,8 +250,9 @@ def main():
     import wandb
     run = None
     if rank == 0:
-        run = wandb.init(entity="timodonnell", project="helico", name=f"exp20-clean-contact-{args.arm}",
+        run = wandb.init(entity="timodonnell", project="helico", name=f"exp20-clean-contact-{output.name}",
                          config={**asdict(config), "arm": args.arm, "steps": args.steps,
+                                 "eval_steps": sorted(set(args.eval_steps)), "train_seconds_limit": args.train_seconds,
                                  "world_size": world, "loss": "diffusion + .1 distogram + .1 masked BCE + .01 observed BCE",
                                  "base_lr": 1e-5, "new_lr": 1e-3,
                                  "CUEQ_TRIMUL_FALLBACK_THRESHOLD": os.environ.get("CUEQ_TRIMUL_FALLBACK_THRESHOLD"),
@@ -238,6 +262,8 @@ def main():
         (output / "wandb.json").write_text(json.dumps({"url": run.url, "id": run.id}, indent=2))
     evaluate(model, dataset["validation"], output, rank, world, args.arm, "initial")
     if world > 1: dist.barrier()
+    phases = ["initial"]
+    if rank == 0: collect_evaluations(output, phases)
     wrapped = DDP(model, device_ids=[local_rank], find_unused_parameters=True) if world > 1 else model
     groups = []
     for new in (False, True):
@@ -281,21 +307,27 @@ def main():
             logs.append(metrics); run.log(metrics, step=step + 1)
             if step % 10 == 0:
                 print(json.dumps(metrics), flush=True); write_csv(output / "training.csv", logs)
+        if step + 1 in args.eval_steps:
+            model.config.use_msa = True
+            if rank == 0:
+                write_csv(output / "training.csv", logs)
+                save_checkpoint(output / f"step-{step + 1}.pt", model, optimizer, step + 1, args.arm, world)
+            if world > 1: dist.barrier()
+            phase = f"step-{step + 1}"
+            evaluate(model, dataset["validation"], output, rank, world, args.arm, phase, step + 1)
+            if world > 1: dist.barrier()
+            phases.append(phase)
+            if rank == 0: collect_evaluations(output, phases)
     actual_steps = step + 1 if not stop.item() else step
     model.config.use_msa = True
     if rank == 0:
         write_csv(output / "training.csv", logs)
-        torch.save({"model_state_dict": model.state_dict(), "model_config": asdict(config),
-                    "step": actual_steps, "arm": args.arm}, output / "final.pt")
+        save_checkpoint(output / "final.pt", model, optimizer, actual_steps, args.arm, world)
     if world > 1: dist.barrier()
-    evaluate(model, dataset["validation"], output, rank, world, args.arm)
+    evaluate(model, dataset["validation"], output, rank, world, args.arm, step=actual_steps)
     if world > 1: dist.barrier()
     if rank == 0:
-        records = []
-        for phase in ("initial", "final"):
-            for path in sorted(output.glob(f"{phase}-rank*.csv")):
-                with path.open() as f: records.extend(csv.DictReader(f))
-        write_csv(output / "evaluation.csv", records)
+        collect_evaluations(output, phases + ["final"])
         summary = {"steps": actual_steps, "wall_seconds": time.monotonic()-started,
                    "gpu_hours": (time.monotonic()-started)*world/3600,
                    "train_examples": len(dataset["train"]), "validation_examples": len(dataset["validation"]),

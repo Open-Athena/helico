@@ -29,7 +29,15 @@ Data are selected from a pinned byte prefix of the published Helico snapshot, wi
 
 ## Execution and budget
 
-Run this notebook on the preallocated machine with `HELICO_PILOT_ASSETS` pointing to prepared assets and `HELICO_PILOT_ARM` set to one arm. A dry run always includes both arms; GPU smoke checks fit within an additional $2 reserve, making the total conservative reference budget $62 and requiring no new GPU instances.
+Run this notebook on the preallocated machine with `HELICO_PILOT_ASSETS` pointing to prepared assets and `HELICO_PILOT_ARM` set to one arm. A dry run always includes both arms; the original pilot had a conservative reference budget of $62 including a $2 preflight reserve and required no new GPU instances.
+
+### Longer matched comparison
+
+Set `HELICO_PILOT_RUN_SET=long` to train both arms for **2,048 updates** from the same original pretrained weights, with the same dataset, learning rates, masking schedule, and losses. Evaluate all conditioning modes at updates 256, 512, 1,024, and 2,048. The original 256-step checkpoints lacked optimizer state, so this is a fresh matched training trajectory rather than a weights-only continuation with a reset optimizer. New checkpoints retain optimizer state and the global step; stochastic training inputs are seeded separately at each step/rank.
+
+This tests duration before changing the architecture or objective: the initial masked arm's coordinate loss fell from 0.208 in the first 64 updates to 0.125 in the last 64, and its contact-input projection norm continued growing. Longer training may improve conditioning, but the same 53 training examples and eight holdouts cannot establish broad generalization. Keep the original results under `data/` and write this comparison separately under `data/long/`, using distinct `*-long-v1` cache names.
+
+Budget the complete longer comparison at **$92 reference equivalent**: two 8×A100-80GB runs bounded to 2.25 hours each ($90), plus $2 preflight reserve. Each training loop, including intermediate evaluations, stops after 7,200 seconds to leave room for final evaluation; the process-group timeout is 8,100 seconds. No new instances are provisioned. A run that reaches its time limit reports its actual update count rather than claiming all 2,048 updates.
 
 ```python
 import os
@@ -42,23 +50,33 @@ set_experiment("exp20_clean-contact-pilot")
 root = experiment_dir()
 assets = Path(os.environ.get("HELICO_PILOT_ASSETS", str(Path.home() / "helico-pilot-assets")))
 selected = os.environ.get("HELICO_PILOT_ARM", "both")
+run_set = os.environ.get("HELICO_PILOT_RUN_SET", "pilot")
+if run_set not in {"pilot", "long"}:
+    raise ValueError("HELICO_PILOT_RUN_SET must be pilot or long")
+long_run = run_set == "long"
+suffix = "long-v1" if long_run else "v1"
+data_dir = root / "data" / "long" if long_run else root / "data"
+plots_dir = root / "plots" / "long" if long_run else root / "plots"
+steps = 2048 if long_run else 256
 analyze_only = os.environ.get("HELICO_PILOT_ANALYZE_ONLY") == "1" or (
-    selected == "both" and (root / "data" / "evaluation.csv").exists())
+    selected == "both" and (data_dir / "evaluation.csv").exists())
 runs = {}
-# Total expected reference cost: 2 * 8 A100-80GB * 1.5 hours * $2.50 = $60.
-# Reserve another $2 for GPU smoke checks; complete experiment remains <= $62.
+# Whole comparison: pilot 2 * 8 * 1.5h * $2.50 = $60; long 2 * 8 * 2.25h * $2.50 = $90.
+# Add a $2 preflight reserve: pilot <= $62, longer comparison <= $92.
 for arm in ("unknown", "masked"):
     if analyze_only and not is_dry_run():
         continue
     if not is_dry_run() and selected not in ("both", arm):
         continue
     runs[arm] = ensure_training_run(
-        arm + "-v1", gpu="A100-80GB:8", max_steps=256, crop_size=256,
+        arm + "-" + suffix, gpu="A100-80GB:8", max_steps=steps, crop_size=256,
         batch_size=1, lr=1e-5, warmup_steps=20, n_diffusion_samples=1,
-        est_wall_hours=1.5, command_timeout_seconds=5400,
+        est_wall_hours=2.25 if long_run else 1.5,
+        command_timeout_seconds=8100 if long_run else 5400,
         command=["env", "CUEQ_TRIMUL_FALLBACK_THRESHOLD=256", "CUEQ_TRIATTN_FALLBACK_THRESHOLD=256", sys.executable, "-m", "torch.distributed.run", "--standalone",
                  "--nproc_per_node=8", "-m", "helico.contact_pilot",
-                 "--assets", str(assets), "--arm", arm, "--steps", "256"],
+                 "--assets", str(assets), "--arm", arm, "--steps", str(steps)]
+                + (["--train-seconds", "7200", "--eval-steps", "256", "512", "1024"] if long_run else []),
     )
 ```
 
@@ -72,19 +90,19 @@ Once the result CSV is present, the notebook defaults to analysis without dispat
 
 ```python
 if not is_dry_run():
-    paths = [root / ".cache" / "trainings" / (arm + "-v1") / "evaluation.csv"
+    paths = [root / ".cache" / "trainings" / (arm + "-" + suffix) / "evaluation.csv"
              for arm in ("unknown", "masked") if selected in ("both", arm)]
     frames = [pd.read_csv(path) for path in paths if path.exists()]
-    if not frames and (root / "data" / "evaluation.csv").exists():
-        frames = [pd.read_csv(root / "data" / "evaluation.csv")]
+    if not frames and (data_dir / "evaluation.csv").exists():
+        frames = [pd.read_csv(data_dir / "evaluation.csv")]
     if frames:
         results = pd.concat(frames, ignore_index=True)
-        (root / "data").mkdir(exist_ok=True)
-        results.to_csv(root / "data" / "evaluation.csv", index=False)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        results.to_csv(data_dir / "evaluation.csv", index=False)
         summary = results.groupby(["arm", "phase", "mode"])[
             ["lddt", "all_recall", "all_precision", "all_bce", "all_ap",
              "pp_recall", "pl_recall", "request_satisfaction"]].mean()
-        summary.to_csv(root / "data" / "summary.csv")
+        summary.to_csv(data_dir / "summary.csv")
         display(summary)
         final = summary.reset_index().query("phase == 'final'")
         if len(final):
@@ -93,8 +111,8 @@ if not is_dry_run():
                 ax.plot(group["mode"], group["all_recall"], marker="o", label=arm)
             ax.set(ylabel="True contact recovery", xlabel="Conditioning", ylim=(0, 1))
             ax.legend(); fig.tight_layout()
-            (root / "plots").mkdir(exist_ok=True)
-            fig.savefig(root / "plots" / "contact_recovery.png", dpi=160)
+            plots_dir.mkdir(parents=True, exist_ok=True)
+            fig.savefig(plots_dir / "contact_recovery.png", dpi=160)
             plt.show()
 ```
 
@@ -103,15 +121,17 @@ if not is_dry_run():
 Average the two seeds within each target before computing paired differences, so repeated samples are not treated as independent proteins. Compare head metrics only between identical masked-pair sets, because revealing labels changes the scoring subset. Bootstrap targets for descriptive 95% intervals, leaving single-target categories without an interval; eight targets are insufficient for a broad generalization claim.
 
 ```python
-if not is_dry_run() and frames and set(results.arm) == {"masked", "unknown"}:
+if not is_dry_run() and frames and {
+    (arm, phase) for arm in ("masked", "unknown") for phase in ("initial", "final")
+}.issubset(set(zip(results.arm, results.phase))):
     from helico.contact_pilot_analysis import paired_comparisons
     paired = paired_comparisons(results)
-    paired.to_csv(root / "data" / "paired_comparisons.csv", index=False)
+    paired.to_csv(data_dir / "paired_comparisons.csv", index=False)
     display(paired[paired.metric.isin(["lddt", "all_recall", "pl_recall"])])
     by_category = results.groupby(["arm", "phase", "mode", "kind"])[
         ["lddt", "all_recall", "all_precision", "all_bce", "all_ap",
          "pp_recall", "pl_recall", "request_precision", "request_satisfaction"]].mean()
-    by_category.to_csv(root / "data" / "by_category.csv")
+    by_category.to_csv(data_dir / "by_category.csv")
 ```
 
 The contact losses during training use different visible subsets in the two arms and are diagnostic rather than a fair held-out comparison. Preserve the raw traces and plot their rolling means to expose instability or failed optimization.
@@ -120,14 +140,15 @@ The contact losses during training use different visible subsets in the two arms
 if not is_dry_run():
     traces = []
     for arm in ("unknown", "masked"):
-        path = root / ".cache" / "trainings" / (arm + "-v1") / "training.csv"
+        path = root / ".cache" / "trainings" / (arm + "-" + suffix) / "training.csv"
         if path.exists():
             trace = pd.read_csv(path); trace["arm"] = arm; traces.append(trace)
     if traces:
         training = pd.concat(traces, ignore_index=True)
-        training.to_csv(root / "data" / "training.csv", index=False)
-    elif (root / "data" / "training.csv").exists():
-        training = pd.read_csv(root / "data" / "training.csv")
+        data_dir.mkdir(parents=True, exist_ok=True)
+        training.to_csv(data_dir / "training.csv", index=False)
+    elif (data_dir / "training.csv").exists():
+        training = pd.read_csv(data_dir / "training.csv")
     else:
         training = pd.DataFrame()
     if len(training):
@@ -138,8 +159,35 @@ if not is_dry_run():
         axes[0].set(xlabel="Training step", ylabel="Total loss (20-step mean)")
         axes[1].set(xlabel="Training step", ylabel="Masked BCE (20-step mean)")
         axes[0].legend(); fig.tight_layout()
-        fig.savefig(root / "plots" / "training.png", dpi=160)
+        plots_dir.mkdir(parents=True, exist_ok=True)
+        fig.savefig(plots_dir / "training.png", dpi=160)
         plt.show()
+```
+
+For the longer comparison, retain every intermediate evaluation in the source CSV. Plot oracle constraint satisfaction, the full-map contact-recall effect, and unconditioned structural accuracy against update count to distinguish improved control from changes in the underlying predictor.
+
+```python
+if not is_dry_run() and long_run and frames:
+    duration = results.groupby(["arm", "step", "mode"])[
+        ["lddt", "all_recall", "all_precision", "all_ap", "request_satisfaction"]].mean().reset_index()
+    duration.to_csv(data_dir / "duration.csv", index=False)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 3.5))
+    for arm, group in duration.groupby("arm"):
+        modes = {mode: rows.set_index("step") for mode, rows in group.groupby("mode")}
+        if "oracle4" in modes:
+            axes[0].plot(modes["oracle4"].index, modes["oracle4"].request_satisfaction, marker="o", label=arm)
+        if "full" in modes and "none" in modes:
+            delta = (modes["full"].all_recall - modes["none"].all_recall).dropna()
+            axes[1].plot(delta.index, delta, marker="o", label=arm)
+        if "none" in modes:
+            axes[2].plot(modes["none"].index, modes["none"].lddt, marker="o", label=arm)
+    for ax, label in zip(axes, ["Four true contacts: satisfaction", "Full-map minus no-map recall", "No-map atom LDDT"]):
+        ax.set(xlabel="Training updates", ylabel=label)
+        if ax.lines: ax.legend()
+    fig.tight_layout()
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(plots_dir / "duration.png", dpi=160)
+    plt.show()
 ```
 
 ## Checkpoint reuse
@@ -166,8 +214,8 @@ The model-selected four-contact branches had 45.3% true hypotheses, satisfied 20
 
 Protein–ligand recovery in the masked arm increased from 18.6% to 25.7% under model-selected hypotheses, but this averages only five structures with protein–ligand contacts, including the protein–protein category’s mixed complex. Much of the gain comes from 9CIV, whose LDDT decreased. With one held-out protein–protein example and no chain/ligand symmetry correction, these are case studies rather than evidence of improved complex prediction. Shared seeds do not make the GPU runs bitwise identical: their initial mean LDDTs both round to 0.618, but per-sample LDDT differs by 0.0127 on average.
 
-The next experiment should first establish strong oracle control on a tiny overfit panel and an MSA-free ablation, then vary contact-projection learning rate and supervision strength while keeping independent no-contact controls. A geometry-based restraint loss on revealed contacts is a candidate if the coordinate decoder keeps ignoring the input, but should be an explicit ablation. Expand to more independent complexes and known alternative states before testing tree-search efficiency or adding Flock/weak interaction labels. This pilot does not test a full reverse discrete sampler, biological nonbinding labels, or recovery of multiple conformational states.
+The next comparison extends matched training to 2,048 updates before changing the architecture or objective; 256 updates are too few to conclude that the model cannot learn sparse control. Coordinate loss and the input-projection norm were still changing at the end of the pilot. If longer training does not improve oracle constraint satisfaction, test an MSA-free ablation and vary contact-projection learning rate or supervision strength while keeping independent no-contact controls. A geometry-based restraint loss on revealed contacts is a candidate if the coordinate decoder keeps ignoring the input, but should be an explicit ablation. Expand to more independent complexes and known alternative states before testing tree-search efficiency or adding Flock/weak interaction labels. This pilot does not test a full reverse discrete sampler, biological nonbinding labels, or recovery of multiple conformational states.
 
 Run records: [masked](https://wandb.ai/timodonnell/helico/runs/y63wamer), [all-unknown](https://wandb.ai/timodonnell/helico/runs/yd1yog91), and [issue #20](https://github.com/Open-Athena/helico/issues/20). Checkpoints, predictions, and run metadata: [masked arm](https://huggingface.co/buckets/timodonnell/helico-experiments/tree/exp20-clean-contact-pilot/masked-v1), [all-unknown control](https://huggingface.co/buckets/timodonnell/helico-experiments/tree/exp20-clean-contact-pilot/unknown-v1). The masked-arm `data/` directory also contains the prepared dataset and provenance. [Rendered report and CSVs](https://huggingface.co/buckets/timodonnell/helico-experiments/tree/exp20-clean-contact-pilot/report).
 
-GitHub branch publication returned repeated server errors during closeout, and the draft PR could not be created. The complete source change is also preserved as `source.patch` in the [report artifacts](https://huggingface.co/buckets/timodonnell/helico-experiments/tree/exp20-clean-contact-pilot/report); apply it with `git am` on base commit `b10385d`. The local branch retains the commits for a later push.
+GitHub publication recovered after the initial server errors. The implementation and results are available in [draft PR #21](https://github.com/Open-Athena/helico/pull/21). The original pilot source is also preserved as `source.patch` in the [report artifacts](https://huggingface.co/buckets/timodonnell/helico-experiments/tree/exp20-clean-contact-pilot/report); apply it with `git am` on base commit `b10385d`.
