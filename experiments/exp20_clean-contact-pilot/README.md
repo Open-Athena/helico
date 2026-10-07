@@ -39,6 +39,8 @@ This tests duration before changing the architecture or objective: the initial m
 
 Budget the complete longer comparison at **$92 reference equivalent**: two 8×A100-80GB runs bounded to 2.25 hours each ($90), plus $2 preflight reserve. Each training loop, including intermediate evaluations, stops after 7,200 seconds to leave room for final evaluation; the process-group timeout is 8,100 seconds. No new instances are provisioned. A run that reaches its time limit reports its actual update count rather than claiming all 2,048 updates.
 
+Both longer runs launched on 2026-10-07 at 18:02 UTC from source commit `4cf6abe`: [masked conditioning](https://wandb.ai/timodonnell/helico/runs/hhyjl3y9) and [all-unknown control](https://wandb.ai/timodonnell/helico/runs/ufigo0rg). Initial training updates had finite losses and gradients on all eight GPUs per arm. A two-update distributed preflight saved an optimizer checkpoint, evaluated it, resumed training, and completed final evaluation in 152 seconds (0.337 GPU-hours, $0.84 reference equivalent, within the reserve). The longer comparison is running; its results are not yet part of the conclusion below. Completed artifacts are scheduled for upload to the distinct `masked-long-v1` and `unknown-long-v1` directories in the same experiment bucket. The launch record is in `data/long/run_manifest.json`.
+
 ```python
 import os
 import sys

@@ -1,0 +1,39 @@
+{
+  "source_commit": "4cf6abe8041e82fd86b4422ff4dc304e9d496ec1",
+  "requested_steps": 2048,
+  "evaluation_steps": [
+    0,
+    256,
+    512,
+    1024,
+    2048
+  ],
+  "train_examples": 53,
+  "validation_examples": 8,
+  "initialization": "Protenix v1; fresh matched trajectories",
+  "gpu": "A100-80GB:8 per arm",
+  "training_loop_limit_seconds": 7200,
+  "process_group_timeout_seconds": 8100,
+  "reference_budget_usd": 92,
+  "preflight": {
+    "steps": 2,
+    "wall_seconds": 151.84438722097548,
+    "gpu_hours": 0.3374319814621574,
+    "reference_cost_usd": 0.8435799536553935,
+    "wandb_url": "https://wandb.ai/timodonnell/helico/runs/u935zsgz"
+  },
+  "runs": [
+    {
+      "arm": "masked",
+      "name": "masked-long-v1",
+      "launched_at_utc": "2026-10-07T18:02:43Z",
+      "wandb_url": "https://wandb.ai/timodonnell/helico/runs/hhyjl3y9"
+    },
+    {
+      "arm": "unknown",
+      "name": "unknown-long-v1",
+      "launched_at_utc": "2026-10-07T18:02:43Z",
+      "wandb_url": "https://wandb.ai/timodonnell/helico/runs/ufigo0rg"
+    }
+  ]
+}
