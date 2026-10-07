@@ -1307,7 +1307,7 @@ def infer_main():
         logger.info(f"Loaded Protenix checkpoint: {stats['n_transferred']} params transferred")
     else:
         state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-        config = HelicoConfig(**{k: v for k, v in state.get("config", {}).items() if hasattr(HelicoConfig, k)})
+        config = HelicoConfig(**{k: v for k, v in state.get("model_config", state.get("config", {})).items() if hasattr(HelicoConfig, k)})
         model = Helico(config)
         model.load_state_dict(state["model_state_dict"])
 

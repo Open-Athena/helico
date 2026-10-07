@@ -59,3 +59,11 @@ def test_masked_loss_ignores_visible_and_invalid_pairs_with_finite_gradients():
     full = torch.ones_like(state)
     empty = contact_bce(logits, target, valid, full)["contact_loss"]
     assert empty == 0 and empty.requires_grad
+
+
+def test_average_precision_groups_ties_including_untrained_constant_head():
+    from helico.contact_pilot import average_precision
+    y = np.array([1, 0, 0, 1, 0], dtype=bool)
+    assert average_precision(y, np.ones(5)) == .4
+    assert average_precision(y[::-1], np.ones(5)) == .4
+    assert average_precision(y, y.astype(float)) == 1.
