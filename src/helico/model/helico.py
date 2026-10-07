@@ -92,11 +92,13 @@ class Helico(nn.Module):
         # Heads
         self.confidence_head = ConfidenceHead(config)
         self.distogram_head = DistogramHead(config)
+        self.contact_head = nn.Linear(config.d_pair, 1) if config.predict_contacts else None
 
     def forward(
         self,
         batch: dict[str, torch.Tensor],
         compute_confidence: bool = True,
+        compute_structure: bool = True,
     ) -> dict[str, torch.Tensor]:
         """Full forward pass for training."""
         mask = batch.get("token_mask")
@@ -155,6 +157,14 @@ class Helico(nn.Module):
             s, z = self.pairformer(s, z, mask=mask, pair_mask=pair_mask)
 
         results = {"single": s, "pair": z}
+        if self.contact_head is not None:
+            logits = self.contact_head(z).squeeze(-1)
+            logits = (logits + logits.transpose(-1, -2)) * 0.5
+            results.update(contact_logits=logits, contact_probs=logits.sigmoid())
+            if "contact_target" in batch:
+                from helico.contact_diffusion import contact_bce
+                results.update(contact_bce(logits, batch["contact_target"],
+                                          batch["contact_valid"], batch["contact_state"]))
 
         # 4a. Distogram (always computed; needs to be available *before*
         # diffusion when diffusion_pair_source == "distogram_logits" so the
@@ -162,6 +172,10 @@ class Helico(nn.Module):
         # single Linear (z → 64-bin logits, symmetrized).
         distogram_logits = self.distogram_head(z)
         results["distogram_logits"] = distogram_logits
+        if not compute_structure:
+            return results
+        token_centers = self._get_token_centers(batch)
+        results["distogram_loss"] = distogram_loss(distogram_logits, token_centers, mask)
 
         # 4b. Diffusion — s_inputs is already (B, N_tok, 449 = d_single + 65)
         # n_diffusion_samples > 1 amortizes the expensive trunk over several
@@ -193,6 +207,7 @@ class Helico(nn.Module):
             z_trunk=z_for_diffusion,
             s_inputs=s_inputs,
             relpe_feats=relpe_feats,
+            ref_space_uid=batch.get("ref_space_uid"),
             n_samples=n_d,
         )
 
@@ -217,11 +232,6 @@ class Helico(nn.Module):
                 rep_atom_idx=batch.get("rep_atom_idx"),
             )
             results.update(confidence)
-
-            token_centers = self._get_token_centers(batch)
-            results["distogram_loss"] = distogram_loss(
-                distogram_logits, token_centers, mask,
-            )
 
         return results
 
@@ -470,7 +480,13 @@ class Helico(nn.Module):
             print(f"  Total wall time:      {t_overall:8.2f}s")
             print(f"{'='*60}\n")
 
+        contact_results = {}
+        if self.contact_head is not None:
+            logits = self.contact_head(z).squeeze(-1)
+            logits = (logits + logits.transpose(-1, -2)) * 0.5
+            contact_results = {"contact_logits": logits, "contact_probs": logits.sigmoid()}
         return {
+            **contact_results,
             "coords": best_coords,               # (B, N_atoms, 3)
             "all_coords": all_coords,             # (B, n_samples, N_atoms, 3)
             "plddt": plddt_flat,                  # (B, N_atoms) 0-100 scale

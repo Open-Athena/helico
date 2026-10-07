@@ -791,6 +791,8 @@ def ensure_training_run(
     val_cutoff_start: str = "2022-05-01",
     val_cutoff_end: str = "2023-01-12",
     wandb_project: str = "helico",
+    command: list[str] | None = None,
+    command_timeout_seconds: float | None = None,
     est_wall_hours: float = 12.0,
     force: bool = False,
     publish: bool = False,
@@ -814,6 +816,8 @@ def ensure_training_run(
     run_name = f"{slug}-{name}"
     volume_path = f"/ckpts/{run_name}"
     local_cache = _cache_dir(slug) / "trainings" / name
+    if command is not None:
+        volume_path = str(local_cache.resolve())
 
     est_cost = _estimate_train_cost(gpu=gpu, est_wall_hours=est_wall_hours)
 
@@ -832,6 +836,46 @@ def ensure_training_run(
             name=name, experiment=slug, cache_dir=scratch,
             volume_path=volume_path, cached=False, meta=meta,
         )
+
+    if command is not None:
+        # Preallocated-GPU backend: same cost gate and cache contract as Modal.
+        # The command writes final.pt to HELICO_TRAIN_OUTPUT; metadata is only
+        # committed after a successful process exit and checkpoint validation.
+        if not force and _training_complete_local(local_cache):
+            if not (local_cache / "final.pt").is_file():
+                raise RuntimeError(f"Completed local run has no checkpoint: {local_cache}")
+            _log_start("ensure_training_run", name, "cached (preallocated)")
+            return _load_training_run(name, slug, local_cache, volume_path, cached=True)
+        if any(local_cache.glob("*")) and not force:
+            raise RuntimeError(f"Partial local run exists: {local_cache}; use a new step name")
+        if publish:
+            raise ValueError("Publish preallocated artifacts explicitly with hf buckets sync")
+        local_cache.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        env.update(HELICO_TRAIN_OUTPUT=volume_path, WANDB_PROJECT="helico", WANDB_ENTITY="timodonnell")
+        _log_start("ensure_training_run", name, "launching (preallocated)", est_cost)
+        import signal
+        process = subprocess.Popen(command, env=env, cwd=str(REPO_ROOT), start_new_session=True)
+        try:
+            code = process.wait(timeout=command_timeout_seconds)
+        except subprocess.TimeoutExpired:
+            # torchrun has worker descendants; stop the entire process group.
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+            raise
+        if code:
+            raise subprocess.CalledProcessError(code, command)
+        if not (local_cache / "final.pt").is_file():
+            raise RuntimeError("Training command succeeded without final.pt")
+        meta = dict(name=name, experiment=slug, run_name=run_name, volume_path=volume_path,
+                    backend="preallocated", command=command, gpu=gpu, max_steps=max_steps,
+                    est_cost_usd=est_cost, git_sha=_git_sha())
+        (local_cache / "meta.json").write_text(json.dumps(meta, indent=2))
+        return _load_training_run(name, slug, local_cache, volume_path, cached=False)
 
     if not force:
         if _training_complete_local(local_cache):

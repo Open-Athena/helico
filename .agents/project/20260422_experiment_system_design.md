@@ -256,3 +256,14 @@ Waves 2-4 are unchanged from the pre-pivot plan.
 - Python-DSL spec files (our "spec" is the notebook itself)
 - GCS as artifact store (HF + Modal volumes)
 - Cross-region transfer budgets (Modal is flat)
+
+## Preallocated GPU training backend
+
+`ensure_training_run(..., command=[...], command_timeout_seconds=...)` runs a
+structured argv command on the current preallocated machine instead of Modal.
+The same dry-run cost records and experiment-wide gate apply; use the repository
+GPU reference rate to budget equivalent compute even when no new instance is
+purchased. The command writes `final.pt` under `HELICO_TRAIN_OUTPUT`; successful
+exit plus that checkpoint are required before recording cache completion.
+Partial runs require a new name or explicit `force=True`. Publish these artifacts
+with `hf buckets sync`, since they do not live on a Modal volume.

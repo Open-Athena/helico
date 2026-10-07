@@ -51,6 +51,7 @@ class HelicoConfig:
     # signal from there (same warm-start discipline as gh#9's
     # _init_distogram_proj_from_z).
     use_contacts: bool = True
+    predict_contacts: bool = False  # opt-in binary heavy-atom contact head
     # Set False to run MSA-free. The MSA-derived channels of s_inputs
     # (msa_profile, deletion_mean) then arrive zeroed via the fallbacks in
     # features.py, which keeps c_s_inputs at 449 so the diffusion and atom

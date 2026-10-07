@@ -146,10 +146,15 @@ class DiffusionAttentionPairBias(nn.Module):
 
             attn = (q_w @ k_w.transpose(-2, -1)) * self.scale + bias
             if pad_mask is not None:
-                attn = attn.masked_fill(~pad_mask.unsqueeze(0).unsqueeze(0), float("-inf"))
+                allowed = pad_mask.unsqueeze(0).unsqueeze(0)
+                has_keys = allowed.any(dim=-1, keepdim=True)
+                attn = attn.masked_fill(~allowed, float("-inf"))
+                # Avoid an all--inf softmax, whose backward remains NaN
+                # even when nan_to_num later zeros its forward output.
+                attn = torch.where(has_keys, attn, 0.0)
             attn = F.softmax(attn, dim=-1)
-            # Rows fully masked → NaN from softmax; zero them.
-            attn = attn.nan_to_num(0.0)
+            if pad_mask is not None:
+                attn = attn * has_keys.to(attn.dtype)
             out_w = attn @ v_w
             out = torch.sigmoid(g_w) * out_w
             out = out.reshape(B, H, n_blocks * n_queries, dh)[:, :, :N]
