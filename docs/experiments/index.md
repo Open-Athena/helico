@@ -14,7 +14,7 @@ _`gh issue list --label experiment` + each notebook's frontmatter._
 
 | Issue | Title | Branch | Notebook |
 |---|---|---|---|
-| [#20](https://github.com/Open-Athena/helico/issues/20) | Clean heavy-atom contact diffusion: initial MSA-preserving pilot | `—` | _no notebook yet_ |
+| [#20](https://github.com/Open-Athena/helico/issues/20) | Clean heavy-atom contact diffusion: MSA-preserving duration pilot | `—` | _no notebook yet_ |
 
 ## Closed
 
