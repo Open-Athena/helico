@@ -1,0 +1,21 @@
+{
+  "run_name": "exp22-contact-scale-v1",
+  "data_lock": "configs/data/protenix-v1.lock.json",
+  "mirror_uri": "s3://marin-us-east-02a/helico/data/protenix-v1-shards",
+  "output_uri": "s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v1",
+  "upstream_sha": "85767b811c40ed46e73a9b39519cf6bfca8701ba",
+  "steps": 20000,
+  "train_seconds": 345600,
+  "crop_size": 384,
+  "gpus": 8,
+  "accumulation": 4,
+  "diffusion_samples": 4,
+  "msa_depth": 512,
+  "lr": 0.00002,
+  "warmup_steps": 500,
+  "save_every": 250,
+  "validate_every": 250,
+  "validation_samples": 32,
+  "workers": 4,
+  "seed": 2201
+}
