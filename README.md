@@ -8,6 +8,14 @@
 
 Our goal is to enable robust experimentation around modeling and data improvements for AlphaFold3-like architectures.
 
+The next planned model adds absorbing-mask contact denoising while retaining
+MSAs and AF3 coordinate diffusion. See the
+[architecture diagram](docs/images/masked_contact_architecture.png) and
+[versioned training-data workflow](TRAINING.md#versioned-datasets-for-contact-diffusion).
+The [PDB base dataset](https://huggingface.co/datasets/timodonnell/helico-protenix-v1-pdb)
+and [dataset recipes](https://huggingface.co/datasets/timodonnell/helico-training-recipes)
+are tracked on Hugging Face with immutable source revisions and checksums.
+
 ## Folding from contacts instead of MSAs
 
 Helico can fold a protein from a **residue–residue contact map** in place of a

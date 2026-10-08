@@ -1,6 +1,107 @@
 # Training
 
-## Training Data
+## Versioned datasets for contact diffusion
+
+New contact-diffusion runs use an explicit set of Hugging Face datasets:
+
+- [Protenix v1 PDB dataset](https://huggingface.co/datasets/timodonnell/helico-protenix-v1-pdb):
+  167,997 training entries, 1,839,712 chain/interface sampling records, and the
+  original 384-entry validation subset. The complete validation pool is retained
+  as a separate optional split. FoldBench IDs and obsolete aliases are excluded.
+- [Training recipes](https://huggingface.co/datasets/timodonnell/helico-training-recipes):
+  named, versioned mixtures. The initial recipe is
+  [`configs/data/protenix-v1.json`](configs/data/protenix-v1.json).
+- [Existing source payload](https://huggingface.co/datasets/LiteFold/protenix-data/tree/47150f5244c15967e69315f3937d0ebcf863f317):
+  coordinates, paired/unpaired MSAs, templates, RNA MSAs and CCD chemistry.
+  The dataset manifest pins the source commit and every required shard's SHA256.
+
+### Run contract
+
+A recipe lists repository IDs, revisions, split names and relative sampling
+weights. `lock` resolves them to full commit IDs and embeds the manifests. A
+run's `data.lock.json` is immutable; changed dataset revisions, membership,
+contact definitions or mixture weights require a new run. The lock contains no
+machine-specific paths or credentials. Sources are shared by content identity,
+so adding another dataset need not duplicate the PDB/MSA payload.
+
+```bash
+# Inspect or verify the small metadata package without staging the large assets.
+helico-datasets lock configs/data/protenix-v1.json --output /tmp/data.lock.json
+helico-datasets prepare /tmp/data.lock.json --metadata-only \
+  --cache-dir /data/helico-registry --output /tmp/data.metadata.json
+
+# Freeze a run and stage the complete source data once per cache.
+helico-datasets init-run configs/data/protenix-v1.json \
+  --run-dir /data/runs/contact-v1 --cache-dir /data/helico-registry
+
+# Generate data-config overrides for the upstream Protenix feature pipeline.
+helico-datasets protenix-config /data/runs/contact-v1/data.lock.json \
+  /data/runs/contact-v1/data.paths.json --output /data/runs/contact-v1/data.protenix.json
+```
+
+The source consists of ~1.06 TB of uncompressed tar shards already hosted on
+Hugging Face. The cache retains both downloaded archives and extracted files:
+allow roughly 2.2 TB for complete staging. The metadata-only check downloads
+about 60 MB. Search-database shards are omitted because MSAs are precomputed.
+Archive extraction rejects traversal, links and special files, and completion
+is recorded only after successful checksum verification and extraction.
+
+Python trainers call `prepare_training_data(recipe, run_dir, cache_dir)` from
+`helico.datasets`. It returns dataset-specific split files, source roots and
+weights, and writes the lock and resolved local paths. For `helico.train.train`,
+pass the saved lock as `TrainConfig(data_lock=lock, ...)`: it is recorded in the
+checkpoint and W&B config, and resume rejects a different or missing data lock
+on a trained checkpoint. Step-zero pretrained seeds remain valid initializers.
+
+The generated Protenix configuration preserves cluster weighting and proper
+paired MSAs. Merge its `data` dictionary over the pinned upstream data defaults;
+set its `PROTENIX_ROOT_DIR` before loading upstream configuration. Crop size,
+training schedule and contact masking remain model/run configuration.
+
+**Integration boundary:** this release provides pinned source data and upstream
+feature-pipeline configuration. It is not the legacy Helico preprocessed-pickle
+format or the pilot's `pilot.pt`. The full-scale Helico feature adapter must use
+these exact indices and roots; it has not been implemented by this data release.
+Do not point the legacy `--processed-dir` loader at the Protenix source tree.
+No training or fine-tuning controls are launched by the dataset tooling.
+
+### Adding a dataset
+
+1. Create a Hugging Face dataset repository with a `dataset.json` in the same
+   schema. Store split indices and membership lists, source provenance, label
+   definitions and known missing supervision explicitly. Each local metadata
+   file needs a size and SHA256; external assets must be pinned to immutable
+   Hugging Face dataset commits. See the published PDB manifest as an example.
+2. Publish it as a new release. Preserve existing revisions, and audit overlap
+   with validation/FoldBench and any task-specific holdouts. Structural datasets
+   should provide `pdb_ids` per split and an `excluded_pdb_ids` file; mixture
+   staging checks these across sources. Sequence/ligand-level decontamination
+   still belongs in each dataset's build and audit.
+3. Add its repository, full revision, split names and mixture weight to a new
+   recipe, resolve a new lock, and publish both to the recipes repository.
+   The generic registry can stage different dataset formats; training adapters
+   must explicitly support their supervision. The current Protenix config
+   adapter accepts PDB-format mixtures sharing the same asset source.
+
+Rebuild the initial release with `scripts/build_protenix_dataset.py`. The
+official index archive is checksum-pinned and the mirror's four index files are
+verified byte for byte. All selected structure paths are present in the mirror
+metadata. This is not an exhaustive feature-quality audit or verification of
+the pretrained checkpoint's exact training manifest. Possible inherited exposure
+to FoldBench entry 8P7U/obsolete 6G23 remains flagged in the dataset card.
+
+### Planned model
+
+![Planned contact-diffusion architecture](docs/images/masked_contact_architecture.png)
+
+Green marks Helico additions to the AF3 backbone: three-state contact conditioning
+added to initial pair features, a symmetric contact head, and absorbing-mask
+contact supervision. MSAs remain a parallel input; coordinate diffusion remains
+continuous. Amber shows the planned outer search over contact hypotheses. The
+full tree search is not implemented by the pilot. Architecture source:
+`scripts/plot_contact_architecture.py`; exports are PNG, SVG and PDF.
+
+## Legacy training data
 
 Processed data is hosted on HuggingFace at [`timodonnell/helico-data`](https://huggingface.co/datasets/timodonnell/helico-data) and auto-downloads to `~/.cache/helico/data/` on first use.
 

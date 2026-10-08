@@ -1,0 +1,491 @@
+{
+  "datasets": [
+    {
+      "manifest": {
+        "contact_definition": {
+          "comparison": "strictly_less_than",
+          "diagonal_supervised": false,
+          "distance": "minimum between token heavy atoms",
+          "exclude_elements": [
+            "H",
+            "D"
+          ],
+          "states": {
+            "contact": 2,
+            "masked": 0,
+            "no_contact": 1
+          },
+          "storage": "Coordinates retained; contact labels computed during featurization, not precomputed in this release",
+          "symmetric": true,
+          "threshold_angstrom": 5.0,
+          "unknown_geometry": "Observed close heavy atoms establish positives; absence requires complete heavy atoms for both tokens",
+          "version": "min-heavy-atom-5A-v1"
+        },
+        "files": [
+          {
+            "path": "audit/categories.csv",
+            "sha256": "d9f21adfd78b96c23ad9ef3d69aa0d3517fca067e5a54277fead67aafdc5bd73",
+            "size": 449
+          },
+          {
+            "path": "audit/foldbench_excluded_pdb_ids.txt",
+            "sha256": "61a9117a08a9868505d595fb652fa9527640b22a3f9cbd5e052b82c7e26af33c",
+            "size": 7620
+          },
+          {
+            "path": "audit/mirror_verification.json",
+            "sha256": "0de106e2188f1671057b6da2d6ade39ea499d8e40791695dbc9d1b61f61881c6",
+            "size": 1637
+          },
+          {
+            "path": "audit/split_audit.json",
+            "sha256": "edd9c7f032b071a707d0d63ae0fca12dd2dcad0429906993e0021147c216ea17",
+            "size": 428
+          },
+          {
+            "path": "audit/summary.json",
+            "sha256": "d4fa5e2803c44685395cf4c3fe86dcd63dd9123c1e4be82632bfd045a1556522",
+            "size": 283
+          },
+          {
+            "path": "foldbench/interface_antibody_antigen.csv",
+            "sha256": "a66105766492357be2b31a14ba5e31a910f304ceec2a8640785ed9e2d4c49f62",
+            "size": 6836
+          },
+          {
+            "path": "foldbench/interface_protein_dna.csv",
+            "sha256": "1760dc7f1bcc285d59fc02325627965213f0ae477c2c873ff77ca02e71b7b55c",
+            "size": 10339
+          },
+          {
+            "path": "foldbench/interface_protein_ligand.csv",
+            "sha256": "f0bf964ca1b9699e2036baa9bdfcc231e56181ec2a6df0f2eb24000e23cf3e0a",
+            "size": 22541
+          },
+          {
+            "path": "foldbench/interface_protein_peptide.csv",
+            "sha256": "bd82883450e537b7d8ccd7598b29447c96c294d764ab495eae2af26a4120febb",
+            "size": 1880
+          },
+          {
+            "path": "foldbench/interface_protein_protein.csv",
+            "sha256": "1d5a1a451b6831399a941a2c1efe998af3668165b471553177c6f3b441a9c8a8",
+            "size": 9960
+          },
+          {
+            "path": "foldbench/interface_protein_rna.csv",
+            "sha256": "96a990845ab979238c1ce884d2b4f17d5afa12802c28f7ff41ca3c94705bb5e6",
+            "size": 2265
+          },
+          {
+            "path": "foldbench/monomer_dna.csv",
+            "sha256": "53afab17891ff82bb2bda901960f1f8663438d4a37970e6dfcae3efa12d41ca5",
+            "size": 254
+          },
+          {
+            "path": "foldbench/monomer_protein.csv",
+            "sha256": "43c2a5e9a73e84e00afb8d0108761547a8f9d6e52865e122792748c9c32bf595",
+            "size": 5694
+          },
+          {
+            "path": "foldbench/monomer_rna.csv",
+            "sha256": "28855ddc99367041a3080aafbc010bf4e3238d6b0d3f1bc3048f7a74dac2db7c",
+            "size": 271
+          },
+          {
+            "path": "splits/train.csv.gz",
+            "sha256": "34337a6715feb65d0abe713d2e741be1fa76a119a4c775973bbb690184fe07f4",
+            "size": 21437463
+          },
+          {
+            "path": "splits/train_pdb_ids.txt",
+            "sha256": "a7f141382dad047837f372607f38e04298f0b90311000d9881a3052ab024e4f2",
+            "size": 839985
+          },
+          {
+            "path": "splits/validation.csv",
+            "sha256": "436353e7e47794a914956b5f802ac811297a099e01062eeac8eb2e3428227edf",
+            "size": 546736
+          },
+          {
+            "path": "splits/validation_pdb_ids.txt",
+            "sha256": "80b8e027a56c08184ae49af97405c54e7374c8371ac9cec544664e8a9820919a",
+            "size": 1920
+          },
+          {
+            "path": "splits/validation_pool.csv",
+            "sha256": "59e0bc8dba5acfe23225c933c14b623578d12d1cc16ecaac97a141a0f9edab23",
+            "size": 2974979
+          },
+          {
+            "path": "splits/validation_pool_pdb_ids.txt",
+            "sha256": "6f8d664181a1c2b2ff40ed8b42b19c3c2e8ee40ae6cefaa42c6272dbc964f824",
+            "size": 9090
+          },
+          {
+            "path": "upstream/obsolete_to_successor.json",
+            "sha256": "2bc08348d0efba438c109bb27be6fa25b611d371c60b8a8da3de387a4a0698ad",
+            "size": 86882
+          },
+          {
+            "path": "upstream/posebusters_indices_mainchain_interface.csv",
+            "sha256": "ef4ec9bd6901db4971514f33ef70137066796d7f38f383f82dc9568e118d517a",
+            "size": 48162
+          },
+          {
+            "path": "upstream/recentPDB_low_homology_maxtoken1024_sample384_pdb_id.txt",
+            "sha256": "14baabbfaee7807e753d7ad33a78262d94ae1dc249b4b5ce98bfb4720f1b50f4",
+            "size": 1920
+          },
+          {
+            "path": "upstream/recentPDB_low_homology_maxtoken1536.csv",
+            "sha256": "86df73fb6572048c95512a0ffb24f9bde6bea1f3f1cc8435baa76c4cec7b62f7",
+            "size": 2962963
+          },
+          {
+            "path": "upstream/weightedPDB_indices_before_2021-09-30_wo_posebusters_resolution_below_9.csv.gz",
+            "sha256": "66f05ac472a3fa30f058968d4fd6fcc9909396aa5879232144405ad8de23bd3e",
+            "size": 26951860
+          }
+        ],
+        "format": "protenix-pdb-v1",
+        "name": "helico-protenix-v1-pdb",
+        "provenance": {
+          "build_script": "scripts/build_protenix_dataset.py",
+          "distillation_included": false,
+          "exact_checkpoint_training_manifest_verified": false,
+          "upstream_data_version": "2024.05.22",
+          "upstream_git_revision": "85767b811c40ed46e73a9b39519cf6bfca8701ba",
+          "upstream_index_archive_sha256": "f834b335bd037bdd9b3d5feea4776a7128c1be6bae2828f355d60868c6403b5e"
+        },
+        "release": "v1.0.0",
+        "sampler": {
+          "alpha_dict": {
+            "ligand": 1,
+            "nuc": 3,
+            "prot": 3
+          },
+          "beta_dict": {
+            "chain": 0.5,
+            "interface": 1
+          },
+          "force_recompute_weight": true,
+          "sampler_type": "weighted"
+        },
+        "schema_version": 1,
+        "sources": [
+          {
+            "extract_prefixes": [
+              "common",
+              "mmcif",
+              "mmcif_bioassembly",
+              "mmcif_msa_template",
+              "recentPDB_bioassembly",
+              "rna_msa"
+            ],
+            "files": [
+              {
+                "path": "shards/shard-00000.tar",
+                "sha256": "ac38419600141e5561f631a093c5da4ea1eb35bccdf2d8efa048215c5f25ba73",
+                "size": 21475809280
+              },
+              {
+                "path": "shards/shard-00001.tar",
+                "sha256": "ba20037ced8c96fa410c5ad9cc587575790bd34b89195c6d551765dda9f4cf1c",
+                "size": 21145896960
+              },
+              {
+                "path": "shards/shard-00002.tar",
+                "sha256": "be1a4057d15005c7dcde84a10cbc0fa65f60f27216ac317a6142dfaa442c98ce",
+                "size": 21522329600
+              },
+              {
+                "path": "shards/shard-00003.tar",
+                "sha256": "a5ac2688c992534ed9189f6a1f6c5eb444fd4966cac3a5364cf164cb3adb9c3b",
+                "size": 21503037440
+              },
+              {
+                "path": "shards/shard-00004.tar",
+                "sha256": "81a3e68e40d967f33ae25c093cab013e9ef5804b5196ae07170630d0bce210c0",
+                "size": 21425479680
+              },
+              {
+                "path": "shards/shard-00005.tar",
+                "sha256": "49e1412f77d5c21b24dfc9ecfb2269d2e26bbcac10c31edb0e4c2ef20c2abf86",
+                "size": 21511843840
+              },
+              {
+                "path": "shards/shard-00006.tar",
+                "sha256": "b5161296bf0c14c0a421c95b9ce3fe723a2acddfaf8b8b3f48e3f23eea65ae43",
+                "size": 21507379200
+              },
+              {
+                "path": "shards/shard-00007.tar",
+                "sha256": "65d51170609533ebb2ab12fbbcc86ed7de2b8962cf12a55bf0ab231afb334a04",
+                "size": 21495336960
+              },
+              {
+                "path": "shards/shard-00008.tar",
+                "sha256": "00635bf4a9d2b95b6a9b7c3736fd9bbf595cbea9d2d3c99e07fd11b06d961458",
+                "size": 21502085120
+              },
+              {
+                "path": "shards/shard-00009.tar",
+                "sha256": "c3aa78c469296f28f3835b3066ba00d447e94acb9bfdc44411cf3487e7edeec9",
+                "size": 21500190720
+              },
+              {
+                "path": "shards/shard-00010.tar",
+                "sha256": "419212795c79262ec82f9eb373f6f66cb9c0a84dcea12a9321913f33377a922e",
+                "size": 21484871680
+              },
+              {
+                "path": "shards/shard-00011.tar",
+                "sha256": "b42ad7d6268b8425523c55c1ffccbc22863181d965ce007e41cd41ed51b88688",
+                "size": 21462886400
+              },
+              {
+                "path": "shards/shard-00012.tar",
+                "sha256": "e892eb58ddc847a091dbe5540be933baf872d570c8ae9235be86ea2f50d5c106",
+                "size": 21495193600
+              },
+              {
+                "path": "shards/shard-00013.tar",
+                "sha256": "81846691883f82105180f50f34d0c63a2ee118bdfe54c7670b8f652fc56da4a8",
+                "size": 21490534400
+              },
+              {
+                "path": "shards/shard-00014.tar",
+                "sha256": "5936a59e7507d753990c2c10886c414e9818f821d891086f936048618675d0e2",
+                "size": 21493616640
+              },
+              {
+                "path": "shards/shard-00015.tar",
+                "sha256": "b2c0ef45db77616992b8c5aa3fcdf6848b24c0065c4ef3afde45d0c860d6b15b",
+                "size": 21491496960
+              },
+              {
+                "path": "shards/shard-00016.tar",
+                "sha256": "f7c2e5661e3db9e0932afe706151553ec834eef1b890e04cf3eaca30128908bb",
+                "size": 21729392640
+              },
+              {
+                "path": "shards/shard-00017.tar",
+                "sha256": "6573de1317eb90e100679e17f96989a60bf404dfda4f64f91f073c7605cd682d",
+                "size": 21619128320
+              },
+              {
+                "path": "shards/shard-00018.tar",
+                "sha256": "35e00bb2edfccddef19a592797240a445e6c817052ac5da2dc148af1ac0dbade",
+                "size": 21499504640
+              },
+              {
+                "path": "shards/shard-00019.tar",
+                "sha256": "3d033c77f07c5194be7a216b53f651bafa2c8688e833a4cb7bc28deb6af57de8",
+                "size": 21499801600
+              },
+              {
+                "path": "shards/shard-00020.tar",
+                "sha256": "65e6d4881f5c39c626f50aabb27f0c01b6036aef0a59ef5f6fe2a1057c1695f8",
+                "size": 21500866560
+              },
+              {
+                "path": "shards/shard-00021.tar",
+                "sha256": "ce87417d18f4ef229d6bb8473086cbde249e409c0d975829e2a90064dbbf18cf",
+                "size": 21496238080
+              },
+              {
+                "path": "shards/shard-00022.tar",
+                "sha256": "740d6bc290a409fe3ad80b8b2f00650833433d19976bacfc94031785909ca255",
+                "size": 21489602560
+              },
+              {
+                "path": "shards/shard-00023.tar",
+                "sha256": "b2d1727aa895be39280dde9fa3f8b8a69971762c3efa8aba7b31c6727b6405ea",
+                "size": 21496135680
+              },
+              {
+                "path": "shards/shard-00024.tar",
+                "sha256": "3d1db86798545f598684b7905357d9b68579bc4a03db0a9547b3bb0e4a35ed75",
+                "size": 21497661440
+              },
+              {
+                "path": "shards/shard-00025.tar",
+                "sha256": "b2458cb62cf5ba742a25ee5c8910866b8fc87f3f2d707bd441d2e13bcec38023",
+                "size": 21478451200
+              },
+              {
+                "path": "shards/shard-00026.tar",
+                "sha256": "40139d68802728378cf12e80b31d514308a2f30e34209ee9210881aac4658698",
+                "size": 21494487040
+              },
+              {
+                "path": "shards/shard-00027.tar",
+                "sha256": "1efc4fe89df43173f56b7ee7cb1810b6d7523a4169ea38459ef4e9d36d4ccab1",
+                "size": 21508587520
+              },
+              {
+                "path": "shards/shard-00028.tar",
+                "sha256": "0c609edd3bc6b70b6ca228cd19e90fc890f017084a71554bc8b94c40bc91209c",
+                "size": 21508321280
+              },
+              {
+                "path": "shards/shard-00029.tar",
+                "sha256": "f5ebcd1fa5873b79a6be9170c77b4c61bdf4e89db156759a4eab0781c497d48e",
+                "size": 21498265600
+              },
+              {
+                "path": "shards/shard-00030.tar",
+                "sha256": "b28d29552c4227eca4774494dbae526122f79dfc0e624b882aa615a7e658e74f",
+                "size": 21514772480
+              },
+              {
+                "path": "shards/shard-00031.tar",
+                "sha256": "cac9aa718123c865fb32a8dceb146ada69ac596b1b24e982fc0857e2f7d2a152",
+                "size": 21487073280
+              },
+              {
+                "path": "shards/shard-00032.tar",
+                "sha256": "38017904e1c00c8417ed8d769ed2a3a68bd001b10c70f0fd3cea028b1d2b6c95",
+                "size": 21490370560
+              },
+              {
+                "path": "shards/shard-00033.tar",
+                "sha256": "a6763ca0386b2bc6f441830e63adf3458dad9c198f6cce721474a4118a44ea2f",
+                "size": 21508474880
+              },
+              {
+                "path": "shards/shard-00034.tar",
+                "sha256": "9845d4ce4ad965d74a7d43b9710936d59828dcc62affbcb17916d07d4dce92a9",
+                "size": 21508925440
+              },
+              {
+                "path": "shards/shard-00035.tar",
+                "sha256": "34805d8abed788407acebcb8af3f33d630c984d8b00f53cf04364b1f145d17b6",
+                "size": 21510850560
+              },
+              {
+                "path": "shards/shard-00036.tar",
+                "sha256": "15efdee3489e7c7def8e277726b64c5141e96a0faaa4723370680c320d57ed31",
+                "size": 21511731200
+              },
+              {
+                "path": "shards/shard-00037.tar",
+                "sha256": "49ff4a926c5cdd63a7cd50d5fb353429c151d53b324490817137e5d25ba108c3",
+                "size": 21506222080
+              },
+              {
+                "path": "shards/shard-00038.tar",
+                "sha256": "aa613833c09b429fb7dc42fa20f440c9861f56739715577eda9e8ce0da1a33e2",
+                "size": 21510574080
+              },
+              {
+                "path": "shards/shard-00039.tar",
+                "sha256": "2f542e7e515ab18ebd731d4669cd0ab146d8643e0eb1683ca922a3f16e2389ce",
+                "size": 21496791040
+              },
+              {
+                "path": "shards/shard-00040.tar",
+                "sha256": "9b3580e8b6697df1ed9949fec2ce60309f00e14c37b40ef6b2e9daed81fe934e",
+                "size": 21502248960
+              },
+              {
+                "path": "shards/shard-00041.tar",
+                "sha256": "5eb7f3a87b03c7ae2d1f90af787520d5a95c5063e3be48e250429997ddeb846f",
+                "size": 21496043520
+              },
+              {
+                "path": "shards/shard-00042.tar",
+                "sha256": "edd4af19ad43d06d2ea9ae43eb47e0ddb7f08d342bb7cd137ae3c3e7bcebdbef",
+                "size": 21497036800
+              },
+              {
+                "path": "shards/shard-00043.tar",
+                "sha256": "05ab51aa8b2fbc88647675c2199c5a7e7de368eaeae50f50c0edb4fbf8087ce7",
+                "size": 21497415680
+              },
+              {
+                "path": "shards/shard-00044.tar",
+                "sha256": "dac9a797e01dfa8f44c5b0bd99b8d43e50fbb3faecc04294a86a0ac788dc3c52",
+                "size": 21495480320
+              },
+              {
+                "path": "shards/shard-00045.tar",
+                "sha256": "fe30778279f7cfe8bad9e7d46a04a93de7c02ed5671d26816b091ca25aec66e0",
+                "size": 21495756800
+              },
+              {
+                "path": "shards/shard-00046.tar",
+                "sha256": "c8c6a13db3247b8b70dd104abbf4f308985c07f74574f462632105ef651c36be",
+                "size": 21499443200
+              },
+              {
+                "path": "shards/shard-00047.tar",
+                "sha256": "76176c6edf7fd133baee43dbeb14c73bb52730e0fca04bb88bb482506827cb93",
+                "size": 21497323520
+              },
+              {
+                "path": "shards/shard-00048.tar",
+                "sha256": "de763ddbd349c8bacad54c223305918351fc7cbf844ecc28005cff4446dd4c1e",
+                "size": 21501081600
+              },
+              {
+                "path": "shards/shard-00049.tar",
+                "sha256": "85430dd6ddf69a98edcae306bfb1461d4c080bedc40cb87013aecf9bb3649f1e",
+                "size": 3983257600
+              }
+            ],
+            "format": "tar",
+            "repo_id": "LiteFold/protenix-data",
+            "revision": "47150f5244c15967e69315f3937d0ebcf863f317"
+          }
+        ],
+        "split_policy": {
+          "excluded_pdb_ids": "audit/foldbench_excluded_pdb_ids.txt",
+          "foldbench_git_revision": "4273f6877d82bd0b2fa476d1b2f34d121cbccc70",
+          "keep_foldbench_evaluation_unchanged": true,
+          "membership": "released default Protenix index; exclude ion-centered rows and FoldBench IDs/aliases",
+          "training_release_date_before": "2021-09-30",
+          "unknown_dates": "exclude"
+        },
+        "splits": {
+          "train": {
+            "bioassembly_dir": "mmcif_bioassembly",
+            "index": "splits/train.csv.gz",
+            "pdb_entries": 167997,
+            "pdb_ids": "splits/train_pdb_ids.txt",
+            "role": "train",
+            "sampling_records": 1839712
+          },
+          "validation": {
+            "bioassembly_dir": "recentPDB_bioassembly",
+            "index": "splits/validation.csv",
+            "pdb_entries": 384,
+            "pdb_ids": "splits/validation_pdb_ids.txt",
+            "role": "validation",
+            "sampling_records": 2529
+          },
+          "validation_pool": {
+            "bioassembly_dir": "recentPDB_bioassembly",
+            "index": "splits/validation_pool.csv",
+            "pdb_entries": 1818,
+            "pdb_ids": "splits/validation_pool_pdb_ids.txt",
+            "role": "validation",
+            "sampling_records": 12015
+          }
+        }
+      },
+      "manifest_path": "dataset.json",
+      "manifest_sha256": "f222bf8cbd9e2aeb8248cc278ef0245e1864aceea189c71ae3dc0ff64559a25c",
+      "manifest_size": 16322,
+      "repo_id": "timodonnell/helico-protenix-v1-pdb",
+      "revision": "164e41cf98d7fdf4d437192a9947138ca2464011",
+      "train_split": "train",
+      "validation_split": "validation",
+      "weight": 1.0
+    }
+  ],
+  "lock_sha256": "2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114",
+  "name": "contact-diffusion-protenix-v1-pdb",
+  "schema_version": 1
+}
