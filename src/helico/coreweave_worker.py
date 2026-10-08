@@ -60,11 +60,15 @@ class MirroredHub(Hub):
         super().__init__(cache_dir / "hub")
         self.mirror_uri, self.local = mirror_uri, cache_dir / "mirrored-shards"
         self.local.mkdir(parents=True, exist_ok=True)
+        self.resolved = {}
         self.entries = {(s["repo_id"], s["revision"], e["path"]): e
                         for d in lock["datasets"] for s in d["manifest"]["sources"] for e in s["files"]}
 
     def download(self, repo_id, revision, filename):
-        entry = self.entries.get((repo_id, revision, filename))
+        key = (repo_id, revision, filename)
+        if key in self.resolved:
+            return self.resolved[key]
+        entry = self.entries.get(key)
         if entry is None:
             return super().download(repo_id, revision, filename)
         dest = self.local / entry["sha256"]
@@ -79,7 +83,11 @@ class MirroredHub(Hub):
             pending.replace(dest)
             return dest  # stage_lock verifies its SHA256 before extraction
         print(json.dumps({"staging": filename, "source": "pinned Hugging Face revision"}), flush=True)
-        return super().download(repo_id, revision, filename)
+        path = super().download(repo_id, revision, filename)
+        # A mirror may finish while prefetch is running. Reuse already verified
+        # Hub-cache bytes rather than downloading the same shard a second time.
+        self.resolved[key] = path
+        return path
 
 
 def fetch(url, path):
