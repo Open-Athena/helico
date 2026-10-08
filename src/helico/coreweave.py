@@ -33,7 +33,7 @@ def submit(spec: dict, cluster_config: Path, workspace: Path) -> dict:
     request = JobRequest(
         name=spec["job_name"], resources=resources, priority=3,
         environment=create_environment(workspace=str(workspace),
-            docker_image=spec["image"], env_vars=env, setup_scripts=[]),
+            env_vars=env, setup_scripts=[]),
         entrypoint=Entrypoint.from_binary("bash", ["scripts/coreweave_bootstrap.sh",
             spec["mode"], spec["config"]]),
         timeout=Duration.from_seconds(spec["timeout_seconds"]),

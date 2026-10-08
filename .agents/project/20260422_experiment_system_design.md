@@ -30,6 +30,13 @@ analysis lives next to the code that produced it.
 Design non-goal: a Marin-style content-addressed executor DAG. Too much
 machinery for our scale.
 
+CoreWeave runs also use `ensure_training_run(coreweave=...)`. The wrapper records
+an immutable submission receipt and returns an active job, rather than blocking
+for days or pretending a submission is a completed checkpoint. Dataset locks,
+optimizer/EMA checkpoints and run metadata live in durable object storage.
+Prepaid reserved GPU-hours are reported separately from incremental spending;
+the cost gate includes first-month storage for the full planned run.
+
 ## Lifecycle
 
 ```

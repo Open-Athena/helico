@@ -174,8 +174,13 @@ class Helico(nn.Module):
         results["distogram_logits"] = distogram_logits
         if not compute_structure:
             return results
-        token_centers = self._get_token_centers(batch)
-        results["distogram_loss"] = distogram_loss(distogram_logits, token_centers, mask)
+        if "distogram_mask" in batch:
+            token_centers = batch["atom_coords"].gather(1, batch["rep_atom_idx"].unsqueeze(-1).expand(-1, -1, 3))
+            dist_mask = batch["distogram_mask"] & mask
+        else:
+            token_centers = self._get_token_centers(batch)
+            dist_mask = mask
+        results["distogram_loss"] = distogram_loss(distogram_logits, token_centers, dist_mask)
 
         # 4b. Diffusion — s_inputs is already (B, N_tok, 449 = d_single + 65)
         # n_diffusion_samples > 1 amortizes the expensive trunk over several
@@ -212,10 +217,12 @@ class Helico(nn.Module):
         )
 
         results["x_denoised"] = x_denoised
+        results["gt_coords"] = gt_coords
         results["sigma"] = sigma
         # diffusion_loss averages over all B*N_d samples — atom_mask must
         # match the expanded batch.
-        atom_mask_d = atom_mask.repeat_interleave(n_d, dim=0) if n_d > 1 else atom_mask
+        loss_mask = batch.get("coordinate_mask", atom_mask)
+        atom_mask_d = loss_mask.repeat_interleave(n_d, dim=0) if n_d > 1 else loss_mask
         results["diffusion_loss"] = diffusion_loss(x_denoised, gt_coords, sigma, atom_mask_d)
 
         # 6. Confidence head (uses pred_coords from diffusion). Use only

@@ -12,6 +12,7 @@
   "diffusion_samples": 4,
   "msa_depth": 512,
   "lr": 0.00002,
+  "contact_lr": 0.0002,
   "warmup_steps": 500,
   "save_every": 250,
   "validate_every": 250,

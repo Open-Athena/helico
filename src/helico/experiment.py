@@ -793,6 +793,7 @@ def ensure_training_run(
     wandb_project: str = "helico",
     command: list[str] | None = None,
     command_timeout_seconds: float | None = None,
+    coreweave: dict | None = None,
     est_wall_hours: float = 12.0,
     force: bool = False,
     publish: bool = False,
@@ -820,6 +821,15 @@ def ensure_training_run(
         volume_path = str(local_cache.resolve())
 
     est_cost = _estimate_train_cost(gpu=gpu, est_wall_hours=est_wall_hours)
+    if coreweave is not None:
+        if command is not None or publish:
+            raise ValueError("CoreWeave submission cannot also use command/Modal publication")
+        if not coreweave.get("cost_accounting"):
+            raise ValueError("CoreWeave requires an explicit cost-accounting basis")
+        est_cost = float(coreweave["estimated_incremental_cost_usd"])
+        if est_cost < 0 or not __import__("math").isfinite(est_cost):
+            raise ValueError("Invalid CoreWeave cost estimate")
+        volume_path = coreweave["output_uri"]
 
     if is_dry_run():
         _log_start("ensure_training_run", name, "dry-run", est_cost)
@@ -836,6 +846,31 @@ def ensure_training_run(
             name=name, experiment=slug, cache_dir=scratch,
             volume_path=volume_path, cached=False, meta=meta,
         )
+
+    if coreweave is not None:
+        # A submitted job is an active run, not a completed checkpoint. Keep its
+        # receipt separate from the existing final-checkpoint cache contract.
+        receipt = local_cache / "submission.json"
+        spec = {**coreweave, "git_sha": _git_sha()}
+        if receipt.exists():
+            meta = json.loads(receipt.read_text())
+            # The submitted configuration remains authoritative on notebook rerun.
+            previous = {k: v for k, v in meta["spec"].items() if k != "git_sha"}
+            if previous != coreweave:
+                raise ValueError("Existing CoreWeave run has a different spec; use a new name")
+            return TrainingRun(name, slug, local_cache, volume_path, True, meta)
+        local_cache.mkdir(parents=True, exist_ok=True)
+        spec_path = local_cache / "spec.json"
+        spec_path.write_text(json.dumps(spec, indent=2))
+        python = os.environ["HELICO_IRIS_PYTHON"]
+        cluster_config = os.environ["HELICO_IRIS_CONFIG"]
+        env = {**os.environ, "PYTHONPATH": str(REPO_ROOT / "src")}
+        _log_start("ensure_training_run", name, "submitting (CoreWeave)", est_cost)
+        subprocess.run([python, "-m", "helico.coreweave", str(spec_path.resolve()),
+            "--cluster-config", cluster_config, "--workspace", str(REPO_ROOT),
+            "--output", str(receipt.resolve())], env=env, check=True, cwd=REPO_ROOT)
+        meta = json.loads(receipt.read_text())
+        return TrainingRun(name, slug, local_cache, volume_path, False, meta)
 
     if command is not None:
         # Preallocated-GPU backend: same cost gate and cache contract as Modal.

@@ -63,7 +63,7 @@ def build_ref_features(
 
     elem_onehot = F.one_hot(batch["atom_element_idx"].clamp(max=127), 128).to(dtype)
 
-    atom_mask = batch.get("atom_mask")
+    atom_mask = batch.get("ref_mask", batch.get("atom_mask"))
     if atom_mask is not None:
         mask_feat = atom_mask.unsqueeze(-1).to(dtype)
     else:
@@ -204,8 +204,8 @@ def build_msa_raw(
 
     # AF3 SI §2.8: has_deletion + deletion_value transforms (SI Table 5)
     del_raw = del_raw.to(dtype)
-    has_del = del_raw.clamp(0, 1).unsqueeze(-1)
-    del_val = (torch.arctan(del_raw / 3.0) * (2.0 / math.pi)).unsqueeze(-1)
+    has_del = batch.get("has_deletion", del_raw.clamp(0, 1)).to(dtype).unsqueeze(-1)
+    del_val = batch.get("deletion_value", torch.arctan(del_raw / 3.0) * (2.0 / math.pi)).to(dtype).unsqueeze(-1)
 
     msa_raw = torch.cat([msa_onehot, has_del, del_val], dim=-1)
     return msa_raw, None
