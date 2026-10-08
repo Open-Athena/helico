@@ -1,8 +1,8 @@
 {
-  "run_name": "exp22-contact-scale-v1",
+  "run_name": "exp22-contact-scale-v2",
   "data_lock": "configs/data/protenix-v1.lock.json",
   "mirror_uri": "s3://marin-us-east-02a/helico/data/protenix-v1-shards",
-  "output_uri": "s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v1",
+  "output_uri": "s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v2",
   "upstream_sha": "85767b811c40ed46e73a9b39519cf6bfca8701ba",
   "steps": 20000,
   "train_seconds": 345600,

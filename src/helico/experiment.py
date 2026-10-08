@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -827,7 +828,7 @@ def ensure_training_run(
         if not coreweave.get("cost_accounting"):
             raise ValueError("CoreWeave requires an explicit cost-accounting basis")
         est_cost = float(coreweave["estimated_incremental_cost_usd"])
-        if est_cost < 0 or not __import__("math").isfinite(est_cost):
+        if est_cost < 0 or not math.isfinite(est_cost):
             raise ValueError("Invalid CoreWeave cost estimate")
         volume_path = coreweave["output_uri"]
 

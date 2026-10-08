@@ -39,15 +39,15 @@ from helico.experiment import set_experiment, ensure_training_run
 set_experiment("exp22_contact-scale")
 # Whole-run estimate: $90 first-month incremental storage, prepaid GPU allocation.
 spec = dict(
-    job_name="helico-exp22-contact-scale-v1", mode="train", gpus=8,
+    job_name="helico-exp22-contact-scale-v2", mode="train", gpus=8,
     cpu=96, memory="1000g", disk="3000g",
-    image="pytorch/pytorch:2.10.0-cuda12.8-cudnn9-runtime",
+    image="pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca",
     timeout_seconds=367200, config="configs/train/contact-scale-v1.json",
-    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v1",
+    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v2",
     estimated_incremental_cost_usd=90,
     cost_accounting="Prepaid cw-rno2a reservation; <=1500 GiB storage at $0.06/GiB for one month",
 )
-run = ensure_training_run("full-data-v1", gpu="H100:8", max_steps=20000,
+run = ensure_training_run("full-data-v2", gpu="H100:8", max_steps=20000,
     crop_size=384, lr=2e-5, est_wall_hours=102, coreweave=spec)
 print(run.meta)
 ```

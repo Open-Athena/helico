@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -104,8 +105,8 @@ def train(config, config_path):
         tar.extractall(scratch, filter="data")
     upstream = scratch / f"Protenix-{sha}"
     env = {**os.environ, "PYTHONPATH": str(upstream) + os.pathsep + os.environ.get("PYTHONPATH", "")}
-    subprocess.run([sys.executable, "-m", "pip", "freeze"], check=True,
-                   stdout=(scratch / "environment.txt").open("w"))
+    (scratch / "environment.txt").write_text("\n".join(sorted(
+        f"{d.metadata['Name']}=={d.version}" for d in importlib.metadata.distributions())) + "\n")
     fs.put_file(str(scratch / "environment.txt"), config["output_uri"] + "/environment.txt")
     checkpoint = fetch("https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_default_v1.0.0.pt",
                        scratch / "protenix_base_default_v1.0.0.pt")
