@@ -180,7 +180,8 @@ class Helico(nn.Module):
         else:
             token_centers = self._get_token_centers(batch)
             dist_mask = mask
-        results["distogram_loss"] = distogram_loss(distogram_logits, token_centers, dist_mask)
+        boundaries = {"min_dist": 2.3125, "max_dist": 21.6875} if "distogram_mask" in batch else {}
+        results["distogram_loss"] = distogram_loss(distogram_logits, token_centers, dist_mask, **boundaries)
 
         # 4b. Diffusion — s_inputs is already (B, N_tok, 449 = d_single + 65)
         # n_diffusion_samples > 1 amortizes the expensive trunk over several
