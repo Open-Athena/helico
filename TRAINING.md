@@ -58,12 +58,31 @@ paired MSAs. Merge its `data` dictionary over the pinned upstream data defaults;
 set its `PROTENIX_ROOT_DIR` before loading upstream configuration. Crop size,
 training schedule and contact masking remain model/run configuration.
 
-**Integration boundary:** this release provides pinned source data and upstream
-feature-pipeline configuration. It is not the legacy Helico preprocessed-pickle
-format or the pilot's `pilot.pt`. The full-scale Helico feature adapter must use
-these exact indices and roots; it has not been implemented by this data release.
+The full-data adapter is `helico.protenix_data`: it uses those exact indices and
+the pinned upstream complex featurizer, preserves paired/unpaired protein and
+RNA MSAs, and separates reference masks from observed-coordinate loss masks.
+The trainer is `helico.train_contacts`; it consumes a verified bundle and data
+lock, samples weighted crops deterministically across DDP ranks, and saves
+optimizer/model/EMA snapshots with dataset provenance. It uses the checkpoint's
+dummy-template path and freezes the confidence and template parameters.
 Do not point the legacy `--processed-dir` loader at the Protenix source tree.
-No training or fine-tuning controls are launched by the dataset tooling.
+Dataset tooling itself does not launch training.
+
+### CoreWeave full-data run
+
+The [exp22 notebook](experiments/exp22_contact-scale/README.md) submits a durable
+Iris root job through `ensure_training_run(coreweave=...)`. Its
+`configs/train/contact-scale-v1.json` config specifies the data lock, schedule,
+object-storage cache and run output. Set operator-side `HELICO_IRIS_PYTHON` and
+`HELICO_IRIS_CONFIG` to the installed Iris environment and cluster config; these
+local paths and credentials are not stored in the experiment.
+
+The worker uses a digest-pinned PyTorch image and dependencies exported from
+`uv.lock`. It stages/checks all source shards before starting eight DDP workers.
+HF remains the dataset authority; CoreWeave object storage is a SHA256-keyed
+cache and checkpoint store. Re-running the notebook returns the existing job
+receipt. A new configuration needs a new step/job name. A scheduler retry can
+restore the latest fully uploaded checkpoint without changing data or draw order.
 
 ### Adding a dataset
 

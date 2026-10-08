@@ -54,4 +54,6 @@ print(run.meta)
 
 ## Status
 
-Preparation underway. CPU feature checks on real antibody/protein and protein/heme complexes preserve paired/unpaired MSAs and unresolved atoms. Contact validity, padding, independent diffusion-sample weights and resumed distributed draw order have regression tests. Training results and job receipts will be recorded here after dispatch and validation.
+The active job is `/bizon/helico-exp22-contact-scale-v2`, launched from `f311dbe0e70cc63b3c75974adfef10be9fdcef23`. Its first predecessor failed during dependency installation before any training updates. CPU feature checks on real antibody/protein and protein/heme complexes preserve paired/unpaired MSAs and unresolved atoms. Contact validity, padding, independent diffusion-sample weights and resumed distributed draw order have regression tests. Training results and job receipts will be recorded here after dispatch and validation.
+
+The real-complex distributed GPU preflight completed two optimizer updates on all eight H100s, with dynamic MSA branches and four accumulated crops per device. Peak allocated GPU memory was 50.27 GB; the warmed-up update took 7.31 seconds on the largest rank. This is a setup/gradient check on one 384-token crop, not evidence of generalization or a full-data throughput measurement. Per-rank measurements are in `data/gpu_preflight.csv`.
