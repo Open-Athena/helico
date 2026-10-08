@@ -10,9 +10,8 @@ from pathlib import Path
 
 def submit(spec: dict, cluster_config: Path, workspace: Path) -> dict:
     # Iris is an operator-side dependency, deliberately outside the model env.
-    from fray import ResourceConfig
     from fray.iris_backend import FrayIrisClient
-    from fray.types import Entrypoint, JobRequest, create_environment
+    from fray.types import ResourceConfig, Entrypoint, JobRequest, create_environment
     from iris.cli.connect import open_iris_client
     from rigging.timing import Duration
 
