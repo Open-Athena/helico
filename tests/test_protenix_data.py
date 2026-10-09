@@ -1,8 +1,9 @@
 import copy
+import numpy as np
 import torch
 
 from helico.model.losses import diffusion_loss
-from helico.protenix_data import adapt_example, batch_example
+from helico.protenix_data import adapt_example, batch_example, chain_contiguous_token_order
 from helico.train_contacts import weighted_draws
 
 
@@ -61,3 +62,20 @@ def test_draw_stream_resume_and_rank_partition():
     assert sorted(d for r in ranks for _, d in r) == list(range(28))
     for rank in range(2):
         assert weighted_draws(*args, rank, 3, 42) == ranks[rank][6:]
+
+
+def test_fragmented_chains_become_contiguous_without_losing_or_duplicating_tokens():
+    chains = np.array([7, 7, 3, 7, 3, 3])
+    residues = np.array([8, 9, 2, 1, 1, 1])
+    order = chain_contiguous_token_order(chains, residues)
+    np.testing.assert_array_equal(order, [3, 0, 1, 4, 5, 2])
+    np.testing.assert_array_equal(np.sort(order), np.arange(len(chains)))
+    np.testing.assert_array_equal(chains[order], [7, 7, 7, 3, 3, 3])
+    # Atom tokens within the same residue keep their relative order.
+    assert list(order).index(4) < list(order).index(5)
+
+
+def test_well_ordered_chains_keep_their_original_token_order():
+    chains = [9, 9, 2, 2, 2]
+    residues = [3, 5, 1, 1, 8]
+    np.testing.assert_array_equal(chain_contiguous_token_order(chains, residues), np.arange(5))

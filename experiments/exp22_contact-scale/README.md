@@ -39,23 +39,25 @@ from helico.experiment import set_experiment, ensure_training_run
 set_experiment("exp22_contact-scale")
 # Whole-run estimate: $96 first-month incremental storage, prepaid GPU allocation.
 spec = dict(
-    job_name="helico-exp22-contact-scale-v7", mode="train", gpus=4,
+    job_name="helico-exp22-contact-scale-v8", mode="train", gpus=4,
     cpu=64, memory="750g", disk="3000g",
     image="pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca",
-    timeout_seconds=362400, config="configs/train/contact-scale-v7.json",
-    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v7",
+    timeout_seconds=357489, config="configs/train/contact-scale-v8.json",
+    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v8",
     priority_band="interactive",
     estimated_incremental_cost_usd=96,
     cost_accounting="Prepaid cw-rno2a reservation; <=1600 GiB storage at $0.06/GiB for one month",
 )
-run = ensure_training_run("full-data-v7", gpu="H100:4", max_steps=20000,
-    crop_size=384, lr=2e-5, est_wall_hours=362400 / 3600, coreweave=spec)
+run = ensure_training_run("full-data-v8", gpu="H100:4", max_steps=20000,
+    crop_size=384, lr=2e-5, est_wall_hours=357489 / 3600, coreweave=spec)
 print(run.meta)
 ```
 
 ## Status
 
-The v7 recovery is training on four H100s and passed step 60 at 2026-10-09 21:58 UTC. Its first new durable checkpoint is step 50. A read-back from object storage loaded all 3,832 model tensors, 3,832 EMA tensors and 3,538 optimizer states, verified finite values throughout, and confirmed the expected source and data-lock identities. See `data/v7_checkpoint_verification.csv` and [the live W&B run](https://wandb.ai/timodonnell/helico/runs/exp22-contact-scale-v7). The previous failure region and first validation at step 250 still need to be crossed; these startup checks do not establish model quality.
+The v7 recovery completed 166 updates on four H100s before failing at update 167 (2026-10-09 22:25 UTC). Checkpoints 50, 100 and 150 are durable. A read-back of checkpoint 50 loaded all 3,832 model tensors, 3,832 EMA tensors and 3,538 optimizer states, verified finite values throughout, and confirmed the source and data-lock identities. See `data/v7_checkpoint_verification.csv`, `data/v7_training_metrics.csv` and [the v7 W&B run](https://wandb.ai/timodonnell/helico/runs/exp22-contact-scale-v7).
+
+The retained traceback and exact draw 5315 reproduced a deterministic cropping bug on protein–RNA structure 1OB5. Molecule shuffling interleaved disconnected fragments of the same chain; upstream contiguous cropping assumes one ordered block per chain. It selected 382 positions containing only 279 unique tokens, causing Biotite to reject repeated atom indices during MSA lookup. An explicit dataset subclass now groups tokens by chain and residue before calling the unchanged crop/feature pipeline. This is a permutation that preserves every atom and bond, with no dropped examples or MSA suppression. The exact draw now yields 374 tokens, 1,590 atoms, 16,384 raw MSA rows and 1,678 atom bonds. The well-ordered 2D2H draw retains identical values for every adapted feature (`data/v8_crop_parity.csv`). See `data/v7_msa_failure.txt` and `data/v7_crop_reproduction.csv`. The v8 recovery restores the complete step-150 model/EMA/optimizer state and keeps the same data membership, scientific hyperparameters and original deadline. Its first validation remains at step 250; no model-quality result is claimed yet.
 
 The v3 run failed with rank-0 `SIGABRT` at 2026-10-09 01:32 UTC. Its last logged update was 150 (4,800 crops); only step 1 was durably saved. No validation or FoldBench result was produced. The normal Iris/Finelog endpoints have no retained training log for this attempt, so the underlying abort is not yet established. W&B history is retained in `data/v3_training_metrics.csv`.
 

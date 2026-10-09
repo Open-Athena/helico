@@ -17,6 +17,19 @@ from helico.contact_diffusion import heavy_atom_contacts
 from helico.datasets import protenix_config
 
 
+def chain_contiguous_token_order(chain_ids, residue_ids):
+    """Keep first-seen chain order and place each chain's residues together.
+
+    Molecule shuffling can split a chain with disconnected fragments into
+    interleaved blocks. Upstream contiguous cropping assumes one ordered block
+    per chain, and otherwise overlapping index ranges can duplicate tokens.
+    """
+    chain_ids, residue_ids = np.asarray(chain_ids), np.asarray(residue_ids)
+    _, first, inverse = np.unique(chain_ids, return_index=True, return_inverse=True)
+    chain_rank = np.argsort(np.argsort(first))[inverse]
+    return np.lexsort((np.arange(len(chain_ids)), residue_ids, chain_rank))
+
+
 def load_datasets(lock, bundle, crop_size, error_dir):
     overrides = protenix_config(lock, bundle, crop_size)
     # CCD paths are captured at upstream module import, so set this first.
@@ -25,7 +38,7 @@ def load_datasets(lock, bundle, crop_size, error_dir):
     from configs.configs_data import data_configs
     from ml_collections import ConfigDict
     from protenix.config.config import ConfigManager
-    from protenix.data.pipeline.dataset import get_datasets
+    from helico.protenix_dataset import get_datasets
 
     raw = deepcopy(base)
     raw["data"] = deepcopy(data_configs)
