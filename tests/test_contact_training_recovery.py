@@ -2,12 +2,42 @@ import json
 import os
 import subprocess
 import sys
+import faulthandler
 
 import fsspec
 import pytest
 
 from helico.coreweave_worker import run_trainer
 from helico.train_contacts import checkpoint_due, check_resume_config, weighted_draws
+from helico.train_contacts import loader_process_context
+from helico.protenix_data import SeededCrops
+from torch.utils.data import DataLoader, Dataset
+
+
+class DiagnosticWorkerDataset(Dataset):
+    def __init__(self, folder):
+        self.progress = SeededCrops(None, 1, diagnostics_dir=folder)
+
+    def __len__(self):
+        return 1
+
+    def __getitem__(self, index):
+        self.progress.progress("loading", index, index)
+        self.progress.progress("ready", index, index)
+        return index
+
+
+def test_loader_worker_can_start_timer_with_parent_watchdog_active(tmp_path):
+    faulthandler.dump_traceback_later(60)
+    try:
+        loader = DataLoader(DiagnosticWorkerDataset(tmp_path), num_workers=1,
+                            multiprocessing_context=loader_process_context(1), timeout=15)
+        assert list(loader)[0].item() == 0
+        record, = tmp_path.glob("worker-*.json")
+        assert json.loads(record.read_text())["stage"] == "ready"
+        assert loader_process_context(0) is None
+    finally:
+        faulthandler.cancel_dump_traceback_later()
 
 
 def test_recovery_keeps_scientific_configuration_fixed():

@@ -69,6 +69,13 @@ def first(items):
     return items[0]
 
 
+def loader_process_context(workers):
+    # The parent has already initialized CUDA/NCCL and a faulthandler watchdog.
+    # Forking copies locks owned by threads that do not survive into the child;
+    # in Python 3.12 a child's dump_traceback_later can then deadlock forever.
+    return "spawn" if workers else None
+
+
 def weighted_draws(weights, steps, accumulation, world, rank, start, seed):
     """One global draw stream; resuming consumes precisely its remaining suffix."""
     draws = torch.multinomial(torch.as_tensor(weights, dtype=torch.double),
@@ -233,6 +240,7 @@ def main():
     progress("loading_data", step=start)
     loader = DataLoader(SeededCrops(train_data, cfg["seed"], diagnostics_dir=diagnostics / f"rank-{rank}-workers"), sampler=draws,
                         batch_size=1, collate_fn=first, num_workers=cfg["workers"],
+                        multiprocessing_context=loader_process_context(cfg["workers"]),
                         persistent_workers=cfg["workers"] > 0, pin_memory=True,
                         timeout=cfg.get("loader_timeout_seconds", 300) if cfg["workers"] else 0)
     iterator = iter(loader)
