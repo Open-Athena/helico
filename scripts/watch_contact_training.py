@@ -19,7 +19,8 @@ import time
 
 def retryable_failure(text):
     text = text.lower()
-    if any(x in text for x in ("nonfinite", "out of memory", "oomkilled", "dataloader", "data loader",
+    if any(x in text for x in ("nonfinite", "out of memory", "oomkilled", "dataloader worker", "data loader worker",
+                               "dataloader timed out", "data loader timed out",
                                "illegal memory access", "device-side assert", "sigsegv",
                                "assertionerror", "filenotfounderror", "shape mismatch")):
         return False

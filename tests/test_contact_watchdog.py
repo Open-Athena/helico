@@ -10,13 +10,15 @@ spec.loader.exec_module(watchdog)
 
 
 @pytest.mark.parametrize("message", ["worker_failed", "Node lost", "EndpointConnectionError", "ReadTimeoutError",
-                                     "Watchdog caught collective operation timeout"])
+                                     "Watchdog caught collective operation timeout",
+                                     "Watchdog caught collective operation timeout\n  File torch/utils/data/dataloader.py"])
 def test_transient_infrastructure_errors_can_resume(message):
     assert watchdog.retryable_failure(message)
 
 
 @pytest.mark.parametrize("message", ["worker_failed: OOMKilled", "nonfinite gradient; connection reset by peer",
-                                     "DataLoader worker lost", "CUDA illegal memory access", "SIGABRT",
+                                     "DataLoader worker lost", "DataLoader timed out after 300 seconds; worker_failed",
+                                     "CUDA illegal memory access", "SIGABRT",
                                      "FileNotFoundError: temporarily unavailable", "AssertionError"])
 def test_scientific_data_and_unclear_failures_need_diagnosis(message):
     assert not watchdog.retryable_failure(message)
