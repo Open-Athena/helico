@@ -30,3 +30,14 @@ def test_rescheduling_or_restaging_is_not_a_stalled_old_trainer():
     assert watchdog.stalled_training({"tasks": ["running"], "ranks": old,
                                      "attempt_started_at": 50}, 2000)
     assert not watchdog.stalled_training({"tasks": ["running"], "ranks": [{"timestamp": 1900}]}, 2000)
+
+
+def test_time_budget_stop_requires_durable_finished_artifacts():
+    snapshot = {"result": {"step": 19000, "finished_steps": False, "wall_seconds": 345601},
+                "checkpoint": {"step": 19000}, "checkpoint_bytes": 5795897603,
+                "wandb": {"state": "finished"}, "training_budget_seconds": 345600}
+    assert watchdog.completion_status(snapshot) == "budget_exhausted"
+    assert watchdog.completion_status({**snapshot, "checkpoint_bytes": 0}) == "needs_attention"
+    assert watchdog.completion_status({**snapshot, "wandb": {"state": "running"}}) == "needs_attention"
+    snapshot["result"]["finished_steps"] = True
+    assert watchdog.completion_status(snapshot) == "completed"

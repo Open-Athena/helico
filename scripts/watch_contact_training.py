@@ -58,6 +58,20 @@ def stalled_training(snapshot, now):
     return bool(ranks and now - max(r["timestamp"] for r in ranks) > 1200)
 
 
+def completion_status(snapshot):
+    result, checkpoint = snapshot.get("result"), snapshot.get("checkpoint")
+    verified = bool(result and checkpoint and checkpoint["step"] == result["step"] and
+                    snapshot.get("checkpoint_bytes", 0) > 0 and
+                    snapshot.get("wandb", {}).get("state") == "finished")
+    if not verified:
+        return "needs_attention"
+    if result.get("finished_steps"):
+        return "completed"
+    if result.get("wall_seconds", 0) >= snapshot.get("training_budget_seconds", float("inf")):
+        return "budget_exhausted"
+    return "needs_attention"
+
+
 def inspect(state):
     from iris.cli.connect import open_iris_client
     from iris.cluster.types import JobName
@@ -76,6 +90,7 @@ def inspect(state):
     base = state["spec"]["output_uri"]
     snapshot["checkpoint"] = read_json(fs, base + "/latest.json")
     config = json.loads((Path(state["workspace"]) / state["spec"]["config"]).read_text())
+    snapshot["training_budget_seconds"] = config["train_seconds"]
     if snapshot["checkpoint"] is None and config.get("resume_uri"):
         snapshot["checkpoint"] = read_json(fs, config["resume_uri"] + "/latest.json")
         snapshot["checkpoint_origin"] = "parent_run"
@@ -175,12 +190,10 @@ def main():
                 delay = 120
             state["last_preemption_event"] = event
             if condition == "succeeded":
-                result, checkpoint = snapshot.get("result"), snapshot.get("checkpoint")
-                verified = bool(result and result.get("finished_steps") and checkpoint and
-                                checkpoint["step"] == result["step"] and snapshot.get("checkpoint_bytes", 0) > 0 and
-                                snapshot.get("wandb", {}).get("state") == "finished")
-                state["monitor_status"] = "completed" if verified else "needs_attention"
-                notify("Training completed with final checkpoint." if verified else "Job exited successfully but final artifacts are incomplete.")
+                state["monitor_status"] = completion_status(snapshot)
+                notify({"completed": "Training completed with final checkpoint.",
+                        "budget_exhausted": "Training reached its configured time limit and saved a final checkpoint before the step target.",
+                        "needs_attention": "Job exited successfully but final artifacts or completion evidence are incomplete."}[state["monitor_status"]])
                 save(args.state, state)
                 return
             if condition in {"failed", "worker_failed", "preempted", "killed", "unschedulable"}:
