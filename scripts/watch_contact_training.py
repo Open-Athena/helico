@@ -164,7 +164,7 @@ def main():
                 notify("Training completed with final checkpoint." if verified else "Job exited successfully but final artifacts are incomplete.")
                 save(args.state, state)
                 return
-            if condition in {"failed", "worker_failed", "killed", "unschedulable"}:
+            if condition in {"failed", "worker_failed", "preempted", "killed", "unschedulable"}:
                 failure = snapshot.get("failure_tail", "") + snapshot["error"] + condition
                 can_retry = (args.auto_recover and condition in {"failed", "worker_failed"} and
                              state["restart_count"] < 3 and snapshot.get("checkpoint_bytes", 0) > 0 and

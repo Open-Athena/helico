@@ -28,7 +28,7 @@ Use four H100s, 384-token crops, one crop per GPU, eight gradient-accumulation s
 
 ## Resources and provenance
 
-The inspected `cw-rno2a` cluster configuration identifies its H100 fleet as prepaid and fully warm. This run uses that reservation at batch priority, without provisioning nodes or altering the cluster. The current four-GPU job is bounded to 4 × 102 = 408 reserved GPU-hours including staging; the original conservative whole-experiment ceiling of 832 reserved GPU-hours remains an upper bound after allowing for the earlier attempts and diagnostics. Incremental GPU rental is zero under that reservation, with resource usage recorded separately from spend.
+The inspected `cw-rno2a` cluster configuration identifies its H100 fleet as prepaid and fully warm. This run uses that reservation at normal research (`interactive`) priority, without provisioning nodes or altering the cluster. The current four-GPU run is bounded to 4 × 102 = 408 reserved GPU-hours including staging and recovery, retaining its original deadline; the original conservative whole-experiment ceiling of 832 reserved GPU-hours remains an upper bound after allowing for the earlier attempts and diagnostics. Incremental GPU rental is zero under that reservation, with resource usage recorded separately from spend.
 
 The 50 immutable source shards total 1,057,335,306,240 bytes. A CPU-only job cached their verified bytes in object storage, while the training node extracts them on local scratch. Dataset identity remains the Hugging Face revision/checksum, not the cache location. Source cache, retained checkpoints and diagnostics are estimated below 1,600 GiB; at the [published hot-object-storage price](https://coreweave.com/pricing) of $0.06/GiB/month (checked 2026-10-08), a conservative full-month incremental storage allowance is **$96**. This is the cost-gate estimate for the whole run, including staging and checkpoints. Ongoing storage persists after training; warm/cold tiering may reduce its cost. The repository's Modal reference rate would imply $3,286.40 for 832 H100-hours, but that is not incremental CoreWeave reservation spending.
 
@@ -39,16 +39,17 @@ from helico.experiment import set_experiment, ensure_training_run
 set_experiment("exp22_contact-scale")
 # Whole-run estimate: $96 first-month incremental storage, prepaid GPU allocation.
 spec = dict(
-    job_name="helico-exp22-contact-scale-v5", mode="train", gpus=4,
+    job_name="helico-exp22-contact-scale-v6", mode="train", gpus=4,
     cpu=64, memory="750g", disk="3000g",
     image="pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca",
-    timeout_seconds=367200, config="configs/train/contact-scale-v5.json",
-    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v5",
+    timeout_seconds=365100, config="configs/train/contact-scale-v6.json",
+    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v6",
+    priority_band="interactive",
     estimated_incremental_cost_usd=96,
     cost_accounting="Prepaid cw-rno2a reservation; <=1600 GiB storage at $0.06/GiB for one month",
 )
-run = ensure_training_run("full-data-v5", gpu="H100:4", max_steps=20000,
-    crop_size=384, lr=2e-5, est_wall_hours=102, coreweave=spec)
+run = ensure_training_run("full-data-v6", gpu="H100:4", max_steps=20000,
+    crop_size=384, lr=2e-5, est_wall_hours=365100 / 3600, coreweave=spec)
 print(run.meta)
 ```
 
@@ -58,7 +59,9 @@ The v3 run failed with rank-0 `SIGABRT` at 2026-10-09 01:32 UTC. Its last logged
 
 The v4 request was capacity-gated before allocation and was cancelled. The v5 recovery uses four H100s with eight accumulation steps, preserving the effective batch of 32 and global draw stream. It restores v3's step-1 model, EMA and optimizer with identical scientific settings and deterministic data draws. It adds per-rank and data-worker progress files, slow-operation stack dumps, a five-minute data-loader timeout, and a supervisor that writes native stdout/stderr and progress files to durable storage every minute. Startup checkpoints are saved every 50 updates through step 500 and regular checkpoints are saved before validation. There are 89 scheduled snapshots plus the final snapshot; the combined source cache, prior snapshot, diagnostics and checkpoints fit a conservative 1,600 GiB / $96 first-month storage allowance. GPUs remain on the existing prepaid reservation. This restart is an instrumented recovery; it is not yet evidence that the original failure is fixed.
 
-The recovery job `/bizon/helico-exp22-contact-scale-v5` was allocated on four H100s from source `287d7d9733679588a30518e4fad1f646dd826140` and is staging the original immutable source files. A separate debugging pass inside that allocation replayed all 640 crops corresponding to updates 141–160, with full protein/RNA MSAs: CPU preprocessing succeeded for every crop (maximum 29.3 seconds), and all four GPU ranks completed 20 global updates with finite gradients. Peak GPU allocation was 52.30 GB and the median update was 14.64 seconds. These diagnostic updates were discarded; the sustained trainer restores v3's step-1 checkpoint. See `data/failure_window_full_preprocessing.csv` and `data/failure_window_gpu_replay.csv`. The original abort has not reproduced, so a definite underlying cause cannot be assigned from the surviving evidence.
+The recovery job `/bizon/helico-exp22-contact-scale-v5` was allocated on four H100s from source `287d7d9733679588a30518e4fad1f646dd826140`. It downloaded all 50 source shards, but Kueue preempted it during extraction at 2026-10-09 20:22:43 UTC to admit higher-priority work. Iris automatically rescheduled it; that retry was then cancelled to correct the launcher's hard-coded opportunistic `batch` priority. The v6 replacement uses Iris's documented normal research `interactive` band, with the same scientific configuration and the remaining original deadline. A non-spot resource request does not prevent scheduler priority preemption. The original v3 native abort and this v5 scheduler interruption are distinct events.
+
+A separate debugging pass inside the v5 allocation replayed all 640 crops corresponding to updates 141–160, with full protein/RNA MSAs: CPU preprocessing succeeded for every crop (maximum 29.3 seconds), and all four GPU ranks completed 20 global updates with finite gradients. Peak GPU allocation was 52.30 GB and the median update was 14.64 seconds. These diagnostic updates were discarded; the sustained trainer restores v3's step-1 checkpoint. See `data/failure_window_full_preprocessing.csv` and `data/failure_window_gpu_replay.csv`. The original abort has not reproduced, so a definite underlying cause cannot be assigned from the surviving evidence.
 
 A persistent local user service, `helico-exp22-watch.service`, checks Iris task state, actual per-rank progress, checkpoints and final artifacts every 570 seconds. Its single-owner record is `scratch/20261009_helico_monitoring_state.json`. It can resume recognized infrastructure/collective-timeout failures at most three times, requiring checkpoint progress between recoveries and retaining the original time budget. Nonfinite gradients, OOM, data failures, illegal memory access and unexplained aborts stop unattended retries and trigger a desktop notification. Completion requires successful Iris status, the final checkpoint/result and a finished W&B run. Routine checks stay quiet. The monitor resumes after a local user-service restart; cluster training itself does not depend on this workstation staying connected.
 

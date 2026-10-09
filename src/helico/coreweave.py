@@ -8,6 +8,16 @@ import os
 from pathlib import Path
 
 
+def job_priority(spec):
+    # Sustained research training belongs to Iris's normal INTERACTIVE band.
+    # BATCH is opportunistic and can be evicted by every normal training run;
+    # resources.preemptible=False does not prevent this scheduler preemption.
+    band = spec.get("priority_band", "interactive" if spec["mode"] == "train" else "batch")
+    if band not in {"interactive", "batch"}:
+        raise ValueError("Helico jobs may use only interactive or batch priority")
+    return {"interactive": 2, "batch": 3}[band]
+
+
 def submit(spec: dict, cluster_config: Path, workspace: Path) -> dict:
     # Iris is an operator-side dependency, deliberately outside the model env.
     from fray.iris_backend import FrayIrisClient
@@ -31,7 +41,7 @@ def submit(spec: dict, cluster_config: Path, workspace: Path) -> dict:
     resources = (ResourceConfig.with_gpu("H100", count=spec["gpus"], **common)
                  if spec["gpus"] else ResourceConfig(**common))
     request = JobRequest(
-        name=spec["job_name"], resources=resources, priority=3,
+        name=spec["job_name"], resources=resources, priority=job_priority(spec),
         environment=create_environment(workspace=str(workspace),
             env_vars=env, setup_scripts=[]),
         entrypoint=Entrypoint.from_binary("bash", ["scripts/coreweave_bootstrap.sh",
