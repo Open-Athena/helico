@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import datetime
-import json
 import logging
 import os
 import time
@@ -29,7 +27,6 @@ from helico.data import (
     collate_fn,
     load_manifest,
     load_tar_index,
-    make_synthetic_batch,
     make_synthetic_structure,
     parse_ccd,
     parse_mmcif,
@@ -40,7 +37,7 @@ from helico.data import (
 )
 from helico.model import (
     Helico, HelicoConfig, _flatten_plddt, compute_plddt,
-    diffusion_loss, smooth_lddt_loss,
+    smooth_lddt_loss,
 )
 from helico.eval_metrics import (
     gdt_ts as gdt_ts_metric,
@@ -597,20 +594,24 @@ def _run_validation_pass(
                     pass
                 break
             dl = float(outputs["diffusion_loss"].item())
-            sums["diffusion_loss"] += dl; counts["diffusion_loss"] += 1
+            sums["diffusion_loss"] += dl
+            counts["diffusion_loss"] += 1
             total = dl
             if "distogram_loss" in outputs:
                 dg = float(outputs["distogram_loss"].item())
-                sums["distogram_loss"] += dg; counts["distogram_loss"] += 1
+                sums["distogram_loss"] += dg
+                counts["distogram_loss"] += 1
                 total = total + 0.1 * dg
-            sums["total_loss"] += total; counts["total_loss"] += 1
+            sums["total_loss"] += total
+            counts["total_loss"] += 1
             if "x_denoised" in outputs:
                 lddt = 1.0 - float(smooth_lddt_loss(
                     _align_pred_to_gt(outputs["x_denoised"], batch["atom_coords"]).float(),
                     batch["atom_coords"].float(),
                     batch.get("atom_mask"),
                 ).item())
-                sums["lddt"] += lddt; counts["lddt"] += 1
+                sums["lddt"] += lddt
+                counts["lddt"] += 1
             for k, v in _eval_quality_metrics(outputs, batch).items():
                 if k in sums:
                     sums[k] += v
@@ -1029,11 +1030,13 @@ def coords_to_pdb(
     coords_np = coords.cpu().float().numpy()
     plddt_np = plddt.cpu().float().numpy()
 
+    chain_id_map = pdb_chain_id_map(tokenized.chain_ids)
+
     prev_chain_id = None
     res_serial = 0
 
     for tok_idx, token in enumerate(tokenized.tokens):
-        chain_id = tokenized.chain_ids[tok_idx]
+        chain_id = chain_id_map[tokenized.chain_ids[tok_idx]]
         if chain_id != prev_chain_id:
             if prev_chain_id is not None:
                 # TER record between chains
@@ -1074,6 +1077,26 @@ def coords_to_pdb(
 
     lines.append("END")
     return "\n".join(lines)
+
+
+def pdb_chain_id_map(chain_ids: list[str]) -> dict[str, str]:
+    """Map arbitrary mmCIF chain IDs onto unique one-character PDB IDs."""
+    unique_chain_ids = list(dict.fromkeys(chain_ids))
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    if len(unique_chain_ids) > len(alphabet):
+        raise ValueError(
+            f"PDB output supports at most {len(alphabet)} chains; got {len(unique_chain_ids)}"
+        )
+
+    mapping: dict[str, str] = {}
+    used = {chain_id for chain_id in unique_chain_ids if len(chain_id) == 1 and chain_id in alphabet}
+    available = iter(chain_id for chain_id in alphabet if chain_id not in used)
+    for chain_id in unique_chain_ids:
+        if len(chain_id) == 1 and chain_id in alphabet:
+            mapping[chain_id] = chain_id
+        else:
+            mapping[chain_id] = next(available)
+    return mapping
 
 
 # ============================================================================
