@@ -110,7 +110,7 @@ def save_checkpoint(output, model, optimizer, ema, step, config, lock, *, final=
                 "data_lock_sha256": lock["lock_sha256"], "git_sha": os.environ["HELICO_CODE_SHA"],
                 "sampler": "global-weighted-draw-seed-v1"}, tmp)
     tmp.replace(path)
-    fs = filesystem()
+    fs = filesystem(durable=True)
     uri = config["output_uri"] + "/" + path.name
     fs.put_file(str(path), uri)
     if fs.size(uri) != path.stat().st_size:

@@ -17,8 +17,15 @@ import urllib.request
 from helico.datasets import Hub, checked_download, validate_lock, stage_lock, write_json, file_sha256
 
 
-def filesystem():
+def filesystem(*, durable=False):
     import fsspec
+    if durable:
+        # Write checkpoints directly to object storage. The node-local LOTA
+        # endpoint is useful for reads but stalled two multipart cache uploads.
+        options = json.loads(os.environ.get("FSSPEC_S3", "{}"))
+        options["endpoint_url"] = "https://cwobject.com"
+        options.setdefault("client_kwargs", {}).pop("endpoint_url", None)
+        return fsspec.filesystem("s3", skip_instance_cache=True, **options)
     return fsspec.filesystem("s3")
 
 
@@ -26,7 +33,7 @@ def mirror(config):
     """Cache exact Hub shard bytes, keyed by SHA256, using a CPU-only job."""
     lock = json.loads(Path(config["data_lock"]).read_text())
     validate_lock(lock)
-    fs = filesystem()
+    fs = filesystem(durable=True)
     hub = Hub(Path("/tmp/helico/hub"))
     sources = {s["revision"]: s for d in lock["datasets"] for s in d["manifest"]["sources"]}
     def copy(item):
