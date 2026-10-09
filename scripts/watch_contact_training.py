@@ -20,11 +20,13 @@ import time
 def retryable_failure(text):
     text = text.lower()
     if any(x in text for x in ("nonfinite", "out of memory", "oomkilled", "dataloader", "data loader",
+                               "illegal memory access", "device-side assert", "sigsegv",
                                "assertionerror", "filenotfounderror", "shape mismatch")):
         return False
     return any(x in text for x in ("worker lost", "node lost", "worker_failed",
                                    "endpointconnectionerror", "readtimeouterror",
-                                   "connection reset by peer", "temporarily unavailable"))
+                                   "connection reset by peer", "temporarily unavailable",
+                                   "watchdog caught collective operation timeout"))
 
 
 def storage(state):
@@ -166,9 +168,11 @@ def main():
                 failure = snapshot.get("failure_tail", "") + snapshot["error"] + condition
                 can_retry = (args.auto_recover and condition in {"failed", "worker_failed"} and
                              state["restart_count"] < 3 and snapshot.get("checkpoint_bytes", 0) > 0 and
+                             snapshot["checkpoint"]["step"] > state.get("last_recovery_step", -1) and
                              retryable_failure(failure))
                 if can_retry:
                     recover(state)
+                    state["last_recovery_step"] = snapshot["checkpoint"]["step"]
                     delay = 120
                 else:
                     state["monitor_status"] = "needs_attention"

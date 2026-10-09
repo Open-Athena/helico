@@ -9,7 +9,8 @@ watchdog = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(watchdog)
 
 
-@pytest.mark.parametrize("message", ["worker_failed", "Node lost", "EndpointConnectionError", "ReadTimeoutError"])
+@pytest.mark.parametrize("message", ["worker_failed", "Node lost", "EndpointConnectionError", "ReadTimeoutError",
+                                     "Watchdog caught collective operation timeout"])
 def test_transient_infrastructure_errors_can_resume(message):
     assert watchdog.retryable_failure(message)
 
