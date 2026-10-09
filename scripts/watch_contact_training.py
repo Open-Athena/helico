@@ -52,12 +52,18 @@ def inspect(state):
     from iris.cli.connect import open_iris_client
     from iris.cluster.types import JobName
     with open_iris_client(config_file=Path(state["cluster_config"]), workspace=Path(state["workspace"])) as client:
-        status = client.job(JobName.from_wire(state["job_id"])).status()
+        job_id = JobName.from_wire(state["job_id"])
+        status = client.job(job_id).status()
+        tasks = client.list_tasks(job_id)
     snapshot = {"checked_at": time.time(), "job_state": str(status.state),
-                "tasks": [str(x.state) for x in status.tasks], "error": status.error_message}
+                "tasks": [str(x.state) for x in tasks], "error": status.error_message}
     fs = storage(state)
     base = state["spec"]["output_uri"]
     snapshot["checkpoint"] = read_json(fs, base + "/latest.json")
+    config = json.loads((Path(state["workspace"]) / state["spec"]["config"]).read_text())
+    if snapshot["checkpoint"] is None and config.get("resume_uri"):
+        snapshot["checkpoint"] = read_json(fs, config["resume_uri"] + "/latest.json")
+        snapshot["checkpoint_origin"] = "parent_run"
     snapshot["result"] = read_json(fs, base + "/result.json")
     root = base + "/diagnostics"
     if fs.exists(root):
@@ -76,7 +82,6 @@ def inspect(state):
         uri = snapshot["checkpoint"]["checkpoint"]
         snapshot["checkpoint_bytes"] = fs.size(uri) if fs.exists(uri) else 0
     if str(status.state) == "succeeded":
-        config = json.loads((Path(state["workspace"]) / state["spec"]["config"]).read_text())
         code = ("import json,sys,wandb; r=wandb.Api(timeout=30).run('timodonnell/helico/'+sys.argv[1]); "
                 "print(json.dumps({'state':r.state,'step':r.lastHistoryStep}))")
         raw = subprocess.check_output([str(Path(state["workspace"]) / ".venv/bin/python"),
