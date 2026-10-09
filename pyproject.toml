@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "AlphaFold3 clone for experimentation"
 readme = "README.md"
 license = { text = "Apache-2.0" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "torch>=2.10,<2.11",
     # Pin cuequivariance to 0.8.x — 0.10 broke bench inference with
@@ -23,6 +23,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+scale = [
+    "ml_collections==1.1.0", "biotite==1.4.0", "rdkit==2025.9.3",
+    "scikit-learn>=1.7", "networkx>=3.4", "optree", "einops",
+    "pandas>=2.3", "wandb", "s3fs", "modelcif",
+]
 dev = [
     "pytest>=7",
     "modal",
@@ -59,6 +64,7 @@ helico-preprocess = "helico.data:preprocess_main"
 helico-bench = "helico.bench:main"
 helico-download = "helico.data:download_main"
 helico-publish = "helico.hf_publish:main"
+helico-datasets = "helico.datasets:main"
 
 [build-system]
 requires = ["hatchling"]

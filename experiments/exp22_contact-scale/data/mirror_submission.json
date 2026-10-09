@@ -1,0 +1,17 @@
+{
+  "job_id": "/bizon/helico-exp22-data-v1",
+  "cluster": "cw-rno2a",
+  "status": "submitted",
+  "spec": {
+    "job_name": "helico-exp22-data-v1",
+    "mode": "mirror",
+    "gpus": 0,
+    "cpu": 16,
+    "memory": "128g",
+    "disk": "1500g",
+    "image": "python:3.12-slim",
+    "timeout_seconds": 86400,
+    "config": "configs/train/contact-scale-v1.json",
+    "git_sha": "7ebe349d8330f3cf22b37f9bff6e3ee3626d4a61"
+  }
+}

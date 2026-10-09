@@ -63,7 +63,7 @@ def build_ref_features(
 
     elem_onehot = F.one_hot(batch["atom_element_idx"].clamp(max=127), 128).to(dtype)
 
-    atom_mask = batch.get("atom_mask")
+    atom_mask = batch.get("ref_mask", batch.get("atom_mask"))
     if atom_mask is not None:
         mask_feat = atom_mask.unsqueeze(-1).to(dtype)
     else:
@@ -98,15 +98,19 @@ def build_relpe_feats(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]
 def build_contact_onehot(
     batch: dict[str, torch.Tensor],
     dtype: torch.dtype,
+    *, default_unknown: bool = False,
 ) -> torch.Tensor | None:
-    """One-hot the 3-state contact matrix, or ``None`` when it is absent.
+    """One-hot contacts; optionally treat omitted conditioning as all unknown.
 
     ``contact_state`` is ``(B, N, N)`` uint8 with 0=unknown, 1=no-contact,
     2=contact (``helico.data.CONTACT_*``). Returns ``(B, N, N, 3)``.
     """
     contact_state = batch.get("contact_state")
     if contact_state is None:
-        return None
+        if not default_unknown:
+            return None
+        tokens = batch["token_types"]
+        contact_state = tokens.new_zeros(tokens.shape[0], tokens.shape[1], tokens.shape[1])
     return F.one_hot(contact_state.long(), 3).to(dtype)
 
 
@@ -204,8 +208,8 @@ def build_msa_raw(
 
     # AF3 SI §2.8: has_deletion + deletion_value transforms (SI Table 5)
     del_raw = del_raw.to(dtype)
-    has_del = del_raw.clamp(0, 1).unsqueeze(-1)
-    del_val = (torch.arctan(del_raw / 3.0) * (2.0 / math.pi)).unsqueeze(-1)
+    has_del = batch.get("has_deletion", del_raw.clamp(0, 1)).to(dtype).unsqueeze(-1)
+    del_val = batch.get("deletion_value", torch.arctan(del_raw / 3.0) * (2.0 / math.pi)).to(dtype).unsqueeze(-1)
 
     msa_raw = torch.cat([msa_onehot, has_del, del_val], dim=-1)
     return msa_raw, None

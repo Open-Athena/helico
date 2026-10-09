@@ -80,6 +80,9 @@ class TrainConfig:
     crop_size: int = 384
     batch_size: int = 1
     num_workers: int = 4
+    # Immutable Hugging Face dataset mixture, supplied by the data preparation
+    # layer. Stored in checkpoints and W&B; local cache paths are not identity.
+    data_lock: dict | None = None
 
     # Checkpointing
     checkpoint_dir: str = "checkpoints"
@@ -282,6 +285,10 @@ def save_checkpoint(
         "optimizer_state_dict": optimizer.state_dict(),
         "config": asdict(config),
     }
+    if config.data_lock is not None:
+        from helico.datasets import validate_lock
+        validate_lock(config.data_lock)
+        state["data_lock_sha256"] = config.data_lock["lock_sha256"]
     if ema is not None:
         state["ema_shadow"] = ema.shadow
 
@@ -294,6 +301,7 @@ def load_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
     ema: EMAModel | None = None,
+    expected_data_lock: dict | None = None,
 ) -> tuple[int, list[str]]:
     """Load a checkpoint. Returns ``(start_step, missing_keys)``.
 
@@ -303,6 +311,17 @@ def load_checkpoint(
     "z"-mode seed and need to warm-start the new layers.
     """
     state = torch.load(path, map_location="cpu", weights_only=False)
+    if expected_data_lock is not None:
+        from helico.datasets import validate_lock
+        validate_lock(expected_data_lock)
+        # A step-zero pretrained seed has not yet consumed fine-tuning data.
+        if state.get("step", 0) > 0:
+            previous = state.get("config", {}).get("data_lock")
+            if previous is None:
+                raise ValueError("Cannot resume a trained checkpoint without data provenance into a locked run")
+            validate_lock(previous)
+            if previous["lock_sha256"] != expected_data_lock["lock_sha256"]:
+                raise ValueError("Checkpoint and requested training data differ; start a new fine-tune")
 
     # strict=False so legacy "z"-mode checkpoints (which lack pair_proj_dist
     # / pair_norm_dist) can be loaded into a distogram-mode model.
@@ -638,6 +657,9 @@ def train(
     Accepts either train_data (list of TokenizedStructure) or a pre-built dataset.
     If dataset is provided, train_data is ignored.
     """
+    if config.data_lock is not None:
+        from helico.datasets import record_run_data
+        record_run_data(config.data_lock, Path(config.checkpoint_dir))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dtype = config.get_torch_dtype()
     rank = 0
@@ -710,7 +732,8 @@ def train(
     start_step = 0
     missing_keys: list[str] = []
     if resume_path:
-        start_step, missing_keys = load_checkpoint(resume_path, model, optimizer, ema)
+        start_step, missing_keys = load_checkpoint(
+            resume_path, model, optimizer, ema, expected_data_lock=config.data_lock)
 
     # gh#9 smart init: warm-start pair_proj_dist from pair_proj's relpe
     # weights so training doesn't explode out of the gate. Triggers when:
@@ -1307,7 +1330,7 @@ def infer_main():
         logger.info(f"Loaded Protenix checkpoint: {stats['n_transferred']} params transferred")
     else:
         state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-        config = HelicoConfig(**{k: v for k, v in state.get("config", {}).items() if hasattr(HelicoConfig, k)})
+        config = HelicoConfig(**{k: v for k, v in state.get("model_config", state.get("config", {})).items() if hasattr(HelicoConfig, k)})
         model = Helico(config)
         model.load_state_dict(state["model_state_dict"])
 

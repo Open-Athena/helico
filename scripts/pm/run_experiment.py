@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     # the kernel's cwd is set.
     _run(
         ["uv", "run", "jupyter", "nbconvert",
-         "--to", "notebook", "--execute",
+         "--to", "notebook", "--execute", "--ExecutePreprocessor.timeout=-1",
          "--output", notebook_executed.name,
          "--output-dir", str(cache_dir),
          str(notebook_ipynb)],

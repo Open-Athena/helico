@@ -1,0 +1,70 @@
+[rank3]: Traceback (most recent call last):
+[rank3]:   File "<frozen runpy>", line 198, in _run_module_as_main
+[rank3]:   File "<frozen runpy>", line 88, in _run_code
+[rank3]:   File "/app/src/helico/train_contacts.py", line 343, in <module>
+[rank3]:     main()
+[rank3]:   File "/app/src/helico/train_contacts.py", line 272, in main
+[rank3]:     feature, pdb_id, draw = next(iterator)
+[rank3]:                             ^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/helico/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py", line 741, in __next__
+[rank3]:     data = self._next_data()
+[rank3]:            ^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/helico/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py", line 1518, in _next_data
+[rank3]:     return self._process_data(data, worker_id)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/helico/venv/lib/python3.12/site-packages/torch/utils/data/dataloader.py", line 1586, in _process_data
+[rank3]:     data.reraise()
+[rank3]:   File "/tmp/helico/venv/lib/python3.12/site-packages/torch/_utils.py", line 775, in reraise
+[rank3]:     raise exception
+[rank3]: Exception: Caught Exception in DataLoader worker process 0.
+[rank3]: Original Traceback (most recent call last):
+[rank3]:   File "/tmp/helico/Protenix-85767b811c40ed46e73a9b39519cf6bfca8701ba/protenix/data/pipeline/dataset.py", line 341, in __getitem__
+[rank3]:     data = self.process_one(idx)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/helico/Protenix-85767b811c40ed46e73a9b39519cf6bfca8701ba/protenix/data/pipeline/dataset.py", line 536, in process_one
+[rank3]:     ) = self.crop(
+[rank3]:         ^^^^^^^^^^
+[rank3]:   File "/tmp/helico/Protenix-85767b811c40ed46e73a9b39519cf6bfca8701ba/protenix/data/pipeline/dataset.py", line 620, in crop
+[rank3]:     return DataPipeline.crop(
+[rank3]:            ^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/helico/Protenix-85767b811c40ed46e73a9b39519cf6bfca8701ba/protenix/data/pipeline/data_pipeline.py", line 326, in crop
+[rank3]:     cropped_msa_features = DataPipeline.get_msa_raw_features(
+[rank3]:                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/helico/Protenix-85767b811c40ed46e73a9b39519cf6bfca8701ba/protenix/data/pipeline/data_pipeline.py", line 202, in get_msa_raw_features
+[rank3]:     msa_feats = msa_featurizer(
+[rank3]:                 ^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/helico/Protenix-85767b811c40ed46e73a9b39519cf6bfca8701ba/protenix/data/msa/msa_featurizer.py", line 523, in __call__
+[rank3]:     return self.make_msa_features(*args, **kwargs)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/helico/Protenix-85767b811c40ed46e73a9b39519cf6bfca8701ba/protenix/data/msa/msa_featurizer.py", line 462, in make_msa_features
+[rank3]:     atom_array[sel_tokens.get_annotation("centre_atom_index")].asym_id_int
+[rank3]:     ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/helico/venv/lib/python3.12/site-packages/biotite/structure/atoms.py", line 772, in __getitem__
+[rank3]:     return self._subarray(index)
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/helico/venv/lib/python3.12/site-packages/biotite/structure/atoms.py", line 212, in _subarray
+[rank3]:     new_object._bonds = self._bonds[index]
+[rank3]:                         ~~~~~~~~~~~^^^^^^^
+[rank3]:   File "src/biotite/structure/bonds.pyx", line 1206, in biotite.structure.bonds.BondList.__getitem__
+[rank3]:   File "src/biotite/structure/bonds.pyx", line 1438, in biotite.structure.bonds._invert_index
+[rank3]: NotImplementedError: Duplicate indices are not supported, but index 956 appeared multiple times
+
+[rank3]: During handling of the above exception, another exception occurred:
+
+[rank3]: Traceback (most recent call last):
+[rank3]:   File "/tmp/helico/venv/lib/python3.12/site-packages/torch/utils/data/_utils/worker.py", line 358, in _worker_loop
+[rank3]:     data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/helico/venv/lib/python3.12/site-packages/torch/utils/data/_utils/fetch.py", line 54, in fetch
+[rank3]:     data = [self.dataset[idx] for idx in possibly_batched_index]
+[rank3]:             ~~~~~~~~~~~~^^^^^
+[rank3]:   File "/app/src/helico/protenix_data.py", line 149, in __getitem__
+[rank3]:     example = self.dataset[index]
+[rank3]:               ~~~~~~~~~~~~^^^^^^^
+[rank3]:   File "/tmp/helico/Protenix-85767b811c40ed46e73a9b39519cf6bfca8701ba/protenix/data/pipeline/dataset.py", line 1005, in __getitem__
+[rank3]:     return self.datasets[self.dataset_indices[index]][
+[rank3]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank3]:   File "/tmp/helico/Protenix-85767b811c40ed46e73a9b39519cf6bfca8701ba/protenix/data/pipeline/dataset.py", line 353, in __getitem__
+[rank3]:     raise Exception(e)
+[rank3]: Exception: Duplicate indices are not supported, but index 956 appeared multiple times
+

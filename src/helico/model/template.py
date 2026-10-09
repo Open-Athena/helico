@@ -58,6 +58,8 @@ class _TemplateTriMul(nn.Module):
         p = self.linear_p(h)
         g_in = torch.sigmoid(self.linear_g(h))
         pg = p * g_in
+        if mask is not None:
+            pg = pg * mask.unsqueeze(-1).to(pg.dtype)
         a, b = pg.chunk(2, dim=-1)
         if self.direction == "outgoing":
             out = torch.einsum("...ikd,...jkd->...ijd", a, b)
@@ -101,8 +103,15 @@ class _TemplateTriAtt(nn.Module):
         attn = attn + bias
         if mask is not None:
             m = mask if self.mode == "starting" else mask.transpose(1, 2)
-            attn = attn.masked_fill(~m.unsqueeze(2).unsqueeze(3).bool(), float("-inf"))
+            allowed = m.unsqueeze(2).unsqueeze(3).bool()
+            has_keys = allowed.any(dim=-1, keepdim=True)
+            attn = attn.masked_fill(~allowed, float("-inf"))
+            # Padded anchor rows have no keys. Avoid softmax(-inf, ...),
+            # including its NaN backward, then explicitly zero these rows.
+            attn = torch.where(has_keys, attn, 0.0)
         attn = F.softmax(attn, dim=-1)
+        if mask is not None:
+            attn = attn * has_keys.to(attn.dtype)
         out = torch.einsum("bnhij,bnhjd->bnhid", attn, v)
         out = out.permute(0, 1, 3, 2, 4).reshape(B, N, N, H * dh)
         gate = torch.sigmoid(self.gate(h))

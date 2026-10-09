@@ -1,0 +1,20 @@
+{
+  "job_id": "/bizon/helico-exp22-contact-scale-v1",
+  "cluster": "cw-rno2a",
+  "status": "submitted",
+  "spec": {
+    "job_name": "helico-exp22-contact-scale-v1",
+    "mode": "train",
+    "gpus": 8,
+    "cpu": 96,
+    "memory": "1000g",
+    "disk": "3000g",
+    "image": "pytorch/pytorch:2.10.0-cuda12.8-cudnn9-runtime",
+    "timeout_seconds": 367200,
+    "config": "configs/train/contact-scale-v1.json",
+    "output_uri": "s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v1",
+    "estimated_incremental_cost_usd": 90,
+    "cost_accounting": "Prepaid cw-rno2a reservation; <=1500 GiB storage at $0.06/GiB for one month",
+    "git_sha": "8981d78333455f9f9bf88a17c319cc720add1c09"
+  }
+}
