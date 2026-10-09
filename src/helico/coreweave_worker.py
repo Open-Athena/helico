@@ -47,7 +47,7 @@ def mirror(config):
             return
         started = time.monotonic()
         path = checked_download(hub, source["repo_id"], source["revision"], entry)
-        fs.put_file(str(path), dest)
+        fs.put_file(str(path), dest, chunksize=256 * 1024**2, max_concurrency=4)
         if fs.size(dest) != entry["size"]:
             raise ValueError("Mirror upload size mismatch")
         with fs.open(marker, "w") as f:
@@ -86,7 +86,7 @@ class MirroredHub(Hub):
         if fs.exists(uri + ".json"):
             print(json.dumps({"staging": filename, "source": "CoreWeave SHA256 cache"}), flush=True)
             pending = dest.with_suffix(".pending")
-            fs.get_file(uri, str(pending))
+            fs.get_file(uri, str(pending), chunksize=256 * 1024**2, max_concurrency=4)
             pending.replace(dest)
             return dest  # stage_lock verifies its SHA256 before extraction
         print(json.dumps({"staging": filename, "source": "pinned Hugging Face revision"}), flush=True)
