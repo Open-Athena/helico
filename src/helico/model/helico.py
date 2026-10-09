@@ -134,7 +134,7 @@ class Helico(nn.Module):
         # the top of every recycling iteration, so the signal reaches the
         # template, MSA, Pairformer, distogram, diffusion and confidence paths.
         if self.config.use_contacts:
-            contact_onehot = build_contact_onehot(batch, z_init.dtype)
+            contact_onehot = build_contact_onehot(batch, z_init.dtype, default_unknown=self.config.predict_contacts)
             if contact_onehot is not None:
                 z_init = z_init + self.linear_contact(contact_onehot)
 
@@ -313,7 +313,7 @@ class Helico(nn.Module):
         if token_bonds is not None:
             z_init = z_init + self.linear_token_bond(token_bonds.unsqueeze(-1).to(z_init.dtype))
         if self.config.use_contacts:
-            contact_onehot = build_contact_onehot(batch, z_init.dtype)
+            contact_onehot = build_contact_onehot(batch, z_init.dtype, default_unknown=self.config.predict_contacts)
             if contact_onehot is not None:
                 z_init = z_init + self.linear_contact(contact_onehot)
         t_embed = _sync_time() - t0
