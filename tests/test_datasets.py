@@ -76,6 +76,28 @@ def test_corrupt_file_rejected_even_when_cached(setup, tmp_path):
         stage_lock(lock, tmp_path / "cache", metadata_only=True, hub=hub)
 
 
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_parallel_shards_require_disjoint_paths(setup, tmp_path, duplicate):
+    hub, recipe, manifest = setup
+    source = hub.root / "user/source" / ("b" * 40)
+    with tarfile.open(source / "second.tar", "w") as tar:
+        member = tarfile.TarInfo("structures/1abc.txt" if duplicate else "structures/2abc.txt")
+        member.size = 5
+        tar.addfile(member, io.BytesIO(b"other"))
+    manifest["sources"][0]["files"].append(entry(source / "second.tar", "second.tar"))
+    write_json(hub.root / "user/pdb" / hub.commit / "dataset.json", manifest)
+    lock = resolve_recipe(recipe, hub)
+    if duplicate:
+        with pytest.raises(ValueError, match="Duplicate archive path"):
+            stage_lock(lock, tmp_path / "cache", hub=hub, source_workers=2)
+        assert not list((tmp_path / "cache/sources").glob("*/complete.json"))
+    else:
+        bundle = stage_lock(lock, tmp_path / "cache", hub=hub, source_workers=2)
+        root = Path(bundle["datasets"][0]["sources"][0]["root"])
+        assert (root / "structures/1abc.txt").read_bytes() == b"coordinates"
+        assert (root / "structures/2abc.txt").read_bytes() == b"other"
+
+
 def test_lock_tampering_rejected(setup):
     hub, recipe, _ = setup
     lock = resolve_recipe(recipe, hub)

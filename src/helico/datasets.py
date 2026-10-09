@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import hashlib
 import json
@@ -19,6 +20,7 @@ import re
 import shutil
 import tarfile
 import tempfile
+import threading
 
 
 SCHEMA_VERSION = 1
@@ -201,7 +203,7 @@ def file_lock(path: Path):
         yield
 
 
-def extract_archive(archive: Path, destination: Path, prefixes: list[str]) -> None:
+def extract_archive(archive: Path, destination: Path, prefixes: list[str], *, claims=None) -> None:
     """Extract only regular files under selected prefixes, never links/devices."""
     destination.mkdir(parents=True, exist_ok=True)
     root = destination.resolve()
@@ -215,6 +217,12 @@ def extract_archive(archive: Path, destination: Path, prefixes: list[str]) -> No
                 raise ValueError(f"Non-regular archive member: {member.name}")
             if prefixes and not any(name.startswith(p.rstrip("/") + "/") for p in prefixes):
                 continue
+            if claims is not None:
+                seen, lock = claims
+                with lock:
+                    if name in seen:
+                        raise ValueError(f"Duplicate archive path during parallel extraction: {name}")
+                    seen.add(name)
             target = destination / name
             if not target.resolve().is_relative_to(root):
                 raise ValueError(f"Archive path escapes destination: {name}")
@@ -229,7 +237,7 @@ def extract_archive(archive: Path, destination: Path, prefixes: list[str]) -> No
                     os.unlink(tmp)
 
 
-def stage_source(source: dict, cache_dir: Path, hub) -> dict:
+def stage_source(source: dict, cache_dir: Path, hub, *, workers=1) -> dict:
     source_id = digest(source)
     dest = cache_dir / "sources" / source_id / "data"
     marker = dest.parent / "complete.json"
@@ -238,20 +246,23 @@ def stage_source(source: dict, cache_dir: Path, hub) -> dict:
                 json.loads(marker.read_text()).get("source_sha256") != source_id):
             raise ValueError(f"Invalid prepared-source cache: {dest}")
         if not marker.exists():
-            for entry in source["files"]:
+            claims = (set(), threading.Lock()) if workers > 1 else None
+            def prepare(entry):
                 path = checked_download(hub, source["repo_id"], source["revision"], entry)
                 if source["format"] == "tar":
-                    extract_archive(path, dest, source.get("extract_prefixes", []))
+                    extract_archive(path, dest, source.get("extract_prefixes", []), claims=claims)
                 else:
                     target = dest / entry["path"]
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(path, target)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                list(pool.map(prepare, source["files"]))
             write_json(marker, {"source_sha256": source_id})
     return dict(repo_id=source["repo_id"], revision=source["revision"],
                 root=str(dest), source_sha256=source_id)
 
 
-def stage_lock(lock: dict, cache_dir: Path, *, metadata_only=False, hub=None) -> dict:
+def stage_lock(lock: dict, cache_dir: Path, *, metadata_only=False, hub=None, source_workers=1) -> dict:
     """Stage split metadata and (optionally) all pinned source assets.
 
     Metadata-only is for inspection/CI; its result cannot be used for a run.
@@ -280,7 +291,7 @@ def stage_lock(lock: dict, cache_dir: Path, *, metadata_only=False, hub=None) ->
     # Check all memberships before any multi-terabyte source staging.
     if not metadata_only:
         for item, staged in zip(lock["datasets"], prepared, strict=True):
-            staged["sources"] = [stage_source(source, cache_dir, hub)
+            staged["sources"] = [stage_source(source, cache_dir, hub, workers=source_workers)
                                   for source in item["manifest"].get("sources", [])]
     return bundle
 

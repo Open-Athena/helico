@@ -96,6 +96,8 @@ class DiffusionAttentionPairBias(nn.Module):
         Windowed path (n_queries set): z is (B, n_blocks, n_q, n_k, d_z);
         queries are partitioned into non-overlapping blocks of size n_q,
         keys into centered overlapping windows of size n_k.
+        pad_mask is (B, N) for global attention, or (n_blocks, n_q, n_k)
+        for windowed attention.
         """
         B, N, _ = a.shape
         H, dh = self.n_heads, self.head_dim
@@ -118,7 +120,14 @@ class DiffusionAttentionPairBias(nn.Module):
             # Global attention
             bias = self.z_proj(self.z_norm(z)).permute(0, 3, 1, 2)  # (B, H, N, N)
             attn = (q @ k.transpose(-2, -1)) * self.scale + bias
+            if pad_mask is not None:
+                allowed = pad_mask[:, None, None, :].bool()
+                has_keys = allowed.any(dim=-1, keepdim=True)
+                attn = attn.masked_fill(~allowed, float("-inf"))
+                attn = torch.where(has_keys, attn, 0.0)
             attn = F.softmax(attn, dim=-1)
+            if pad_mask is not None:
+                attn = attn * has_keys.to(attn.dtype)
             out = attn @ v
             out = torch.sigmoid(g) * out
             out = out.permute(0, 2, 1, 3).reshape(B, N, H * dh)
@@ -748,7 +757,12 @@ class DiffusionModule(nn.Module):
         a_token = a_token + self.s_to_token_proj(self.s_to_token_norm(s_cond))
 
         # Token-level transformer (Alg 20 line 5) + LayerNorm
-        a_token = self.token_transformer(a_token, s_cond, z_cond)
+        # Padding tokens have no atoms. Exclude them as attention keys so
+        # arbitrary padded trunk features cannot affect real atom predictions
+        # or receive gradients through the coordinate loss.
+        token_count = atom_mask.new_zeros(atom_mask.shape[0], n_tokens)
+        token_count.scatter_add_(1, atom_to_token, atom_mask)
+        a_token = self.token_transformer(a_token, s_cond, z_cond, pad_mask=token_count > 0)
         a_token = self.out_norm(a_token)
 
         # Atom decoder → per-atom 3D update (Alg 20 line 7)

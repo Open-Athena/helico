@@ -28,9 +28,9 @@ Use eight H100s, 384-token crops, one crop per GPU, four gradient-accumulation s
 
 ## Resources and provenance
 
-The inspected `cw-rno2a` cluster configuration identifies its H100 fleet as prepaid and fully warm. This run uses that reservation at batch priority, without provisioning nodes or altering the cluster. GPU allocation is bounded to 8 × 102 = 816 reserved GPU-hours including staging; incremental GPU rental is zero under that reservation, with the resource usage recorded separately from spend.
+The inspected `cw-rno2a` cluster configuration identifies its H100 fleet as prepaid and fully warm. This run uses that reservation at batch priority, without provisioning nodes or altering the cluster. The replacement job is bounded to 8 × 102 = 816 reserved GPU-hours including staging; allowing for the failed starts and gradient diagnostic gives a conservative overall ceiling of 832 reserved GPU-hours; incremental GPU rental is zero under that reservation, with the resource usage recorded separately from spend.
 
-The 50 immutable source shards total 1,057,335,306,240 bytes. A CPU-only job caches their verified bytes in object storage, while the training node extracts them on local scratch. Dataset identity remains the Hugging Face revision/checksum, not the cache location. Source cache plus retained checkpoints are estimated below 1,500 GiB; at the [published hot-object-storage price](https://coreweave.com/pricing) of $0.06/GiB/month (checked 2026-10-08), a conservative full-month incremental storage allowance is **$90**. This is the cost-gate estimate for the whole run, including staging and checkpoints. Ongoing storage persists after training; warm/cold tiering may reduce its cost. The repository's Modal reference rate would imply $3,223.20 for 816 H100-hours, but that is not incremental CoreWeave reservation spending.
+The 50 immutable source shards total 1,057,335,306,240 bytes. A CPU-only job caches their verified bytes in object storage, while the training node extracts them on local scratch. Dataset identity remains the Hugging Face revision/checksum, not the cache location. Source cache plus retained checkpoints are estimated below 1,500 GiB; at the [published hot-object-storage price](https://coreweave.com/pricing) of $0.06/GiB/month (checked 2026-10-08), a conservative full-month incremental storage allowance is **$90**. This is the cost-gate estimate for the whole run, including staging and checkpoints. Ongoing storage persists after training; warm/cold tiering may reduce its cost. The repository's Modal reference rate would imply $3,286.40 for 832 H100-hours, but that is not incremental CoreWeave reservation spending.
 
 The launcher records a durable Iris job receipt and returns while training runs. Re-executing this cell adopts its existing receipt and never describes a submitted job as a completed model. Set `HELICO_IRIS_PYTHON` to an environment containing Iris/Fray and `HELICO_IRIS_CONFIG` to the installed CoreWeave cluster config before a real launch.
 
@@ -39,22 +39,24 @@ from helico.experiment import set_experiment, ensure_training_run
 set_experiment("exp22_contact-scale")
 # Whole-run estimate: $90 first-month incremental storage, prepaid GPU allocation.
 spec = dict(
-    job_name="helico-exp22-contact-scale-v2", mode="train", gpus=8,
+    job_name="helico-exp22-contact-scale-v3", mode="train", gpus=8,
     cpu=96, memory="1000g", disk="3000g",
     image="pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca",
     timeout_seconds=367200, config="configs/train/contact-scale-v1.json",
-    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v2",
+    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v3",
     estimated_incremental_cost_usd=90,
     cost_accounting="Prepaid cw-rno2a reservation; <=1500 GiB storage at $0.06/GiB for one month",
 )
-run = ensure_training_run("full-data-v2", gpu="H100:8", max_steps=20000,
+run = ensure_training_run("full-data-v3", gpu="H100:8", max_steps=20000,
     crop_size=384, lr=2e-5, est_wall_hours=102, coreweave=spec)
 print(run.meta)
 ```
 
 ## Status
 
-The active job is `/bizon/helico-exp22-contact-scale-v2`, launched from `f311dbe0e70cc63b3c75974adfef10be9fdcef23`. Its first predecessor failed during dependency installation before any training updates. CPU feature checks on real antibody/protein and protein/heme complexes preserve paired/unpaired MSAs and unresolved atoms. Contact validity, padding, independent diffusion-sample weights and resumed distributed draw order have regression tests. Training results and job receipts will be recorded here after dispatch and validation.
+The replacement job is `/bizon/helico-exp22-contact-scale-v3`. Its predecessors failed before any optimizer updates: the first during dependency installation, and v2 (`f311dbe0e70cc63b3c75974adfef10be9fdcef23`) during the first full-data backward pass. The latter exposed a padding bug: coordinate diffusion attended to tokens without atoms, allowing gradients through zero-variance padded pair products. Diffusion now excludes those tokens as keys, and triangle updates mask their padded outputs. Model weights and valid-token architecture are unchanged.
+
+All 32 exact first-batch crops pass individual full-model backward checks after the fix; the formerly failing 2d2h crop has finite gradients. Results are in `data/first_batch_gradient_replay.csv`. Four padding regression checks and the existing data/model/notebook checks pass (74 total). Source staging now uses eight download workers and four checksum/extraction workers, rejects duplicate archive paths, and retains the content-addressed data cache on the worker's designated cache volume. The pinned source inventory contains 931,266 distinct file paths. All 50 source shards are also present in the regional object cache; two stalled uploads were recovered from verified local copies and the CPU-only staging job was stopped.
 
 The real-complex distributed GPU preflight completed two optimizer updates on all eight H100s, with dynamic MSA branches and four accumulated crops per device. Peak allocated GPU memory was 50.27 GB; the warmed-up update took 7.31 seconds on the largest rank. This is a setup/gradient check on one 384-token crop, not evidence of generalization or a full-data throughput measurement. Per-rank measurements are in `data/gpu_preflight.csv`.
 

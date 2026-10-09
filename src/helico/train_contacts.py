@@ -209,11 +209,14 @@ def main():
         for group in optimizer.param_groups:
             group["lr"] = lr * group["lr_scale"]
         totals = torch.zeros(8, device="cuda", dtype=torch.float64)
+        crops = []
         for micro in range(cfg["accumulation"]):
             feature, pdb_id, draw = next(iterator)
             torch.manual_seed(cfg["seed"] + draw); torch.cuda.manual_seed_all(cfg["seed"] + draw)
             batch, use_msa, t = make_batch(feature, draw, cfg["seed"], "cuda", msa_depth=cfg["msa_depth"])
             model.config.use_msa = use_msa
+            crops.append({"pdb_id": pdb_id, "draw": draw, "tokens": feature["n_tokens"],
+                          "use_msa": use_msa, "contact_time": t})
             sync = nullcontext() if micro == cfg["accumulation"] - 1 else wrapped.no_sync()
             with sync:
                 with torch.autocast("cuda", dtype=torch.bfloat16):
@@ -226,7 +229,12 @@ def main():
             totals += torch.tensor([loss.detach(), mse.detach(), smooth.detach(),
                 out["distogram_loss"].detach(), out["contact_loss"].detach(),
                 out["contact_observed_loss"].detach(), float(use_msa), t], device="cuda")
-        grad = torch.nn.utils.clip_grad_norm_(model.parameters(), 1., error_if_nonfinite=True)
+        try:
+            grad = torch.nn.utils.clip_grad_norm_(model.parameters(), 1., error_if_nonfinite=True)
+        except RuntimeError:
+            print(json.dumps({"gradient_failure": True, "rank": rank, "step": step,
+                              "crops": crops}), flush=True)
+            raise
         optimizer.step()
         with torch.no_grad():
             torch._foreach_lerp_(list(ema.values()), list(model.state_dict().values()), .001)

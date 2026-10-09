@@ -9,6 +9,7 @@ import os
 import sys
 import time
 from contextlib import nullcontext
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -26,18 +27,25 @@ model = Helico(HelicoConfig(predict_contacts=True, n_diffusion_samples=4,
     msa_sample_cutoff=512, msa_sample_min_train=32, msa_sample_min_eval=512))
 stats = load_protenix_checkpoint(sys.argv[2], model)
 assert not stats["shape_mismatches"], stats
+torch.nn.init.zeros_(model.contact_head.weight)
+torch.nn.init.constant_(model.contact_head.bias, -2.)
 for name, parameter in model.named_parameters():
     if name.startswith(("confidence_head.", "template_embedder.")):
         parameter.requires_grad_(False)
 model.cuda().train()
 wrapped = DistributedDataParallel(model, device_ids=[rank], find_unused_parameters=True)
 optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=2e-5)
-features = torch.load(sys.argv[1], weights_only=False)
+feature_path = Path(sys.argv[1])
+features = None if feature_path.is_dir() else torch.load(feature_path, weights_only=False)
 for step in range(2):
     started = time.monotonic(); optimizer.zero_grad(set_to_none=True)
     for micro in range(4):
-        batch, _, _ = make_batch(features, step * 32 + micro * 8 + rank, 2201, "cuda")
-        model.config.use_msa = (rank + micro + step) % 3 != 0
+        draw = step * 32 + micro * 8 + rank
+        if feature_path.is_dir():
+            features = torch.load(feature_path / f"draw-{draw % 32:02d}.pt", weights_only=False)["feature"]
+        torch.manual_seed(2201 + draw); torch.cuda.manual_seed_all(2201 + draw)
+        batch, use_msa, _ = make_batch(features, draw, 2201, "cuda")
+        model.config.use_msa = use_msa if feature_path.is_dir() else (rank + micro + step) % 3 != 0
         with (nullcontext() if micro == 3 else wrapped.no_sync()):
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 result = wrapped(batch, compute_confidence=False)
