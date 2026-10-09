@@ -54,7 +54,7 @@ print(run.meta)
 
 ## Status
 
-The sustained run is **training**, with at least 10 full-data optimizer updates (320 crop draws) verified on 2026-10-09 UTC. [W&B run](https://wandb.ai/timodonnell/helico/runs/exp22-contact-scale-v3) reports it running in `timodonnell/helico`. Step 10 has finite loss 1.6056 and gradient norm 24.34 before clipping; its update took 7.76 seconds. This is startup evidence, not a quality evaluation. Early metrics are in `data/initial_training_metrics.csv`.
+The sustained run is **training**, with at least 20 full-data optimizer updates (640 crop draws) verified on 2026-10-09 UTC. [W&B run](https://wandb.ai/timodonnell/helico/runs/exp22-contact-scale-v3) reports it running in `timodonnell/helico`. Step 20 has finite loss 1.4534 and gradient norm 14.21 before clipping; its update took 7.93 seconds. This is startup evidence, not a quality evaluation. Early metrics are in `data/initial_training_metrics.csv`.
 
 The first checkpoint is durably stored at `s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v3/step-000001.pt` (5,795,897,603 bytes). It was reopened successfully and contains 3,832 model tensors, matching EMA tensors, optimizer state for 3,538 parameter tensors, the data lock and source revision. Both the new contact head and conditioning projection have nonzero learned weights. The independent object-size/contents check is in `data/first_checkpoint_verified.json`. Subsequent snapshots and validation occur every 250 updates; generated-structure FoldBench/search evaluation is still outstanding. The run continues independently of the launcher.
 
