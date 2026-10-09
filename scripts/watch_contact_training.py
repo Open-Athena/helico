@@ -50,6 +50,14 @@ def read_json(fs, path):
         return json.load(stream)
 
 
+def stalled_training(snapshot, now):
+    if "running" not in snapshot.get("tasks", []):
+        return False
+    ranks = [r for r in snapshot.get("ranks", [])
+             if r["timestamp"] >= snapshot.get("attempt_started_at", 0)]
+    return bool(ranks and now - max(r["timestamp"] for r in ranks) > 1200)
+
+
 def inspect(state):
     from iris.cli.connect import open_iris_client
     from iris.cluster.types import JobName
@@ -58,7 +66,12 @@ def inspect(state):
         status = client.job(job_id).status()
         tasks = client.list_tasks(job_id)
     snapshot = {"checked_at": time.time(), "job_state": str(status.state),
-                "tasks": [str(x.state) for x in tasks], "error": status.error_message}
+                "tasks": [str(x.state) for x in tasks], "error": status.error_message,
+                "preemption_count": status.preemption_count,
+                "pending_reason": status.pending_reason,
+                "attempt_started_at": max((a.started_at.epoch_seconds()
+                    for t in tasks for a in t.attempts
+                    if a.attempt_number == t.current_attempt_number and a.started_at), default=0)}
     fs = storage(state)
     base = state["spec"]["output_uri"]
     snapshot["checkpoint"] = read_json(fs, base + "/latest.json")
@@ -155,6 +168,12 @@ def main():
             snapshot = inspect(state)
             state["latest_signal"] = snapshot
             condition = snapshot["job_state"]
+            event = [state["job_id"], snapshot.get("preemption_count", 0)]
+            previous_event = state.get("last_preemption_event")
+            if event != previous_event and event[1]:
+                notify(f"{state['job_id']} has been preempted {event[1]} time(s); Iris is managing rescheduling within its retry budget.")
+                delay = 120
+            state["last_preemption_event"] = event
             if condition == "succeeded":
                 result, checkpoint = snapshot.get("result"), snapshot.get("checkpoint")
                 verified = bool(result and result.get("finished_steps") and checkpoint and
@@ -179,8 +198,7 @@ def main():
                     notify(f"{state['job_id']} is {condition}; diagnostics are preserved and automatic retries are stopped.")
                     save(args.state, state)
                     return
-            ranks = snapshot.get("ranks", [])
-            if ranks and time.time() - max(r["timestamp"] for r in ranks) > 1200:
+            if stalled_training(snapshot, time.time()):
                 state["monitor_status"] = "stalled"
                 if not state.get("stall_notified"):
                     notify("Training has made no observable progress for 20 minutes; inspect per-rank diagnostics.")
