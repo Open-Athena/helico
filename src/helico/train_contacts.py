@@ -35,8 +35,13 @@ RESUME_OPERATIONAL_KEYS = {"run_name", "output_uri", "resume_uri", "data_cache_d
 
 
 def check_resume_config(previous, current):
-    before = {k: v for k, v in previous.items() if k not in RESUME_OPERATIONAL_KEYS}
-    after = {k: v for k, v in current.items() if k not in RESUME_OPERATIONAL_KEYS}
+    # Repartition the same global draw stream when fleet capacity changes.
+    # Each draw sets its own RNG seed; preserve the number of draws per update.
+    if previous["gpus"] * previous["accumulation"] != current["gpus"] * current["accumulation"]:
+        raise ValueError("Resume global batch changed")
+    operational = RESUME_OPERATIONAL_KEYS | {"gpus", "accumulation"}
+    before = {k: v for k, v in previous.items() if k not in operational}
+    after = {k: v for k, v in current.items() if k not in operational}
     if before != after:
         raise ValueError("Resume training configuration changed")
 

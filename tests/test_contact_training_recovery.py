@@ -7,7 +7,7 @@ import fsspec
 import pytest
 
 from helico.coreweave_worker import run_trainer
-from helico.train_contacts import checkpoint_due, check_resume_config
+from helico.train_contacts import checkpoint_due, check_resume_config, weighted_draws
 
 
 def test_recovery_keeps_scientific_configuration_fixed():
@@ -16,6 +16,7 @@ def test_recovery_keeps_scientific_configuration_fixed():
     after = {**before, "run_name": "new", "output_uri": "new", "resume_uri": "old",
              "startup_save_every": 50, "loader_timeout_seconds": 300}
     check_resume_config(before, after)
+    check_resume_config(before, {**after, "gpus": 4, "accumulation": 8})
     for key, value in [("lr", 1e-4), ("crop_size", 256), ("gpus", 4), ("seed", 1)]:
         with pytest.raises(ValueError):
             check_resume_config(before, {**after, key: value})
@@ -27,6 +28,14 @@ def test_startup_saves_bound_lost_work_without_retaining_400_checkpoints():
     assert saved[:11] == [1, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500]
     assert saved[11] == 750 and saved[-1] == 20000
     assert len(saved) == 89
+
+
+def test_repartitioning_preserves_every_remaining_global_draw():
+    def stream(world, accumulation):
+        return sorted((draw, index) for rank in range(world)
+                      for index, draw in weighted_draws([1., 3., 2.], 9, accumulation,
+                                                        world, rank, 2, 2201))
+    assert stream(8, 4) == stream(4, 8)
 
 
 def test_native_child_failure_preserves_stdout_stderr_and_exit_record(tmp_path):
