@@ -37,26 +37,26 @@ The launcher records a durable Iris job receipt and returns while training runs.
 ```python
 from helico.experiment import set_experiment, ensure_training_run
 set_experiment("exp22_contact-scale")
-# Whole-run estimate: $90 first-month incremental storage, prepaid GPU allocation.
+# Whole-run estimate: $96 first-month incremental storage, prepaid GPU allocation.
 spec = dict(
-    job_name="helico-exp22-contact-scale-v3", mode="train", gpus=8,
+    job_name="helico-exp22-contact-scale-v4", mode="train", gpus=8,
     cpu=96, memory="1000g", disk="3000g",
     image="pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca",
-    timeout_seconds=367200, config="configs/train/contact-scale-v1.json",
-    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v3",
-    estimated_incremental_cost_usd=90,
-    cost_accounting="Prepaid cw-rno2a reservation; <=1500 GiB storage at $0.06/GiB for one month",
+    timeout_seconds=367200, config="configs/train/contact-scale-v4.json",
+    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v4",
+    estimated_incremental_cost_usd=96,
+    cost_accounting="Prepaid cw-rno2a reservation; <=1600 GiB storage at $0.06/GiB for one month",
 )
-run = ensure_training_run("full-data-v3", gpu="H100:8", max_steps=20000,
+run = ensure_training_run("full-data-v4", gpu="H100:8", max_steps=20000,
     crop_size=384, lr=2e-5, est_wall_hours=102, coreweave=spec)
 print(run.meta)
 ```
 
 ## Status
 
-The sustained run is **training**, with at least 20 full-data optimizer updates (640 crop draws) verified on 2026-10-09 UTC. [W&B run](https://wandb.ai/timodonnell/helico/runs/exp22-contact-scale-v3) reports it running in `timodonnell/helico`. Step 20 has finite loss 1.4534 and gradient norm 14.21 before clipping; its update took 7.93 seconds. This is startup evidence, not a quality evaluation. Early metrics are in `data/initial_training_metrics.csv`.
+The v3 run failed with rank-0 `SIGABRT` at 2026-10-09 01:32 UTC. Its last logged update was 150 (4,800 crops); only step 1 was durably saved. No validation or FoldBench result was produced. The normal Iris/Finelog endpoints have no retained training log for this attempt, so the underlying abort is not yet established. W&B history is retained in `data/v3_training_metrics.csv`.
 
-The first checkpoint is durably stored at `s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v3/step-000001.pt` (5,795,897,603 bytes). It was reopened successfully and contains 3,832 model tensors, matching EMA tensors, optimizer state for 3,538 parameter tensors, the data lock and source revision. Both the new contact head and conditioning projection have nonzero learned weights. The independent object-size/contents check is in `data/first_checkpoint_verified.json`. Subsequent snapshots and validation occur every 250 updates; generated-structure FoldBench/search evaluation is still outstanding. The run continues independently of the launcher.
+The v4 recovery restores v3's step-1 model, EMA and optimizer with identical scientific settings and deterministic data draws. It adds per-rank and data-worker progress files, slow-operation stack dumps, a five-minute data-loader timeout, and a supervisor that writes native stdout/stderr and progress files to durable storage every minute. Startup checkpoints are saved every 50 updates through step 500 and regular checkpoints are saved before validation. There are 89 scheduled snapshots plus the final snapshot; the combined source cache, prior snapshot, diagnostics and checkpoints fit a conservative 1,600 GiB / $96 first-month storage allowance. GPUs remain on the existing prepaid reservation. This restart is an instrumented recovery; it is not yet evidence that the original failure is fixed.
 
 The replacement job is `/bizon/helico-exp22-contact-scale-v3`, launched from `3fe2242c11c54101b01ec242219dbab15ca0cd4d`. Its predecessors failed before any optimizer updates: the first during dependency installation, and v2 (`f311dbe0e70cc63b3c75974adfef10be9fdcef23`) during the first full-data backward pass. The latter exposed a padding bug: coordinate diffusion attended to tokens without atoms, allowing gradients through zero-variance padded pair products. Diffusion now excludes those tokens as keys, and triangle updates mask their padded outputs. Model weights and valid-token architecture are unchanged.
 

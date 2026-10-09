@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 from contextlib import nullcontext
 from dataclasses import asdict
+from datetime import timedelta
+import faulthandler
 import json
 import math
 import os
@@ -24,6 +26,38 @@ from helico.load_protenix import load_protenix_checkpoint
 from helico.model import Helico, HelicoConfig
 from helico.model.diffusion import _centre_random_augmentation
 from helico.protenix_data import load_datasets, SeededCrops, batch_example, adapt_example
+
+
+# Operational changes may accompany recovery; model/data/optimizer settings may not.
+RESUME_OPERATIONAL_KEYS = {"run_name", "output_uri", "resume_uri", "data_cache_dir",
+    "mirror_uri", "download_workers", "extract_workers", "save_every", "startup_save_every",
+    "validate_every", "workers", "loader_timeout_seconds", "collective_timeout_seconds"}
+
+
+def check_resume_config(previous, current):
+    before = {k: v for k, v in previous.items() if k not in RESUME_OPERATIONAL_KEYS}
+    after = {k: v for k, v in current.items() if k not in RESUME_OPERATIONAL_KEYS}
+    if before != after:
+        raise ValueError("Resume training configuration changed")
+
+
+def checkpoint_due(step, config):
+    return (step == 1 or step % config["save_every"] == 0 or
+            (step <= config["warmup_steps"] and
+             step % config.get("startup_save_every", config["save_every"]) == 0))
+
+
+class Progress:
+    """Small per-rank status files survive a native abort via the supervisor."""
+    def __init__(self, output, rank):
+        self.path = output / f"rank-{rank}-progress.json"
+        self.fields = {"rank": rank}
+
+    def __call__(self, stage, **fields):
+        self.fields.update(fields, stage=stage, timestamp=time.time())
+        pending = self.path.with_suffix(".pending")
+        pending.write_text(json.dumps(self.fields) + "\n")
+        pending.replace(self.path)
 
 
 def first(items):
@@ -136,8 +170,14 @@ def main():
     lock = json.loads(Path(cfg["data_lock"]).read_text())
     bundle = json.loads(args.bundle.read_text())
     rank, world = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
+    diagnostics = Path(os.environ.get("HELICO_DIAGNOSTICS_DIR", str(args.output / "diagnostics")))
+    diagnostics.mkdir(parents=True, exist_ok=True)
+    progress = Progress(diagnostics, rank)
+    faulthandler.enable()
+    faulthandler.dump_traceback_later(300, repeat=True)
+    progress("initializing")
     torch.set_num_threads(2); torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-    dist.init_process_group("nccl")
+    dist.init_process_group("nccl", timeout=timedelta(seconds=cfg.get("collective_timeout_seconds", 600)))
     if world != cfg["gpus"]:
         raise ValueError("World size changed: global batch/draw order would change")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -170,8 +210,9 @@ def main():
     start = 0
     if args.resume:
         checkpoint = torch.load(args.resume, map_location="cpu", weights_only=False)
-        if checkpoint["data_lock_sha256"] != lock["lock_sha256"] or checkpoint["training_config"] != cfg:
-            raise ValueError("Resume configuration/data mismatch")
+        if checkpoint["data_lock_sha256"] != lock["lock_sha256"]:
+            raise ValueError("Resume data mismatch")
+        check_resume_config(checkpoint["training_config"], cfg)
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         ema = {k: v.cuda() for k, v in checkpoint["ema_state_dict"].items()}
@@ -184,9 +225,11 @@ def main():
         dataset.cropping_configs["crop_size"] = cfg["crop_size"]
     draws = weighted_draws(train_data.merged_datapoint_weights, cfg["steps"], cfg["accumulation"],
                           world, rank, start, cfg["seed"])
-    loader = DataLoader(SeededCrops(train_data, cfg["seed"]), sampler=draws,
+    progress("loading_data", step=start)
+    loader = DataLoader(SeededCrops(train_data, cfg["seed"], diagnostics_dir=diagnostics / f"rank-{rank}-workers"), sampler=draws,
                         batch_size=1, collate_fn=first, num_workers=cfg["workers"],
-                        persistent_workers=cfg["workers"] > 0, pin_memory=True)
+                        persistent_workers=cfg["workers"] > 0, pin_memory=True,
+                        timeout=cfg.get("loader_timeout_seconds", 300) if cfg["workers"] else 0)
     iterator = iter(loader)
     wrapped = DistributedDataParallel(model, device_ids=[int(os.environ["LOCAL_RANK"])],
                                       find_unused_parameters=True)
@@ -211,7 +254,10 @@ def main():
         totals = torch.zeros(8, device="cuda", dtype=torch.float64)
         crops = []
         for micro in range(cfg["accumulation"]):
+            expected_draw = (step - 1) * world * cfg["accumulation"] + micro * world + rank
+            progress("loading_crop", step=step, micro=micro, draw=expected_draw)
             feature, pdb_id, draw = next(iterator)
+            progress("preparing_crop", pdb_id=pdb_id, draw=draw, tokens=feature["n_tokens"], atoms=feature["n_atoms"])
             torch.manual_seed(cfg["seed"] + draw); torch.cuda.manual_seed_all(cfg["seed"] + draw)
             batch, use_msa, t = make_batch(feature, draw, cfg["seed"], "cuda", msa_depth=cfg["msa_depth"])
             model.config.use_msa = use_msa
@@ -219,16 +265,20 @@ def main():
                           "use_msa": use_msa, "contact_time": t})
             sync = nullcontext() if micro == cfg["accumulation"] - 1 else wrapped.no_sync()
             with sync:
+                progress("forward", use_msa=use_msa, contact_time=t)
                 with torch.autocast("cuda", dtype=torch.bfloat16):
                     out = wrapped(batch, compute_confidence=False)
+                progress("structure_loss")
                 mse, smooth = structure_losses(out, batch)
                 loss = 4 * (mse + smooth) + .03 * out["distogram_loss"] + .1 * out["contact_loss"] + .01 * out["contact_observed_loss"]
                 if not torch.isfinite(loss):
                     raise FloatingPointError(f"Nonfinite loss at step={step}, PDB={pdb_id}, draw={draw}")
+                progress("backward")
                 (loss / cfg["accumulation"]).backward()
             totals += torch.tensor([loss.detach(), mse.detach(), smooth.detach(),
                 out["distogram_loss"].detach(), out["contact_loss"].detach(),
                 out["contact_observed_loss"].detach(), float(use_msa), t], device="cuda")
+        progress("optimizer")
         try:
             grad = torch.nn.utils.clip_grad_norm_(model.parameters(), 1., error_if_nonfinite=True)
         except RuntimeError:
@@ -238,6 +288,7 @@ def main():
         optimizer.step()
         with torch.no_grad():
             torch._foreach_lerp_(list(ema.values()), list(model.state_dict().values()), .001)
+        progress("metrics_sync")
         dist.all_reduce(totals); totals /= world * cfg["accumulation"]
         if rank == 0 and (step <= 5 or step % 10 == 0):
             metrics = dict(zip(["train/loss", "train/mse", "train/smooth_lddt", "train/distogram",
@@ -247,15 +298,20 @@ def main():
                             "train/examples_seen": step * world * cfg["accumulation"],
                             "train/gpu_memory_gb": torch.cuda.max_memory_allocated() / 1e9})
             print(json.dumps({"step": step, **metrics}), flush=True); run.log(metrics, step=step)
+        # Save first, so a validation failure does not discard completed updates.
+        if checkpoint_due(step, cfg):
+            progress("checkpoint")
+            if rank == 0:
+                save_checkpoint(args.output, model, optimizer, ema, step, cfg, lock)
+            dist.barrier()
         if step % cfg["validate_every"] == 0:
+            progress("validation")
             metrics = validate(model, validation, cfg["validation_samples"], rank, world, cfg["seed"] + 10000000)
             if rank == 0:
                 run.log({f"validation/{k}": v for k, v in metrics.items()}, step=step)
                 print(json.dumps({"step": step, "validation": metrics}), flush=True)
-        if step == 1 or step % cfg["save_every"] == 0:
-            if rank == 0:
-                save_checkpoint(args.output, model, optimizer, ema, step, cfg, lock)
-            dist.barrier()
+        progress("step_complete", completed_step=step)
+        faulthandler.dump_traceback_later(300, repeat=True)
         stop = torch.tensor(int(time.monotonic() - began > cfg["train_seconds"]), device="cuda")
         dist.all_reduce(stop, op=dist.ReduceOp.MAX)
         if stop.item():
@@ -266,6 +322,8 @@ def main():
             "finished_steps": step == cfg["steps"], "wall_seconds": time.monotonic() - began})
         run.finish()
     dist.barrier(); dist.destroy_process_group()
+    progress("complete", completed_step=step)
+    faulthandler.cancel_dump_traceback_later()
 
 
 if __name__ == "__main__":

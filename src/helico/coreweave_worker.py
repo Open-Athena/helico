@@ -11,8 +11,10 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import urllib.request
+import uuid
 
 from helico.datasets import Hub, checked_download, validate_lock, stage_lock, write_json, file_sha256
 
@@ -106,9 +108,54 @@ def fetch(url, path):
     return path
 
 
+def run_trainer(command, env, scratch, config, *, diagnostics_fs=None):
+    """Tee native failures and preserve diagnostics independently of cluster logs."""
+    attempt = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + uuid.uuid4().hex[:8]
+    diagnostics = Path(os.environ.get("IRIS_OUTPUT_DIR", str(scratch / "diagnostics"))) / attempt
+    diagnostics.mkdir(parents=True, exist_ok=True)
+    remote = config["output_uri"] + "/diagnostics/" + attempt
+    env = {**env, "HELICO_DIAGNOSTICS_DIR": str(diagnostics), "PYTHONFAULTHANDLER": "1",
+           "TORCH_NCCL_TRACE_BUFFER_SIZE": "2000", "TORCH_NCCL_DUMP_ON_TIMEOUT": "1",
+           "TORCH_NCCL_DEBUG_INFO_TEMP_FILE": str(diagnostics / "nccl-trace-")}
+    stopped = threading.Event()
+    def upload():
+        fs = diagnostics_fs if diagnostics_fs is not None else filesystem(durable=True)
+        # A single upload thread owns the remote diagnostic files. Never include
+        # environment dumps or credential-bearing files from the runtime.
+        while True:
+            final_pass = stopped.is_set()
+            for path in diagnostics.rglob("*"):
+                if not path.is_file() or path.suffix == ".pending":
+                    continue
+                try:
+                    fs.put_file(str(path), remote + "/" + str(path.relative_to(diagnostics)))
+                except Exception as error:
+                    print(json.dumps({"diagnostic_upload_error": type(error).__name__}), flush=True)
+            if final_pass:
+                return
+            stopped.wait(60)
+    uploader = threading.Thread(target=upload, daemon=True)
+    uploader.start()
+    code = -1
+    try:
+        with (diagnostics / "trainer.log").open("w", buffering=1) as log:
+            with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  text=True, bufsize=1, env=env) as process:
+                for line in process.stdout:
+                    log.write(line)
+                    print(line, end="", flush=True)
+                code = process.wait()
+    finally:
+        (diagnostics / "exit.json").write_text(json.dumps({"returncode": code, "timestamp": time.time()}))
+        stopped.set()
+        uploader.join(timeout=180)
+    if code:
+        raise subprocess.CalledProcessError(code, command)
+
+
 def train(config, config_path):
     scratch = Path("/tmp/helico"); scratch.mkdir(exist_ok=True)
-    fs = filesystem()
+    fs = filesystem(durable=True)
     lock = json.loads(Path(config["data_lock"]).read_text())
     validate_lock(lock)
     for local, remote in [(Path(config["data_lock"]), "data.lock.json"), (config_path, "training.json")]:
@@ -142,19 +189,23 @@ def train(config, config_path):
     # A resumed job restores the last fully uploaded optimizer/EMA snapshot.
     resume = []
     latest = config["output_uri"] + "/latest.json"
+    if not fs.exists(latest) and config.get("resume_uri"):
+        latest = config["resume_uri"].rstrip("/") + "/latest.json"
     if fs.exists(latest):
         with fs.open(latest) as f:
             state = json.load(f)
         if state["data_lock_sha256"] != lock["lock_sha256"]:
             raise ValueError("Remote run data lock changed")
         local = scratch / "resume.pt"
-        fs.get_file(state["checkpoint"], str(local)); resume = ["--resume", str(local)]
+        fs.get_file(state["checkpoint"], str(local), chunksize=256 * 1024**2, max_concurrency=4)
+        resume = ["--resume", str(local)]
+        print(json.dumps({"resume_checkpoint": state}), flush=True)
     command = [sys.executable, "-m", "torch.distributed.run", "--standalone",
         "--nnodes=1", f"--nproc-per-node={config['gpus']}", "-m", "helico.train_contacts",
         "--config", str(config_path), "--bundle", str(scratch / "data.paths.json"),
         "--checkpoint", str(checkpoint), "--output", str(scratch / "run"), *resume]
     print(json.dumps({"training_command": command, **provenance}), flush=True)
-    subprocess.run(command, check=True, env=env)
+    run_trainer(command, env, scratch, config)
     fs.put_file(str(scratch / "run/result.json"), config["output_uri"] + "/result.json")
 
 

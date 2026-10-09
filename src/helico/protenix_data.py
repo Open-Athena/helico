@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import faulthandler
+import json
 import os
+from pathlib import Path
 import random
+import time
 
 import numpy as np
 import torch
@@ -115,15 +119,37 @@ def batch_example(features, state, device="cpu"):
 
 class SeededCrops(torch.utils.data.Dataset):
     """Deterministic draw seeds make prefetch and resume independent of worker timing."""
-    def __init__(self, dataset, seed):
+    def __init__(self, dataset, seed, diagnostics_dir=None):
         self.dataset, self.seed = dataset, seed
+        self.diagnostics_dir = diagnostics_dir
+        self.trace_file = None
+
+    def progress(self, stage, index, draw):
+        if self.diagnostics_dir is None:
+            return
+        folder = Path(self.diagnostics_dir)
+        folder.mkdir(parents=True, exist_ok=True)
+        if self.trace_file is None:
+            self.trace_file = (folder / f"worker-{os.getpid()}.trace").open("a")
+            faulthandler.enable(file=self.trace_file)
+        path = folder / f"worker-{os.getpid()}.json"
+        pending = path.with_suffix(".pending")
+        pending.write_text(json.dumps(dict(stage=stage, index=index, draw=draw, timestamp=time.time())))
+        pending.replace(path)
+        if stage == "loading":
+            faulthandler.dump_traceback_later(180, repeat=True, file=self.trace_file)
+        else:
+            faulthandler.cancel_dump_traceback_later()
 
     def __getitem__(self, key):
         index, draw = key
+        self.progress("loading", index, draw)
         seed = (self.seed + draw * 1000003) % (2**32)
         random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
         example = self.dataset[index]
-        return adapt_example(example), str(example["basic"]["pdb_id"]), draw
+        result = adapt_example(example), str(example["basic"]["pdb_id"]), draw
+        self.progress("ready", index, draw)
+        return result
 
     def __len__(self):
         return len(self.dataset)
