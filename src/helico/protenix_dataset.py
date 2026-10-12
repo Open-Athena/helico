@@ -15,7 +15,7 @@ from protenix.data.pipeline.dataset import (
 )
 from protenix.utils.cropping import CropData
 
-from helico.protenix_data import chain_contiguous_token_order
+from helico.protenix_data import chain_contiguous_token_order, retry_unresolved_crop
 
 
 class ChainContiguousDataset(BaseSingleDataset):
@@ -31,7 +31,11 @@ class ChainContiguousDataset(BaseSingleDataset):
             tokens, atoms = CropData.select_by_token_indices(
                 tokens, atoms, torch.as_tensor(order, dtype=torch.long))
             bioassembly_dict.update(token_array=tokens, atom_array=atoms)
-        return super().crop(sample_indice, bioassembly_dict, **kwargs)
+        upstream_crop = super().crop
+        return retry_unresolved_crop(
+            lambda: upstream_crop(sample_indice, bioassembly_dict, **kwargs),
+            pdb_id=bioassembly_dict["pdb_id"],
+        )
 
 
 def get_datasets(configs, error_dir):

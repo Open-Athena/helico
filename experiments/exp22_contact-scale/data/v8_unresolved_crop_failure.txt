@@ -1,0 +1,43 @@
+2026-10-12 14:24:34,240 [/tmp/helico-protenix-v1-code/protenix/utils/file_io.py:267] INFO protenix.utils.file_io: [Protenix IO] load_json_cached finished in 0.127s: path=/tmp/helico-scale-fixture/common/seq_to_pdb_index.json
+2026-10-12 14:24:34,246 [/tmp/helico-protenix-v1-code/protenix/utils/file_io.py:267] INFO protenix.utils.file_io: [Protenix IO] load_json_cached finished in 0.006s: path=/tmp/helico-scale-fixture/rna_msa/rna_sequence_to_pdb_chains.json
+2026-10-12 14:24:34,246 [/tmp/helico-protenix-v1-code/protenix/data/msa/msa_featurizer.py:425] INFO protenix.data.msa.msa_featurizer: MSAFeaturizer for helico_0_train initialized.
+2026-10-12 14:24:34,249 [/tmp/helico-protenix-v1-code/protenix/utils/file_io.py:119] INFO protenix.utils.file_io: [Protenix IO] read_indices_csv finished in 0.003s: path=/tmp/helico-v8-failing-draw.csv, shape=(1, 21)
+2026-10-12 14:24:34,249 [/tmp/helico-protenix-v1-code/protenix/data/pipeline/dataset.py:166] INFO protenix.data.pipeline.dataset: #Rows in indices list: 1
+2026-10-12 14:24:34,249 [/tmp/helico-protenix-v1-code/protenix/data/pipeline/dataset.py:283] INFO protenix.data.pipeline.dataset: ---------- Dataset helico_0_train----------
+2026-10-12 14:24:34,250 [/tmp/helico-protenix-v1-code/protenix/data/pipeline/dataset.py:292] INFO protenix.data.pipeline.dataset: intra_prot: 1/1(100.0%)
+2026-10-12 14:24:34,250 [/tmp/helico-protenix-v1-code/protenix/data/pipeline/dataset.py:294] INFO protenix.data.pipeline.dataset: ------------------------------
+2026-10-12 14:24:34,251 [/tmp/helico-protenix-v1-code/protenix/data/pipeline/dataset.py:299] INFO protenix.data.pipeline.dataset: intra_prot: 1/1(100.0%)
+2026-10-12 14:24:34,251 [/tmp/helico-protenix-v1-code/protenix/data/pipeline/dataset.py:300] INFO protenix.data.pipeline.dataset: ------------------------------
+2026-10-12 14:24:34,251 [/tmp/helico-protenix-v1-code/protenix/data/pipeline/dataset.py:302] INFO protenix.data.pipeline.dataset: Final pdb ids: 1
+2026-10-12 14:24:34,251 [/tmp/helico-protenix-v1-code/protenix/data/pipeline/dataset.py:303] INFO protenix.data.pipeline.dataset: ------------------------------
+Traceback (most recent call last):
+  File "/tmp/helico-v8-reproduce-unresolved.py", line 16, in <module>
+    raw=ds.process_one(0,return_atom_token_array=True);feature=adapt_example(raw)
+  File "/tmp/helico-protenix-v1-code/protenix/data/pipeline/dataset.py", line 536, in process_one
+    ) = self.crop(
+        ~~~~~~~~~^
+        sample_indice=sample_indice,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        bioassembly_dict=bioassembly_dict,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        **self.cropping_configs,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/bizon/git/helico-contact-pilot/src/helico/protenix_dataset.py", line 34, in crop
+    return super().crop(sample_indice, bioassembly_dict, **kwargs)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/helico-protenix-v1-code/protenix/data/pipeline/dataset.py", line 620, in crop
+    return DataPipeline.crop(
+           ~~~~~~~~~~~~~~~~~^
+        one_sample=sample_indice,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<8 lines>...
+        remove_metal=remove_metal,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/tmp/helico-protenix-v1-code/protenix/data/pipeline/data_pipeline.py", line 348, in crop
+    resovled_atom_num > 4
+AssertionError: resovled_atom_num=np.int64(0) <= 4 after ContiguousCropping
+{"wrapped": true, "draw": 69546, "pdb_id": "6x6j", "error": "resovled_atom_num=np.int64(0) <= 4 after ContiguousCropping", "seconds": 11.138186967931688}

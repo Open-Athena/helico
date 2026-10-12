@@ -4,9 +4,11 @@ from __future__ import annotations
 from copy import deepcopy
 import faulthandler
 import json
+import logging
 import os
 from pathlib import Path
 import random
+import re
 import time
 
 import numpy as np
@@ -15,6 +17,35 @@ import torch.nn.functional as F
 
 from helico.contact_diffusion import heavy_atom_contacts
 from helico.datasets import protenix_config
+
+
+def retry_unresolved_crop(crop, *, pdb_id, max_attempts=8):
+    """Resample an invalid crop of the same assembly, with a strict retry bound.
+
+    The pinned upstream contiguous sampler can select an entirely unresolved
+    region. Keep its >4-observed-atom criterion and retry only that assertion;
+    unrelated data errors must still stop training. The caller's draw seed
+    controls the continuing RNG stream, so retries are reproducible on resume.
+    """
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be positive")
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return crop()
+        except AssertionError as error:
+            if not re.fullmatch(
+                r"resovled_atom_num=(?:np\.int\d+\()?([0-4])\)? <= 4 after ContiguousCropping",
+                str(error),
+            ):
+                raise
+            logging.getLogger(__name__).warning(
+                "Rejected unresolved crop: pdb=%s attempt=%d/%d reason=%s",
+                pdb_id, attempt, max_attempts, error,
+            )
+            if attempt == max_attempts:
+                raise RuntimeError(
+                    f"No resolved crop for PDB {pdb_id} after {max_attempts} attempts"
+                ) from error
 
 
 def chain_contiguous_token_order(chain_ids, residue_ids):

@@ -28,7 +28,7 @@ Use four H100s, 384-token crops, one crop per GPU, eight gradient-accumulation s
 
 ## Resources and provenance
 
-The inspected `cw-rno2a` cluster configuration identifies its H100 fleet as prepaid and fully warm. This run uses that reservation at normal research (`interactive`) priority, without provisioning nodes or altering the cluster. The current four-GPU run is bounded to 4 × 102 = 408 reserved GPU-hours including staging and recovery, retaining its original deadline; the original conservative whole-experiment ceiling of 832 reserved GPU-hours remains an upper bound after allowing for the earlier attempts and diagnostics. Incremental GPU rental is zero under that reservation, with resource usage recorded separately from spend.
+The inspected `cw-rno2a` cluster configuration identifies its H100 fleet as prepaid and fully warm. This run uses that reservation at normal research (`interactive`) priority, without provisioning nodes or altering the cluster. The four-GPU recovery sequence is bounded to 4 × 102 = 408 reserved GPU-hours including staging and recovery; the original conservative whole-experiment ceiling of 832 reserved GPU-hours remains an upper bound after allowing for the earlier attempts and diagnostics. Incremental GPU rental is zero under that reservation, with resource usage recorded separately from spend.
 
 The 50 immutable source shards total 1,057,335,306,240 bytes. A CPU-only job cached their verified bytes in object storage, while the training node extracts them on local scratch. Dataset identity remains the Hugging Face revision/checksum, not the cache location. Source cache, retained checkpoints and diagnostics are estimated below 1,600 GiB; at the [published hot-object-storage price](https://coreweave.com/pricing) of $0.06/GiB/month (checked 2026-10-08), a conservative full-month incremental storage allowance is **$96**. This is the cost-gate estimate for the whole run, including staging and checkpoints. Ongoing storage persists after training; warm/cold tiering may reduce its cost. The repository's Modal reference rate would imply $3,286.40 for 832 H100-hours, but that is not incremental CoreWeave reservation spending.
 
@@ -39,23 +39,29 @@ from helico.experiment import set_experiment, ensure_training_run
 set_experiment("exp22_contact-scale")
 # Whole-run estimate: $96 first-month incremental storage, prepaid GPU allocation.
 spec = dict(
-    job_name="helico-exp22-contact-scale-v8", mode="train", gpus=4,
+    job_name="helico-exp22-contact-scale-v9", mode="train", gpus=4,
     cpu=64, memory="750g", disk="3000g",
     image="pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca",
-    timeout_seconds=357489, config="configs/train/contact-scale-v8.json",
-    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v8",
+    timeout_seconds=324000, config="configs/train/contact-scale-v9.json",
+    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v9",
     priority_band="interactive",
     estimated_incremental_cost_usd=96,
     cost_accounting="Prepaid cw-rno2a reservation; <=1600 GiB storage at $0.06/GiB for one month",
 )
-run = ensure_training_run("full-data-v8", gpu="H100:4", max_steps=20000,
-    crop_size=384, lr=2e-5, est_wall_hours=357489 / 3600, coreweave=spec)
+run = ensure_training_run("full-data-v9", gpu="H100:4", max_steps=20000,
+    crop_size=384, lr=2e-5, est_wall_hours=90, coreweave=spec)
 print(run.meta)
 ```
 
 ## Status
 
-The [v8 run](https://wandb.ai/timodonnell/helico/runs/exp22-contact-scale-v8) is actively training on four H100s. At 2026-10-09 23:36 UTC it completed step 250 (8,000 cumulative crop draws), saved a durable checkpoint, finished its first 32-crop validation and resumed training. Validation contact BCE is 0.03239, distogram loss 1.08654, aligned MSE 0.06997 and smooth-lDDT loss 0.27271. All are finite; these are denoising diagnostics, not FoldBench structure-generation scores. See `data/v8_training_metrics.csv` and `data/v8_validation_metrics.csv`.
+The [v8 run](https://wandb.ai/timodonnell/helico/runs/exp22-contact-scale-v8) completed 2,173 updates and failed at update 2,174 on 2026-10-10 07:33 UTC. The durable step-2,000 checkpoint preserves 64,000 crop draws; 173 completed updates must be replayed. The monitor correctly stopped retries for a data error but did not wake an agent, leaving the run down until the October 12 status check. Local desktop notifications were not a reliable escalation channel.
+
+Across the same 32 fixed validation crops, contact BCE improved from 0.03239 at step 250 to 0.02316 at step 2,000 (28.5%), aligned MSE from 0.06997 to 0.06645 (5.0%), distogram loss from 1.08654 to 1.05713, and smooth-lDDT loss from 0.27271 to 0.26705. Contact BCE reached 0.02200 at step 1,500 and fluctuated thereafter. These are denoising diagnostics, not FoldBench structure-generation or search scores. See `data/v8_training_metrics.csv` and `data/v8_validation_metrics.csv`.
+
+The exact failing draw, 69,546 / dataset index 1,423,895, reproduces an upstream assertion on 6X6J: contiguous cropping selected zero resolved atoms. The explicit dataset wrapper now retries only this precise unresolved-crop assertion, up to eight attempts on the same assembly and sampled chain/interface. Each rejection is logged, the continuing per-draw RNG stream makes recovery reproducible, and other exceptions still fail immediately. The exact draw succeeds after one retry, yielding 384 tokens, 3,134 atoms, 2,607 raw MSA rows and 3,155 atom bonds. A previously valid 2D2H crop retains identical adapted features, and all 16 data/recovery tests pass. See `data/v8_unresolved_crop_failure.txt` and `data/v9_unresolved_crop_reproduction.csv`.
+
+A read-back of the 5.80 GB step-2,000 checkpoint verified all model, EMA and optimizer tensors are finite and that source/data identities and resume configuration match (`data/v8_step2000_checkpoint_verification.csv`). The v9 recovery restores the complete step-2,000 model/EMA/optimizer state with the same scientific settings and data lock. Its 90-hour job allowance stays within the existing 408 reserved GPU-hour recovery ceiling: the entire wall interval from the initial v5 submission to the v8 failure is conservatively charged as 12 hours on four GPUs, leaving 90 hours. The old absolute calendar deadline is rebased once to exclude the roughly 59-hour period with no running job; automatic recoveries retain the new fixed deadline. Incremental storage allowance remains $96 for the whole experiment. Submission and live-training verification are pending.
 
 Checkpoints 200 and 250 are durable. Reading checkpoint 250 back from object storage verified finite model, EMA and optimizer states, the expected source SHA and the unchanged dataset lock (`data/v8_checkpoint_verification.csv`). The run passed the repaired step-167 crop in normal four-GPU training and has continued beyond validation. The persistent monitor remains active; the 20,000-update training run is still in progress.
 

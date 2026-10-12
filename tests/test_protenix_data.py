@@ -1,9 +1,12 @@
 import copy
 import numpy as np
+import pytest
 import torch
 
 from helico.model.losses import diffusion_loss
-from helico.protenix_data import adapt_example, batch_example, chain_contiguous_token_order
+from helico.protenix_data import (
+    adapt_example, batch_example, chain_contiguous_token_order, retry_unresolved_crop,
+)
 from helico.train_contacts import weighted_draws
 
 
@@ -79,3 +82,38 @@ def test_well_ordered_chains_keep_their_original_token_order():
     chains = [9, 9, 2, 2, 2]
     residues = [3, 5, 1, 1, 8]
     np.testing.assert_array_equal(chain_contiguous_token_order(chains, residues), np.arange(5))
+
+
+def test_unresolved_crop_is_retried_with_observable_rejection(caplog):
+    calls = []
+    valid = object()
+    def crop():
+        calls.append(1)
+        if len(calls) == 1:
+            raise AssertionError("resovled_atom_num=np.int64(0) <= 4 after ContiguousCropping")
+        return valid
+    assert retry_unresolved_crop(crop, pdb_id="6x6j") is valid
+    assert len(calls) == 2
+    assert "pdb=6x6j attempt=1/8" in caplog.text
+
+
+@pytest.mark.parametrize("error", [AssertionError("duplicate token"), FileNotFoundError("MSA"),
+                                  ValueError("bad feature")])
+def test_unrelated_crop_errors_are_never_retried(error):
+    calls = []
+    def crop():
+        calls.append(1)
+        raise error
+    with pytest.raises(type(error), match=str(error)):
+        retry_unresolved_crop(crop, pdb_id="test")
+    assert len(calls) == 1
+
+
+def test_unresolved_crop_retry_is_bounded():
+    calls = []
+    def crop():
+        calls.append(1)
+        raise AssertionError("resovled_atom_num=4 <= 4 after ContiguousCropping")
+    with pytest.raises(RuntimeError, match="after 8 attempts"):
+        retry_unresolved_crop(crop, pdb_id="test")
+    assert len(calls) == 8
