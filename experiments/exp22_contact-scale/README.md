@@ -24,11 +24,11 @@ Contacts mean minimum observed heavy-atom distance strictly below 5 Å. An obser
 
 The absorbing-mask process and endpoint/sparse time mixture are unchanged from exp20, with no positive-biased revelation. MSA input, including profile/deletion information, is dropped independently for 20% of crops. Contact input is added to pair initialization and a symmetric contact head predicts clean labels. Train with upstream aligned molecule-weighted MSE and sparse smooth lDDT, using `4 × (MSE + smooth_lDDT) + 0.03 × distogram + 0.1 × masked_contact_BCE + 0.01 × visible_contact_BCE`. The time mixture defines a denoising surrogate rather than an unbiased diffusion ELBO. Coordinate labels retain their supplied chain/atom identity; permutation-aware confidence retraining is not included in this first run.
 
-Use four H100s, 384-token crops, one crop per GPU, eight gradient-accumulation steps (global batch 32), four diffusion samples per crop, one trunk recycle and at most 512 MSA rows. AdamW peaks at 2e-5 for pretrained parameters and 2e-4 for the new contact projection/head after 500 warmup updates and decays to 10% of that rate. Target 20,000 updates (640,000 weighted crop draws), capped at 96 hours of training; the job allows six additional hours for staging. Save optimizer/model/EMA snapshots at step 1, every 50 updates through warmup, and every 250 updates thereafter, with EMA decay 0.999. Resume preserves the data lock and deterministic draw/crop seeds. Online validation uses 32 fixed crops from the unchanged validation membership, reporting contact BCE and denoising losses; these are not FoldBench structure-generation scores. FoldBench remains held out for subsequent structure/search evaluation.
+Use eight H100s, 384-token crops, one crop per GPU, four gradient-accumulation steps (global batch 32), four diffusion samples per crop, one trunk recycle and at most 512 MSA rows. AdamW peaks at 2e-5 for pretrained parameters and 2e-4 for the new contact projection/head after 500 warmup updates and decays to 10% of that rate. Target 20,000 updates (640,000 weighted crop draws), with the original 96-hour trainer safeguard; the eight-GPU continuation has a tighter 44-hour job deadline including staging. Save optimizer/model/EMA snapshots at step 1, every 50 updates through warmup, and every 250 updates thereafter, with EMA decay 0.999. Resume preserves the data lock and deterministic draw/crop seeds. Online validation uses 32 fixed crops from the unchanged validation membership, reporting contact BCE and denoising losses; these are not FoldBench structure-generation scores. FoldBench remains held out for subsequent structure/search evaluation.
 
 ## Resources and provenance
 
-The inspected `cw-rno2a` cluster configuration identifies its H100 fleet as prepaid and fully warm. This run uses that reservation at normal research (`interactive`) priority, without provisioning nodes or altering the cluster. The four-GPU recovery sequence is bounded to 4 × 102 = 408 reserved GPU-hours including staging and recovery; the original conservative whole-experiment ceiling of 832 reserved GPU-hours remains an upper bound after allowing for the earlier attempts and diagnostics. Incremental GPU rental is zero under that reservation, with resource usage recorded separately from spend.
+The inspected `cw-rno2a` cluster configuration identifies its H100 fleet as prepaid and fully warm. This run uses that reservation at normal research (`interactive`) priority, without provisioning nodes or altering the cluster. The recovery sequence remains within 408 reserved GPU-hours: 48 GPU-hours conservatively charged to v5–v8, up to 4 GPU-hours for v9 staging, and 8 × 44 = 352 GPU-hours for v10; the original conservative whole-experiment ceiling of 832 reserved GPU-hours remains an upper bound after allowing for the earlier attempts and diagnostics. Incremental GPU rental is zero under that reservation, with resource usage recorded separately from spend.
 
 The 50 immutable source shards total 1,057,335,306,240 bytes. A CPU-only job cached their verified bytes in object storage, while the training node extracts them on local scratch. Dataset identity remains the Hugging Face revision/checksum, not the cache location. Source cache, retained checkpoints and diagnostics are estimated below 1,600 GiB; at the [published hot-object-storage price](https://coreweave.com/pricing) of $0.06/GiB/month (checked 2026-10-08), a conservative full-month incremental storage allowance is **$96**. This is the cost-gate estimate for the whole run, including staging and checkpoints. Ongoing storage persists after training; warm/cold tiering may reduce its cost. The repository's Modal reference rate would imply $3,286.40 for 832 H100-hours, but that is not incremental CoreWeave reservation spending.
 
@@ -39,21 +39,23 @@ from helico.experiment import set_experiment, ensure_training_run
 set_experiment("exp22_contact-scale")
 # Whole-run estimate: $96 first-month incremental storage, prepaid GPU allocation.
 spec = dict(
-    job_name="helico-exp22-contact-scale-v9", mode="train", gpus=4,
-    cpu=64, memory="750g", disk="3000g",
+    job_name="helico-exp22-contact-scale-v10", mode="train", gpus=8,
+    cpu=96, memory="1000g", disk="3000g",
     image="pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca",
-    timeout_seconds=324000, config="configs/train/contact-scale-v9.json",
-    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v9",
+    timeout_seconds=158400, config="configs/train/contact-scale-v10.json",
+    output_uri="s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v10",
     priority_band="interactive",
     estimated_incremental_cost_usd=96,
     cost_accounting="Prepaid cw-rno2a reservation; <=1600 GiB storage at $0.06/GiB for one month",
 )
-run = ensure_training_run("full-data-v9", gpu="H100:4", max_steps=20000,
-    crop_size=384, lr=2e-5, est_wall_hours=90, coreweave=spec)
+run = ensure_training_run("full-data-v10", gpu="H100:8", max_steps=20000,
+    crop_size=384, lr=2e-5, est_wall_hours=44, coreweave=spec)
 print(run.meta)
 ```
 
 ## Status
+
+The October 12 capacity check found multiple idle eight-H100 nodes. At the user's request, v10 scales the continuation from four to eight H100s, reducing accumulation from eight to four while preserving effective batch 32, all remaining global crop draws, optimizer/EMA state and scientific hyperparameters. The four-GPU v9 job is being replaced during data staging, before any new optimizer updates or checkpoints. v10 therefore restores the verified v8 step-2,000 checkpoint directly. The prior eight-GPU first-batch preflight took 7.37 seconds for its warmed-up update, versus roughly 14–15 seconds/update in sustained four-GPU training; approximately 2× acceleration is a projection until measured on the resumed full-data run. The current launcher uses one node with up to eight GPUs; larger allocations require a multi-node rendezvous and launch path. v10 submission and live throughput verification are pending.
 
 The [v8 run](https://wandb.ai/timodonnell/helico/runs/exp22-contact-scale-v8) completed 2,173 updates and failed at update 2,174 on 2026-10-10 07:33 UTC. The durable step-2,000 checkpoint preserves 64,000 crop draws; 173 completed updates must be replayed. The monitor correctly stopped retries for a data error but did not wake an agent, leaving the run down until the October 12 status check. Local desktop notifications were not a reliable escalation channel.
 
@@ -63,7 +65,7 @@ The exact failing draw, 69,546 / dataset index 1,423,895, reproduces an upstream
 
 A read-back of the 5.80 GB step-2,000 checkpoint verified all model, EMA and optimizer tensors are finite and that source/data identities and resume configuration match (`data/v8_step2000_checkpoint_verification.csv`). The v9 recovery restores the complete step-2,000 model/EMA/optimizer state with the same scientific settings and data lock. Its 90-hour job allowance stays within the existing 408 reserved GPU-hour recovery ceiling: the entire wall interval from the initial v5 submission to the v8 failure is conservatively charged as 12 hours on four GPUs, leaving 90 hours. The old absolute calendar deadline is rebased once to exclude the roughly 59-hour period with no running job; automatic recoveries retain the new fixed deadline. Incremental storage allowance remains $96 for the whole experiment. Job `/bizon/helico-exp22-contact-scale-v9` was submitted from `30e788a1df986543125d8e743fba570bfc8b2301` on 2026-10-12 at approximately 18:30 UTC and assigned to node `gb95a30`. The persistent monitor is active and has verified the parent checkpoint; at this check the task is building its environment, so new optimizer updates are not yet verified. [W&B destination](https://wandb.ai/timodonnell/helico/runs/exp22-contact-scale-v9).
 
-Checkpoints 200 and 250 are durable. Reading checkpoint 250 back from object storage verified finite model, EMA and optimizer states, the expected source SHA and the unchanged dataset lock (`data/v8_checkpoint_verification.csv`). The run passed the repaired step-167 crop in normal four-GPU training and has continued beyond validation. The persistent monitor remains active; the 20,000-update training run is still in progress.
+Checkpoints 200 and 250 are durable. Reading checkpoint 250 back from object storage verified finite model, EMA and optimizer states, the expected source SHA and the unchanged dataset lock (`data/v8_checkpoint_verification.csv`). The run passed the repaired step-167 crop in normal four-GPU training and has continued beyond validation. Those October 9 observations precede the later step-2,174 failure and recovery recorded above.
 
 The v7 recovery completed 166 updates on four H100s before failing at update 167 (2026-10-09 22:25 UTC). Checkpoints 50, 100 and 150 are durable. A read-back of checkpoint 50 loaded all 3,832 model tensors, 3,832 EMA tensors and 3,538 optimizer states, verified finite values throughout, and confirmed the source and data-lock identities. See `data/v7_checkpoint_verification.csv`, `data/v7_training_metrics.csv` and [the v7 W&B run](https://wandb.ai/timodonnell/helico/runs/exp22-contact-scale-v7).
 
