@@ -16,6 +16,8 @@ import subprocess
 import sys
 import time
 
+from helico.checkpoint_storage import transient_storage_failure
+
 
 def retryable_failure(text):
     text = text.lower()
@@ -24,9 +26,7 @@ def retryable_failure(text):
                                "illegal memory access", "device-side assert", "sigsegv",
                                "assertionerror", "filenotfounderror", "shape mismatch")):
         return False
-    return any(x in text for x in ("worker lost", "node lost", "worker_failed",
-                                   "endpointconnectionerror", "readtimeouterror",
-                                   "connection reset by peer", "temporarily unavailable",
+    return transient_storage_failure(text) or any(x in text for x in ("worker lost", "node lost", "worker_failed",
                                    "watchdog caught collective operation timeout"))
 
 

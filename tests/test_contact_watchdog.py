@@ -10,6 +10,8 @@ spec.loader.exec_module(watchdog)
 
 
 @pytest.mark.parametrize("message", ["worker_failed", "Node lost", "EndpointConnectionError", "ReadTimeoutError",
+                                     "ClientError: (IncompleteBody) when calling the UploadPart operation",
+                                     "OSError: You did not provide the number of bytes specified by the Content-Length HTTP header",
                                      "Watchdog caught collective operation timeout",
                                      "Watchdog caught collective operation timeout\n  File torch/utils/data/dataloader.py"])
 def test_transient_infrastructure_errors_can_resume(message):
@@ -17,6 +19,7 @@ def test_transient_infrastructure_errors_can_resume(message):
 
 
 @pytest.mark.parametrize("message", ["worker_failed: OOMKilled", "nonfinite gradient; connection reset by peer",
+                                     "DataLoader worker: IncompleteBody",
                                      "DataLoader worker lost", "DataLoader timed out after 300 seconds; worker_failed",
                                      "CUDA illegal memory access", "SIGABRT",
                                      "FileNotFoundError: temporarily unavailable", "AssertionError"])

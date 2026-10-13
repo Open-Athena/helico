@@ -1,0 +1,42 @@
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/tmp/helico/venv/lib/python3.12/site-packages/s3fs/core.py", line 169, in _error_wrapper
+[rank0]:     return await func(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/helico/venv/lib/python3.12/site-packages/aiobotocore/context.py", line 36, in wrapper
+[rank0]:     return await func(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/helico/venv/lib/python3.12/site-packages/aiobotocore/client.py", line 436, in _make_api_call
+[rank0]:     raise error_class(parsed_response, operation_name)
+[rank0]: botocore.exceptions.ClientError: An error occurred (IncompleteBody) when calling the UploadPart operation: You did not provide the number of bytes specified by the Content-Length HTTP header. Received: 0, Expected: 52428800
+[rank0]: The above exception was the direct cause of the following exception:
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "<frozen runpy>", line 198, in _run_module_as_main
+[rank0]:   File "<frozen runpy>", line 88, in _run_code
+[rank0]:   File "/app/src/helico/train_contacts.py", line 343, in <module>
+[rank0]:     main()
+[rank0]:   File "/app/src/helico/train_contacts.py", line 318, in main
+[rank0]:     save_checkpoint(args.output, model, optimizer, ema, step, cfg, lock)
+[rank0]:   File "/app/src/helico/train_contacts.py", line 161, in save_checkpoint
+[rank0]:     fs.put_file(str(path), uri)
+[rank0]:   File "/tmp/helico/venv/lib/python3.12/site-packages/fsspec/asyn.py", line 217, in wrapper
+[rank0]:     return sync(self.loop, func, *args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/helico/venv/lib/python3.12/site-packages/fsspec/asyn.py", line 106, in sync
+[rank0]:     raise return_result
+[rank0]:   File "/tmp/helico/venv/lib/python3.12/site-packages/fsspec/asyn.py", line 59, in _runner
+[rank0]:     result[0] = await coro
+[rank0]:                 ^^^^^^^^^^
+[rank0]:   File "/tmp/helico/venv/lib/python3.12/site-packages/s3fs/core.py", line 1518, in _put_file
+[rank0]:     out = await self._upload_file_part_concurrent(
+[rank0]:           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/helico/venv/lib/python3.12/site-packages/s3fs/core.py", line 1582, in _upload_file_part_concurrent
+[rank0]:     await asyncio.gather(
+[rank0]:   File "/tmp/helico/venv/lib/python3.12/site-packages/s3fs/core.py", line 1561, in _upload_chunk
+[rank0]:     result = await self._call_s3(
+[rank0]:              ^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/helico/venv/lib/python3.12/site-packages/s3fs/core.py", line 466, in _call_s3
+[rank0]:     return await _error_wrapper(
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/tmp/helico/venv/lib/python3.12/site-packages/s3fs/core.py", line 216, in _error_wrapper
+[rank0]:     raise err
+[rank0]: OSError: [Errno 22] You did not provide the number of bytes specified by the Content-Length HTTP header. Received: 0, Expected: 52428800

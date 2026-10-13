@@ -148,6 +148,7 @@ def validate(model, datasets, count, rank, world, seed):
 
 def save_checkpoint(output, model, optimizer, ema, step, config, lock, *, final=False):
     from helico.coreweave_worker import filesystem
+    from helico.checkpoint_storage import publish_checkpoint
     path = output / ("final.pt" if final else f"step-{step:06d}.pt")
     tmp = path.with_suffix(".pending")
     torch.save({"model_state_dict": model.state_dict(), "ema_state_dict": ema,
@@ -157,12 +158,7 @@ def save_checkpoint(output, model, optimizer, ema, step, config, lock, *, final=
                 "sampler": "global-weighted-draw-seed-v1"}, tmp)
     tmp.replace(path)
     fs = filesystem(durable=True)
-    uri = config["output_uri"] + "/" + path.name
-    fs.put_file(str(path), uri)
-    if fs.size(uri) != path.stat().st_size:
-        raise RuntimeError("Checkpoint upload size mismatch")
-    with fs.open(config["output_uri"] + "/latest.json", "w") as f:
-        json.dump({"step": step, "checkpoint": uri, "data_lock_sha256": lock["lock_sha256"]}, f)
+    uri = publish_checkpoint(fs, path, config["output_uri"], step, lock["lock_sha256"])
     # Only local scratch is reclaimed; all uploaded snapshots remain durable.
     for old in output.glob("step-*.pt"):
         if old != path:
