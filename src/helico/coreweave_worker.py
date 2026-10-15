@@ -209,14 +209,80 @@ def train(config, config_path):
     fs.put_file(str(scratch / "run/result.json"), config["output_uri"] + "/result.json")
 
 
+def evaluate(config, config_path):
+    """Evaluate prepared inputs with one independent replica per GPU."""
+    from helico.contact_evaluate import select_panel
+    import wandb
+    scratch = Path('/tmp/helico/evaluation'); scratch.mkdir(parents=True, exist_ok=True)
+    fs = filesystem(durable=True)
+    output_uri = config['output_uri']
+    fs.put_file(str(config_path), output_uri + '/evaluation.json')
+    checkpoint = scratch / 'final.pt'
+    if not checkpoint.exists() or file_sha256(checkpoint) != config['checkpoint_sha256']:
+        fs.get_file(config['checkpoint_uri'], str(checkpoint), chunksize=256 * 1024**2, max_concurrency=4)
+    if file_sha256(checkpoint) != config['checkpoint_sha256']:
+        raise ValueError('Evaluation checkpoint checksum mismatch')
+    features = scratch / 'features'; features.mkdir(exist_ok=True)
+    manifest_bytes = fs.cat_file(config['features_uri'] + '/manifest.json')
+    import hashlib
+    if hashlib.sha256(manifest_bytes).hexdigest() != config['features_manifest_sha256']:
+        raise ValueError('Evaluation manifest checksum mismatch')
+    (features / 'manifest.json').write_bytes(manifest_bytes)
+    records = json.loads(manifest_bytes)
+    if config.get('panel_per_group'):
+        records = select_panel(records, config['panel_per_group'], config.get('seed', 2301))
+    if config.get('target_ids'):
+        records = [r for r in records if r['pdb_id'] in config['target_ids']]
+    def download(record):
+        if record['status'] != 'ready': return
+        path = features / (record['pdb_id'] + '.pt.gz')
+        if not path.exists() or file_sha256(path) != record['sha256']:
+            fs.get_file(config['features_uri'] + '/' + path.name, str(path))
+        if file_sha256(path) != record['sha256']:
+            raise ValueError('Evaluation feature checksum mismatch: ' + record['pdb_id'])
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        list(pool.map(download, records))
+    initial = []
+    if 'protenix' in config['weights']:
+        path = fetch('https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_default_v1.0.0.pt',
+                     scratch / 'protenix_base_default_v1.0.0.pt')
+        if file_sha256(path) != '2b7d5a8b30494514fc47fd2271a16260528cdba170ba09cc112fdecd8f85ec04':
+            raise ValueError('Protenix initialization checksum mismatch')
+        initial = ['--initial', str(path)]
+    run = wandb.init(project='helico', entity='timodonnell', id=config['run_name'],
+        name=config['run_name'], resume='allow', job_type='evaluation',
+        config={**config, 'code_sha': os.environ['HELICO_CODE_SHA']})
+    started = time.monotonic()
+    try:
+        command = [sys.executable, '-m', 'torch.distributed.run', '--standalone',
+            '--nnodes=1', f"--nproc-per-node={config['gpus']}", '-m', 'helico.contact_evaluate',
+            '--config', str(config_path), '--features', str(features),
+            '--checkpoint', str(checkpoint), '--output', str(scratch / 'results'), *initial]
+        run_trainer(command, dict(os.environ), scratch, config)
+        results = [json.loads(fs.cat_file(output_uri + f'/ranks/{r}.json')) for r in range(config['gpus'])]
+        if any(r['status'] != 'complete' or r['failures'] for r in results):
+            raise RuntimeError('An evaluation rank did not complete cleanly')
+        result = dict(status='complete', targets=sum(r['targets'] for r in results),
+            ranks=len(results), wall_seconds=time.monotonic() - started,
+            code_sha=os.environ['HELICO_CODE_SHA'])
+        fs.pipe_file(output_uri + '/result.json', json.dumps(result).encode())
+        run.summary.update(result)
+        run.finish()
+    except BaseException:
+        run.finish(exit_code=1)
+        raise
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("mode", choices=["mirror", "train"])
+    p.add_argument("mode", choices=["mirror", "train", "evaluate"])
     p.add_argument("--config", type=Path, required=True)
     args = p.parse_args()
     config = json.loads(args.config.read_text())
     if args.mode == "mirror":
         mirror(config)
+    elif args.mode == 'evaluate':
+        evaluate(config, args.config.resolve())
     else:
         train(config, args.config.resolve())
 

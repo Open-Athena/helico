@@ -319,6 +319,7 @@ def ensure_bench_run(
     est_wall_hours: float = 2.0,
     force: bool = False,
     publish: bool = False,
+    coreweave: dict | None = None,
 ) -> BenchRun:
     """Run FoldBench idempotently. Returns cached result if `name` has run before.
 
@@ -338,6 +339,15 @@ def ensure_bench_run(
     volume_path = f"/experiments/{slug}/{name}"
 
     est_cost = _estimate_bench_cost(gpu=gpu, workers=workers, wall_hours=est_wall_hours)
+    if coreweave is not None:
+        if publish or force:
+            raise ValueError('Use a new CoreWeave step name; publish its completed artifacts explicitly')
+        if coreweave.get('mode') != 'evaluate' or not coreweave.get('cost_accounting'):
+            raise ValueError('CoreWeave evaluation requires evaluate mode and explicit cost accounting')
+        est_cost = float(coreweave['estimated_incremental_cost_usd'])
+        if est_cost < 0 or not math.isfinite(est_cost):
+            raise ValueError('Invalid CoreWeave cost estimate')
+        volume_path = coreweave['output_uri']
 
     if is_dry_run():
         _log_start("ensure_bench_run", name, "dry-run", est_cost)
@@ -349,6 +359,25 @@ def ensure_bench_run(
         return _load_bench_run(name, slug, scratch_dir, volume_path, cached=False)
 
     cache_dir = _cache_dir(slug) / "benches" / name
+
+    if coreweave is not None:
+        receipt = cache_dir / 'submission.json'
+        if receipt.exists():
+            meta = json.loads(receipt.read_text())
+            previous = {k: v for k, v in meta['spec'].items() if k != 'git_sha'}
+            if previous != coreweave:
+                raise ValueError('Existing CoreWeave evaluation has a different spec; use a new name')
+            return BenchRun(name, slug, cache_dir, volume_path, True, meta)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        spec_path = cache_dir / 'spec.json'
+        spec_path.write_text(json.dumps({**coreweave, 'git_sha': _git_sha()}, indent=2))
+        env = {**os.environ, 'PYTHONPATH': str(REPO_ROOT / 'src')}
+        _log_start('ensure_bench_run', name, 'submitting (CoreWeave)', est_cost)
+        subprocess.run([os.environ['HELICO_IRIS_PYTHON'], '-m', 'helico.coreweave',
+            str(spec_path.resolve()), '--cluster-config', os.environ['HELICO_IRIS_CONFIG'],
+            '--workspace', str(REPO_ROOT), '--output', str(receipt.resolve())],
+            env=env, check=True, cwd=REPO_ROOT)
+        return BenchRun(name, slug, cache_dir, volume_path, False, json.loads(receipt.read_text()))
 
     if not force:
         if _bench_complete_local(cache_dir):

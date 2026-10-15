@@ -15,4 +15,4 @@ UV=/tmp/helico/tools/bin/uv
 "$UV" export --frozen --extra scale --no-dev --no-emit-project --no-hashes -o /tmp/helico/requirements.txt
 "$UV" pip install --python /tmp/helico/venv/bin/python -r /tmp/helico/requirements.txt
 "$UV" pip install --python /tmp/helico/venv/bin/python --no-deps -e .
-exec /tmp/helico/venv/bin/python -m helico.coreweave_worker train --config "$2"
+exec /tmp/helico/venv/bin/python -m helico.coreweave_worker "$1" --config "$2"

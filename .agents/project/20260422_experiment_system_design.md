@@ -37,6 +37,11 @@ optimizer/EMA checkpoints and run metadata live in durable object storage.
 Prepaid reserved GPU-hours are reported separately from incremental spending;
 the cost gate includes first-month storage for the full planned run.
 
+CoreWeave evaluation uses `ensure_bench_run(coreweave=...)` with the same dry-run
+gate and immutable submission-receipt semantics. Evaluation workers publish
+per-target artifacts and completion markers; a submitted receipt is not a
+completed benchmark. Input labels remain separate from inference features.
+
 ## Lifecycle
 
 ```

@@ -28,7 +28,7 @@ def submit(spec: dict, cluster_config: Path, workspace: Path) -> dict:
     env = {"PYTHONUNBUFFERED": "1", "WANDB_PROJECT": "helico",
            "WANDB_ENTITY": "timodonnell", "OMP_NUM_THREADS": "2",
            "HELICO_CODE_SHA": spec["git_sha"]}
-    if spec["mode"] == "train":
+    if spec["mode"] in {"train", "evaluate"}:
         key = os.environ.get("WANDB_API_KEY")
         if not key:
             auth = netrc.netrc().authenticators("api.wandb.ai")
