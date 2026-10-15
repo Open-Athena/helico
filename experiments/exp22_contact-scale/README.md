@@ -55,6 +55,24 @@ print(run.meta)
 
 ## Status
 
+**Completed:** all eight ranks finished step 20,000 on 2026-10-14 at approximately 15:17 UTC (11:17 EDT), reaching the full target of 640,000 weighted crop draws. Iris reports success with exit code zero, W&B reports `finished`, and the persistent watchdog recorded completion and exited normally. v11 recovered automatically from one scheduler preemption; no external watchdog resubmission was required. Its 1,100 logged update timings have median 7.68 seconds, excluding staging, validation, checkpoint upload and interruptions.
+
+The final checkpoint is `s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v11/final.pt` (5,795,724,155 bytes). A fresh download and read-back on October 15 verifies step 20,000, source `46cffd6939c9ea17d2103d5b8f5d79ba9e35444d`, the unchanged data lock, and finite values in all 3,832 model tensors, 3,832 EMA tensors and 10,614 optimizer tensors. Its SHA256 is `355788e40f610c8cc662e4c10f8225204668dfdcaf92ee1f04d744f8d5ea8b9a`. See `data/v11_final_checkpoint_verification.csv` and `data/v11_completion.csv`.
+
+Final validation on the same 32 fixed crops, with MSA enabled and all contact inputs unknown:
+
+| Update | Contact BCE | Aligned MSE | Distogram | Smooth-lDDT loss |
+| --- | --- | --- | --- | --- |
+| 250 | 0.03239 | 0.06997 | 1.08654 | 0.27271 |
+| 9,000 | 0.01981 | 0.06615 | 1.04396 | 0.26648 |
+| 20,000 | 0.01941 | 0.06636 | 1.04402 | 0.26663 |
+
+Final contact BCE is 40.1% below step 250 and 2.0% below step 9,000. The lowest recorded validation BCE is 0.01935 at step 17,500; the final value is 0.3% higher. Coordinate denoising metrics show little change after the earlier improvements. These are within-run comparisons, with no separate trained control or baseline quality evaluation. The requested training target and finite-checkpoint checks are met; FoldBench structure generation and contact-guided search have not been evaluated. No usable-model quality claim follows from these losses alone. Complete v11 histories are saved in `data/v11_training_metrics.csv` and `data/v11_validation_metrics.csv`; [W&B run](https://wandb.ai/timodonnell/helico/runs/exp22-contact-scale-v11).
+
+## Recovery history
+
+The entries below record observations at each recovery; the completed state above supersedes their running-status statements.
+
 At 2026-10-13 12:51 UTC, v10 completed update 9,250 (296,000 crop draws) but failed while uploading that checkpoint. The object store rejected an `UploadPart` with `IncompleteBody`: received zero bytes for a 50 MiB body. The step-9,250 object does not exist; the latest durable checkpoint is 9,000, preserving 288,000 crop draws. The job ran for about 18 hours on eight H100s without preemption. A fresh read-back of checkpoint 9,000 confirms all model, EMA and optimizer tensors are finite, with matching source/data identities and compatible recovery configuration (`data/v10_checkpoint_verification.csv`).
 
 The scale-up delivered the expected speed: the median logged update time since step 8,000 is 7.73 seconds (mean 8.08), versus roughly 14–15 seconds on four GPUs. The same 32 validation crops at step 9,000 give contact BCE 0.01981 (14.5% lower than step 2,000 and 38.8% lower than step 250), aligned MSE 0.06615, distogram 1.04396, and smooth-lDDT loss 0.26648. Coordinate denoising has largely plateaued since step 2,000. These diagnostics do not establish FoldBench or contact-search quality. See `data/v10_training_metrics.csv` and `data/v10_validation_metrics.csv`.

@@ -1,0 +1,2 @@
+job_id,job_state,monitor_status,wandb_state,completed_step,crop_draws,completed_ranks,last_rank_completed_utc,monitor_confirmed_utc,preemption_count,watchdog_restart_count,checkpoint_uri,checkpoint_bytes,data_lock_sha256,finished_steps
+/bizon/helico-exp22-contact-scale-v11,succeeded,completed,finished,20000,640000,8,2026-10-14T15:17:43.849052+00:00,2026-10-14T15:21:50.710696+00:00,1,0,s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v11/final.pt,5795724155,2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114,True
