@@ -53,7 +53,8 @@ def build_ref_features(
     """
     B, N_atoms = batch["atom_element_idx"].shape
     device = batch["atom_element_idx"].device
-    dtype = batch.get("ref_coords", batch["atom_coords"]).dtype
+    coords = batch["ref_coords"] if "ref_coords" in batch else batch["atom_coords"]
+    dtype = coords.dtype
 
     if "ref_charge" in batch:
         # arcsinh (per AF3 SI §2.8): compresses large charges but preserves sign
@@ -181,7 +182,8 @@ def build_msa_raw(
     """
     B, N_tok = batch["token_types"].shape
     device = batch["token_types"].device
-    dtype = batch.get("ref_coords", batch["atom_coords"]).dtype
+    coords = batch["ref_coords"] if "ref_coords" in batch else batch["atom_coords"]
+    dtype = coords.dtype
 
     msa_int = batch.get("msa")
     if msa_int is not None:

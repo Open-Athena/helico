@@ -81,6 +81,19 @@ def test_geometry_ignores_unresolved_atoms():
     assert scores['lddt_pairs'] == 1
 
 
+def test_feature_builders_accept_inference_inputs_without_native_coordinates():
+    from helico.model.features import build_ref_features, build_msa_raw
+    batch = dict(ref_coords=torch.zeros(1, 3, 3),
+                 atom_element_idx=torch.tensor([[6, 7, 8]]),
+                 token_types=torch.ones(1, 3, dtype=torch.long),
+                 msa=torch.zeros(1, 1, 3, dtype=torch.long))
+    charge, reference = build_ref_features(batch)
+    msa, _ = build_msa_raw(batch)
+    assert charge.shape == (1, 3, 1)
+    assert reference.shape == (1, 3, 385)
+    assert msa.shape == (1, 1, 3, 34)
+
+
 def test_panel_selection_is_disjoint_and_order_independent():
     records = [dict(pdb_id=str(i), status='ready', eval_types=[kind])
                for i, kind in enumerate(['ligand_prot'] * 3 + ['prot_prot'] * 3 + ['intra_prot'] * 3)]

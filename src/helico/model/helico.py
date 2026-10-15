@@ -111,7 +111,7 @@ class Helico(nn.Module):
 
         # Build reference features and atom mask
         ref_charge, ref_features = build_ref_features(batch)
-        atom_mask = batch.get("atom_mask", torch.ones(B, batch["atom_coords"].shape[1], device=device))
+        atom_mask = batch.get("atom_mask", torch.ones(B, batch["ref_coords"].shape[1], device=device))
         atom_mask = atom_mask.float()
 
         # 1. Input embedding -> s_inputs (B, N_tok, 449)

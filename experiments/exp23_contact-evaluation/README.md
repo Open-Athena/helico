@@ -45,14 +45,14 @@ import os
 from helico.experiment import set_experiment, ensure_bench_run
 set_experiment('exp23_contact-evaluation')
 stage = os.environ.get('HELICO_EVAL_STAGE', 'smoke')
-stage_configs = {'smoke': ('contact-smoke-v1', 2), 'audit': ('contact-audit-v1', 2)}
+stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2)}
 config_name, hours = stage_configs[stage]
 # Whole-study allowance: $96 incremental storage/transfer, <=512 prepaid H100-hours.
 spec = dict(job_name=f'helico-exp23-{config_name}', mode='evaluate', gpus=8,
     cpu=96, memory='1000g', disk='200g',
     image='pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca',
     timeout_seconds=hours * 3600, config=f'configs/eval/{config_name}.json',
-    output_uri=f's3://marin-us-east-02a/helico/evaluations/exp23/{stage}-v1',
+    output_uri=f"s3://marin-us-east-02a/helico/evaluations/exp23/{config_name.removeprefix('contact-')}",
     priority_band='interactive', estimated_incremental_cost_usd=96,
     cost_accounting='Whole exp23 study: <=512 prepaid H100-hours and $96 first-month storage/transfer allowance')
 run = ensure_bench_run(config_name, coreweave=spec, gpu='H100', workers=8,
