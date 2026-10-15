@@ -36,7 +36,7 @@ def conditioning():
         ax.axhline(0, color='.5', linewidth=.7)
     axes[0].legend(frameon=False)
     fig.suptitle('Contact conditioning: structural control remains weak', fontsize=14, x=.51)
-    fig.text(.02, .015, 'Oracle validation diagnostic; 8 targets/group, 2 seeds. Bars: target means; 95% target-bootstrap intervals.\n'
+    fig.text(.02, .015, 'Oracle validation diagnostic; 8 targets/group, 2 seeds; targets without eligible corrections omitted. 95% target-bootstrap intervals.\n'
              'First two panels request up to four corrections. *Ligand group includes ions/glycans. lDDT uses fixed atom/chain correspondence.', fontsize=9)
     fig.tight_layout(rect=(0,.11,1,.94))
     fig.savefig(ROOT/'plots/contact-conditioning.png');plt.close(fig)
@@ -54,12 +54,13 @@ def search():
         ax.axvline(0,color='.5',linewidth=.8)
         ax.set_yticks([1,0],['Contact tree','Progressive unmasking'])
         ax.set_ylim(-.5,1.5);ax.set_xlim(-.006,.012)
-        ax.set_xlabel('Observed-atom lDDT difference from ordinary sampling')
+        ax.set_xlabel('Observed-atom lDDT difference\nfrom ordinary sampling')
         ax.set_title(title,fontsize=11)
     fig.suptitle('No resolved search advantage on the 24-target panel',fontsize=14)
     fig.text(.02,.025,'Same model-compute allowance per target/seed; 200 diffusion steps. 95% paired target-bootstrap intervals.\n'
-             'Fixed atom/chain geometry diagnostic; ordinary sampling batches 4 structures. This unmasking variant generates coordinates at every step.',fontsize=9)
-    fig.tight_layout(rect=(0,.13,1,.93))
+             'Fixed atom/chain geometry; ordinary sampling batches 4 structures.\n'
+             'This unmasking variant generates coordinates at every revelation step.',fontsize=8)
+    fig.tight_layout(rect=(0,.18,1,.93))
     fig.savefig(ROOT/'plots/contact-search.png');plt.close(fig)
 
 

@@ -46,9 +46,11 @@ from helico.experiment import set_experiment, ensure_bench_run
 set_experiment('exp23_contact-evaluation')
 stage = os.environ.get('HELICO_EVAL_STAGE', 'smoke')
 stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2), 'development': ('contact-development-v1', 4), 'conditioning': ('contact-conditioning-v1', 4), 'search': ('contact-search-v1', 6), 'validation-structures': ('contact-validation-structures-v2', 6), 'alternative-states': ('contact-alternative-states-v1', 2), 'blind-preflight': ('contact-blind-preflight-v2', 3), 'contact-hypotheses': ('contact-contact-hypotheses-v1', 4)}
+stage_configs.update({f'foldbench-{weight}-{shard}': (f'contact-foldbench-{weight}-{shard}-v1', 6)
+    for weight in ['ema', 'protenix'] for shard in range(4)})
 config_name, hours = stage_configs[stage]
 # Whole-study allowance: $96 incremental storage/transfer, <=512 prepaid H100-hours.
-gpus = 4 if stage in {'alternative-states', 'contact-hypotheses', 'blind-preflight', 'validation-structures'} else 8
+gpus = 4 if stage.startswith('foldbench-') or stage in {'alternative-states', 'contact-hypotheses', 'blind-preflight', 'validation-structures'} else 8
 spec = dict(job_name=f'helico-exp23-{config_name}', mode='evaluate', gpus=gpus,
     cpu=12*gpus, memory=f'{125*gpus}g', disk='200g',
     image='pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca',
@@ -84,3 +86,5 @@ The first blind shape preflight exposed a cubic dummy-template attention allocat
 The complete 24-target matched-time comparison does not resolve an accuracy advantage: tree minus ordinary confidence-selected observed-atom lDDT is +0.00369 (95% target-bootstrap interval −0.00172 to +0.00990), and progressive unmasking is +0.00046 (−0.00339 to +0.00424). Oracle-best quality also does not improve. These numbers use the full unmasking time horizon, where all 24 targets have ordinary candidates; the shorter tree horizon has one target without a complete ordinary batch and reports that missing value explicitly. See `plots/contact-search.png`.
 
 The 8-GPU validation-structures-v1 allocation was preempted before producing any predictions and then remained queued. It was canceled and replaced by validation-structures-v2, using four GPUs and deterministic token-count balancing. Input identities, seeds, model settings and the target set are unchanged. Full FoldBench is planned as four 4-GPU shards per model, for up to 32 GPUs without requiring eight free GPUs on a single node.
+
+At the complete unmasking time horizon, ordinary sampling yields 5.40 mean CA-coordinate clusters (2 Å greedy threshold), versus 3.77 for tree search and 4.04 for progressive unmasking. Cluster-center geometry quality changes are small. This fixed-chain-correspondence diversity measure is affected by candidate count and homomer chain permutations; it is not evidence that these are stable or experimentally observed states. The matched-time alternative-reference diagnostic is reported separately.
