@@ -67,7 +67,7 @@ print(run.meta)
 
 ## Status
 
-All 384 full validation inputs were prepared without failures. The GPU preflight, full contact audit, 24-target structural development evaluation, conditioning, matched-time search and 384-target structure comparison completed without failures. Efficient contact-hypothesis sampling is pending completion. FoldBench inputs and the official scoring harness are being prepared; blind benchmark results are pending.
+All validation stages are complete without target failures, including contact-only hypothesis sampling. Eight full-input FoldBench shards are submitted for 1,482 ready complexes, with another 13 awaiting external alignments and 27 explicit resource-cap failures. Official blind results are pending.
 
 ### Validation weight selection
 
@@ -108,3 +108,11 @@ Official benchmark summaries will keep confidence-selected performance separate 
 All 768 arms (384 complexes, EMA and initialization, two samples each) completed without resource or inference failures. Confidence-selected observed-atom lDDT is 0.79033 for EMA versus 0.77957 for initialization: paired difference +0.01076, 95% assembly-bootstrap interval +0.00728 to +0.01475. Interface lDDT is 0.48111 versus 0.47559 on 331 evaluable complexes: difference +0.00552, interval −0.00702 to +0.01920. These fixed-correspondence diagnostics support a modest full-structure improvement but do not resolve an interface improvement. See `plots/full-validation.png` and `data/validation-structures-v2/`.
 
 Among EMA's highest-ranked missing-contact proposals with generated distance at least 7 Å, mean predicted probabilities are 0.824 within proteins, 0.568 between proteins and 0.603 for protein–ligand pairs. Observed reference-contact fractions are 0.391, 0.241 and 0.234. Unknown reference labels are excluded only after proposal selection; intervals resample whole assemblies. This demonstrates overconfidence on disagreement proposals relative to the observed structure, not impossibility of alternative contacts. The proposal extractor stores the first 16 missing contacts per group, so this diagnostic describes that bounded candidate set.
+
+### Contact-only diffusion and the final search decision
+
+All 54 target/seed cases completed. Primary comparison uses the original 24-target panel, with the three added targets used only for the alternative-reference diagnostic. At each method's own model-time budget, 7-step contact diffusion minus ordinary sampling changes confidence-selected full-structure lDDT by +0.00072 (95% paired target-bootstrap interval −0.00352 to +0.00463); 32-step contact diffusion changes it by −0.00168 (−0.00785 to +0.00362). The 32-step method lowers interface lDDT by 0.03654 (interval −0.08099 to −0.00681) on 20 evaluable targets, and its oracle-best full-structure quality is lower by 0.00715 (−0.01258 to −0.00308). See `plots/contact-hypotheses.png`.
+
+Each contact method produces four independently sampled hypotheses, with coordinate diffusion only at the end. Ordinary batching produces 8.83 mean candidates within the 7-step method's budget and 19.33 within the 32-step budget. At the latter budget, ordinary sampling produces 8.33 mean CA clusters, versus 2.50 and 2.65 for contact7/contact32. Mean pairwise RMSD differences are unresolved; the cluster counts are affected by candidate count and fixed homomer correspondence. Ordinary sampling reaches both EgtU reference states from both apo and bound inputs in both seeds, while both contact-only methods reach only the input-associated reference state. None reaches the strict BmCBP neighborhoods.
+
+Ordinary batched coordinate diffusion is retained for the blind benchmark; no adaptive method shows a validation advantage that warrants an extra blind arm. This decision was recorded before any numerical blind quality scores were inspected. All model settings and input partitions remain fixed.

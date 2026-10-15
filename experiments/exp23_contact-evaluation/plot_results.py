@@ -93,7 +93,30 @@ def full_validation():
     fig.savefig(ROOT/'plots/full-validation.png');plt.close(fig)
 
 
+def contact_hypotheses():
+    data=pd.read_csv(ROOT/'data/contact-hypotheses-v1/search_paired_differences.csv')
+    fig,axes=plt.subplots(1,3,figsize=(12,4.2))
+    specs=[('selected_observed_lddt','Confidence-selected full structure'),
+           ('selected_interface_lddt','Confidence-selected interface'),
+           ('oracle_observed_lddt','Best generated structure (oracle)')]
+    for ax,(metric,title) in zip(axes,specs):
+        rows=pd.concat([data[(data.horizon==method)&(data.contrast==method+'-minus-ordinary')&
+                             (data.metric==metric)] for method in ['contact7','contact32']])
+        ax.errorbar(rows['mean'],[1,0],xerr=np.stack([rows['mean']-rows.low,rows.high-rows['mean']]),
+                    fmt='o',color='#1e5c93',capsize=5)
+        ax.axvline(0,color='.5',linewidth=.8);ax.set_ylim(-.5,1.5)
+        ax.set_yticks([1,0],['7 contact steps','32 contact steps'])
+        ax.set_title(title,fontsize=10);ax.set_xlabel('lDDT difference from\nordinary sampling')
+    fig.suptitle('Contact-only diffusion does not improve matched-time sampling',fontsize=14)
+    fig.text(.02,.025,'Four independent contact hypotheses, one 200-step coordinate sample each. Ordinary sampling uses each method’s own model-time budget.\n'
+             '24 validation targets (20 with evaluable interfaces), 2 seeds; 95% paired target-bootstrap intervals. Fixed atom/chain correspondence.\n'
+             'Ordinary sampling yields 8.83 / 19.33 mean candidates at the 7-step / 32-step budgets, respectively.',fontsize=8)
+    fig.tight_layout(rect=(0,.18,1,.92))
+    fig.savefig(ROOT/'plots/contact-hypotheses.png');plt.close(fig)
+
+
 if __name__ == '__main__':
     conditioning()
     if (ROOT/'data/search-v1/search_paired_differences.csv').exists():search()
     if (ROOT/'data/validation-structures-v2/structure_paired_differences.csv').exists():full_validation()
+    if (ROOT/'data/contact-hypotheses-v1/search_paired_differences.csv').exists():contact_hypotheses()
