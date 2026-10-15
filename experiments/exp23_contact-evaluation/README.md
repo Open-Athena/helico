@@ -45,7 +45,7 @@ import os
 from helico.experiment import set_experiment, ensure_bench_run
 set_experiment('exp23_contact-evaluation')
 stage = os.environ.get('HELICO_EVAL_STAGE', 'smoke')
-stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2)}
+stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2), 'development': ('contact-development-v1', 4)}
 config_name, hours = stage_configs[stage]
 # Whole-study allowance: $96 incremental storage/transfer, <=512 prepaid H100-hours.
 spec = dict(job_name=f'helico-exp23-{config_name}', mode='evaluate', gpus=8,
