@@ -21,5 +21,6 @@
     "assignment": "deterministic greedy balancing by token count squared; exact same target partitions for both model weights"
   },
   "evaluation_inputs": "full sequence/CCD and independently prepared MSAs; no cropping or native pocket",
-  "search_decision": "Use validation matched-time results to decide whether any adaptive method warrants a separate blind comparison; retain ordinary sampling when search does not improve validation selection quality."
+  "search_decision": "Use validation matched-time results to decide whether any adaptive method warrants a separate blind comparison; retain ordinary sampling when search does not improve validation selection quality.",
+  "alignment_completion_policy": "Freeze initial ready inputs while 13 assemblies await the original MMseqs2 job; evaluate deferred inputs under a second immutable HF revision with identical model settings, then combine disjoint predictions. All 1522 assemblies remain in denominators."
 }

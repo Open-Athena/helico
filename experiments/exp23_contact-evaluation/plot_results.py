@@ -64,6 +64,36 @@ def search():
     fig.savefig(ROOT/'plots/contact-search.png');plt.close(fig)
 
 
+def full_validation():
+    root=ROOT/'data/validation-structures-v2'
+    paired=pd.read_csv(root/'structure_paired_differences.csv').set_index('metric')
+    calibration=pd.read_csv(root/'discrepancy_calibration.csv')
+    calibration=calibration[calibration.weights=='ema'].set_index('group').loc[['intra','pp','pl']]
+    fig,axes=plt.subplots(1,2,figsize=(11,4.3),gridspec_kw={'width_ratios':[1,1.3]})
+    rows=paired.loc[['observed_lddt','interface_lddt']]
+    axes[0].errorbar(rows['mean'],[1,0],xerr=np.stack([rows['mean']-rows.low,rows.high-rows['mean']]),
+                    fmt='o',color='#1e5c93',capsize=5)
+    axes[0].axvline(0,color='.5',linewidth=.8)
+    axes[0].set_yticks([1,0],['Full structure\n384 complexes','Interface\n331 evaluable'])
+    axes[0].set_ylim(-.5,1.5)
+    axes[0].set_xlabel('EMA minus initialization lDDT')
+    axes[0].set_title('Modest overall structure improvement',fontsize=11)
+    for offset,column,label,color in [(-.18,'mean_predicted_probability','Predicted probability','#1e5c93'),
+                                      (.18,'native_contact_fraction','Observed reference frequency','#b07732')]:
+        axes[1].bar(np.arange(3)+offset,100*calibration[column],.34,label=label,color=color)
+    axes[1].set_xticks(range(3),['Within protein','Protein–protein','Protein–ligand*'])
+    axes[1].set_ylabel('Contact probability / frequency (%)')
+    axes[1].set_ylim(0,100);axes[1].legend(frameon=False,fontsize=9)
+    axes[1].set_title('Disagreement proposals are overconfident\nrelative to the observed reference',fontsize=11)
+    fig.suptitle('Full 384-complex validation',fontsize=14)
+    fig.text(.02,.025,'Left: confidence-selected best of 2 structures; 95% paired assembly-bootstrap intervals; fixed atom/chain correspondence.\n'
+             'Right: top eligible missing-contact proposal per group/sample, generated distance ≥7 Å; unobserved labels excluded after selection.\n'
+             '*Includes ions/glycans. One reference structure cannot exclude a physically valid alternative contact.',fontsize=8)
+    fig.tight_layout(rect=(0,.17,1,.92))
+    fig.savefig(ROOT/'plots/full-validation.png');plt.close(fig)
+
+
 if __name__ == '__main__':
     conditioning()
     if (ROOT/'data/search-v1/search_paired_differences.csv').exists():search()
+    if (ROOT/'data/validation-structures-v2/structure_paired_differences.csv').exists():full_validation()

@@ -95,7 +95,9 @@ def summarize_generation(records, output):
     if df.empty:
         return df
     df.to_csv(output / 'structure_per_sample.csv', index=False)
-    pd.DataFrame(proposals).to_csv(output / 'discrepancy_proposals.csv', index=False)
+    proposal_frame = pd.DataFrame(proposals)
+    proposal_frame.to_csv(output / 'discrepancy_proposals.csv', index=False)
+    summarize_discrepancies(proposal_frame, output)
     # Only confidence selects candidates for the primary report. Seeds and
     # samples remain available for separately labelled oracle analyses.
     keys = ['pdb_id', 'weights', 'msa', 'mode']
@@ -121,6 +123,42 @@ def summarize_generation(records, output):
                         contrast=a + '-minus-' + b, **bootstrap_mean(wide[a] - wide[b])))
     pd.DataFrame(paired).to_csv(output / 'structure_paired_differences.csv', index=False)
     return pd.DataFrame(summaries)
+
+
+def summarize_discrepancies(proposals, output):
+    """Select without reference labels, then measure reference-contact frequency.
+
+    Predictions store the first 16 missing-contact proposals in each group.
+    Match the search's 7-Angstrom filter and select the highest-ranked eligible
+    proposal. Unknown reference geometry never changes that selection.
+    """
+    if proposals.empty:
+        return pd.DataFrame()
+    keys = ['pdb_id', 'weights', 'msa', 'mode', 'seed', 'sample', 'group']
+    selected = proposals[proposals.distance >= 7].sort_values('rank').drop_duplicates(keys)
+    selected.to_csv(Path(output) / 'selected_discrepancies_ge7A.csv', index=False)
+    rows = []
+    for identity, frame in selected.groupby(['weights', 'msa', 'mode', 'group']):
+        observed = frame[frame.native_observed.eq(True)].copy()
+        row = dict(zip(['weights', 'msa', 'mode', 'group'], identity))
+        row.update(proposals=len(frame), observed=len(observed),
+                   assemblies=frame.pdb_id.nunique(),
+                   mean_predicted_probability=observed.probability.mean(),
+                   native_contact_fraction=observed.native_contact.mean())
+        # Resample complete assemblies so two coordinate samples do not count
+        # as independent biological observations. Preserve proposal weighting.
+        if len(observed):
+            observed['gap'] = observed.probability - observed.native_contact.astype(float)
+            clusters = observed.groupby('pdb_id').gap.agg(['sum', 'size'])
+            indices = np.random.default_rng(2301).integers(len(clusters), size=(4000, len(clusters)))
+            draws = clusters['sum'].to_numpy()[indices].sum(1) / clusters['size'].to_numpy()[indices].sum(1)
+            row.update(probability_gap=observed.gap.mean(),
+                       gap_low=float(np.quantile(draws, .025)),
+                       gap_high=float(np.quantile(draws, .975)))
+        rows.append(row)
+    result = pd.DataFrame(rows)
+    result.to_csv(Path(output) / 'discrepancy_calibration.csv', index=False)
+    return result
 
 
 def candidates_at_budget(metrics, budget):

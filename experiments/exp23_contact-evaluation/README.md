@@ -48,6 +48,8 @@ stage = os.environ.get('HELICO_EVAL_STAGE', 'smoke')
 stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2), 'development': ('contact-development-v1', 4), 'conditioning': ('contact-conditioning-v1', 4), 'search': ('contact-search-v1', 6), 'validation-structures': ('contact-validation-structures-v2', 6), 'alternative-states': ('contact-alternative-states-v1', 2), 'blind-preflight': ('contact-blind-preflight-v2', 3), 'contact-hypotheses': ('contact-contact-hypotheses-v1', 4)}
 stage_configs.update({f'foldbench-{weight}-{shard}': (f'contact-foldbench-{weight}-{shard}-v1', 6)
     for weight in ['ema', 'protenix'] for shard in range(4)})
+stage_configs.update({f'foldbench-{weight}-completion': (f'contact-foldbench-{weight}-completion-v1', 2)
+    for weight in ['ema', 'protenix']})
 config_name, hours = stage_configs[stage]
 # Whole-study allowance: $96 incremental storage/transfer, <=512 prepaid H100-hours.
 gpus = 4 if stage.startswith('foldbench-') or stage in {'alternative-states', 'contact-hypotheses', 'blind-preflight', 'validation-structures'} else 8
@@ -65,7 +67,7 @@ print(run.meta)
 
 ## Status
 
-All 384 full validation inputs were prepared without failures. The GPU preflight, full 384-target contact audit and 24-target structural development evaluation completed without failures. Conditioning and matched-time search are complete; efficient contact-hypothesis sampling and the 384-target structure comparison are pending completion. FoldBench inputs and the official scoring harness are being prepared; blind benchmark results are pending.
+All 384 full validation inputs were prepared without failures. The GPU preflight, full contact audit, 24-target structural development evaluation, conditioning, matched-time search and 384-target structure comparison completed without failures. Efficient contact-hypothesis sampling is pending completion. FoldBench inputs and the official scoring harness are being prepared; blind benchmark results are pending.
 
 ### Validation weight selection
 
@@ -95,6 +97,14 @@ The corrected eight-target blind shape preflight completed for both EMA and the 
 
 Reference-versus-reference checks now pass all nine official benchmark categories using OpenStructure 2.8 and FoldBench's modified DockQv2 for nucleic-acid interfaces. They exposed and fixed the wrapper's handling of polymer `interface_chain_id_*` columns, which differ from ligand `native_chain_id_*` columns. The corrected checks give DockQ/lDDT of 1 where applicable and ligand RMSD below 0.00001 Å. See `data/scorer_reference_selfcheck.csv`; these are harness checks, not model performance.
 
+The initial benchmark release freezes 1,482 ready inputs while the last 13 assemblies await one already submitted external MMseqs2 alignment batch. Another 27 assemblies exceed the 2,048-token resource cap. Pending alignments have explicit manifest status and no feature payload; normal-length query-only placeholders cannot enter ready inference features. The ready inputs can run immediately, and the 13 deferred inputs can be evaluated under a second immutable dataset revision with identical model settings. The final score combines disjoint predictions and retains all 1,522 assemblies in its failure accounting. This scheduling choice was made before any benchmark prediction was scored.
+
 Continuous distance checks support the sparse-steering result. With MSA, requested missed native contacts start at mean separations of 6.28 Å within proteins, 15.47 Å between proteins and 7.94 Å for protein–ligand pairs. Conditioning decreases those distances by only 0.099, 0.059 and 0.089 Å, respectively. This is an exploratory paired diagnostic using fixed token identities, averaged within seeds and then targets. Contact conditioning is enabled; the learned EMA projection has present-versus-unknown norm 5.03 and absent-versus-unknown norm 2.26, and used a 10× learning-rate multiplier during training. The effect is not explained by a disabled or still-zero conditioning projection.
 
 Official benchmark summaries will keep confidence-selected performance separate from per-target oracle best-of-sample upper bounds. Missing/resource/scoring failures count as unsuccessful interfaces and zero lDDT in the all-target monomer mean; scored-only means and coverage are shown separately. Paired confidence intervals resample entire PDB assemblies while retaining official target/interface weighting.
+
+### Full validation structure comparison
+
+All 768 arms (384 complexes, EMA and initialization, two samples each) completed without resource or inference failures. Confidence-selected observed-atom lDDT is 0.79033 for EMA versus 0.77957 for initialization: paired difference +0.01076, 95% assembly-bootstrap interval +0.00728 to +0.01475. Interface lDDT is 0.48111 versus 0.47559 on 331 evaluable complexes: difference +0.00552, interval −0.00702 to +0.01920. These fixed-correspondence diagnostics support a modest full-structure improvement but do not resolve an interface improvement. See `plots/full-validation.png` and `data/validation-structures-v2/`.
+
+Among EMA's highest-ranked missing-contact proposals with generated distance at least 7 Å, mean predicted probabilities are 0.824 within proteins, 0.568 between proteins and 0.603 for protein–ligand pairs. Observed reference-contact fractions are 0.391, 0.241 and 0.234. Unknown reference labels are excluded only after proposal selection; intervals resample whole assemblies. This demonstrates overconfidence on disagreement proposals relative to the observed structure, not impossibility of alternative contacts. The proposal extractor stores the first 16 missing contacts per group, so this diagnostic describes that bounded candidate set.

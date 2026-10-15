@@ -1,4 +1,7 @@
-group,proposals,observed,mean_predicted_probability,native_contact_fraction,note
-intra,49,36,0.8511284722222222,0.4722222222222222,"Top candidate among first 16 missing-contact proposals satisfying 7A distance; missing labels excluded from calibration, never from selection"
-pl,43,43,0.6091024709302325,0.32558139534883723,"Top candidate among first 16 missing-contact proposals satisfying 7A distance; missing labels excluded from calibration, never from selection"
-pp,35,23,0.4111328125,0.13043478260869565,"Top candidate among first 16 missing-contact proposals satisfying 7A distance; missing labels excluded from calibration, never from selection"
+weights,msa,mode,group,proposals,observed,assemblies,mean_predicted_probability,native_contact_fraction,probability_gap,gap_low,gap_high
+ema,True,unknown,intra,49,36,19,0.8511284722222222,0.4722222222222222,0.37890625,0.17115380598262034,0.5551491332209968
+ema,True,unknown,pl,43,43,11,0.6091024709302325,0.32558139534883723,0.28352107558139533,-0.036160714285714275,0.5800420851934525
+ema,True,unknown,pp,35,23,9,0.4111328125,0.13043478260869565,0.2806980298913043,-0.00440098353794641,0.4572871485681438
+raw,True,unknown,intra,53,37,19,0.851245777027027,0.5675675675675675,0.2836782094594595,0.09964782164977477,0.4677118389423077
+raw,True,unknown,pl,44,44,11,0.59375,0.3181818181818182,0.2755681818181818,-0.06962224786931817,0.5978937322443183
+raw,True,unknown,pp,35,26,9,0.40966796875,0.19230769230769232,0.21736027644230768,0.0010614809782608695,0.382109375

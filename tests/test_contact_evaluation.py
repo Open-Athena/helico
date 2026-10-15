@@ -115,6 +115,19 @@ def test_time_budget_counts_complete_batches_and_selection_ignores_quality():
     assert result['oracle_observed_lddt'] == .8
 
 
+def test_discrepancy_selection_does_not_use_reference_availability(tmp_path):
+    import pandas as pd
+    from helico.contact_eval_analysis import summarize_discrepancies
+    identity=dict(pdb_id='a',weights='ema',msa=True,mode='unknown',seed=0,sample=0,group='pp')
+    proposals=pd.DataFrame([{**identity,'rank':rank,'distance':distance,'probability':.9,
+                             'native_observed':observed,'native_contact':True}
+                            for rank,distance,observed in [(0,6.,True),(1,8.,False),(2,9.,True)]])
+    summary=summarize_discrepancies(proposals,tmp_path).iloc[0]
+    chosen=pd.read_csv(tmp_path/'selected_discrepancies_ge7A.csv')
+    assert len(chosen)==1 and chosen.iloc[0]['rank']==1
+    assert summary.proposals==1 and summary.observed==0
+
+
 def test_official_summary_selects_confidence_and_keeps_failed_denominator(tmp_path):
     import pandas as pd
     from helico.contact_foldbench_score import summarize
