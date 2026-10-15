@@ -385,7 +385,7 @@ def main():
     checkpoint = torch.load(args.checkpoint, map_location='cpu', weights_only=False, mmap=True)
     if checkpoint['step'] != 20000 or checkpoint['data_lock_sha256'] != cfg['data_lock_sha256']:
         raise ValueError('Wrong model checkpoint or data lock')
-    failed = []
+    failed, resource_failed = [], []
     for weights in cfg['weights']:
         model = load_model(checkpoint, weights, cfg, args.initial)
         for record in targets:
@@ -413,13 +413,17 @@ def main():
                 row = dict(status='failed', pdb_id=record['pdb_id'], weights=weights,
                     error=repr(error), traceback=traceback.format_exc())
                 store.save(f"errors/{weights}/{record['pdb_id']}", row)
-                failed.append(row)
+                if cfg.get('allow_resource_failures') and isinstance(error, torch.cuda.OutOfMemoryError):
+                    resource_failed.append(row)
+                else:
+                    failed.append(row)
                 # Data/OOM failures are explicit; CUDA context failures abort the worker.
                 if 'device-side assert' in str(error) or 'illegal memory access' in str(error):
                     raise
                 torch.cuda.empty_cache()
         del model; torch.cuda.empty_cache()
-    store.save(f'ranks/{rank}', dict(status='complete', rank=rank, targets=len(targets), failures=len(failed)))
+    store.save(f'ranks/{rank}', dict(status='complete', rank=rank, targets=len(targets),
+                                   failures=len(failed), resource_failures=len(resource_failed)))
     if failed:
         raise RuntimeError(f'{len(failed)} target/weight evaluations failed; durable errors recorded')
 

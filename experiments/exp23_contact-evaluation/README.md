@@ -45,7 +45,7 @@ import os
 from helico.experiment import set_experiment, ensure_bench_run
 set_experiment('exp23_contact-evaluation')
 stage = os.environ.get('HELICO_EVAL_STAGE', 'smoke')
-stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2), 'development': ('contact-development-v1', 4), 'conditioning': ('contact-conditioning-v1', 4), 'search': ('contact-search-v1', 6), 'validation-structures': ('contact-validation-structures-v1', 6), 'alternative-states': ('contact-alternative-states-v1', 2)}
+stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2), 'development': ('contact-development-v1', 4), 'conditioning': ('contact-conditioning-v1', 4), 'search': ('contact-search-v1', 6), 'validation-structures': ('contact-validation-structures-v1', 6), 'alternative-states': ('contact-alternative-states-v1', 2), 'blind-preflight': ('contact-blind-preflight-v1', 3)}
 config_name, hours = stage_configs[stage]
 # Whole-study allowance: $96 incremental storage/transfer, <=512 prepaid H100-hours.
 gpus = 4 if stage == 'alternative-states' else 8
@@ -68,3 +68,7 @@ All 384 full validation inputs were prepared without failures. The GPU preflight
 ### Validation weight selection
 
 Across the fixed 24-target development panel, confidence-selected EMA predictions have mean observed-atom lDDT 0.84442, versus 0.84374 for regular weights (paired difference +0.00068; 95% target-bootstrap interval −0.00125 to +0.00245). Interface lDDT slightly favors regular weights (0.58495 vs 0.58180); neither difference is resolved by this panel. EMA is selected for the subsequent conditioning/search and blind test based on the full-complex mean, with the near-tie recorded explicitly. No FoldBench predictions or scores were used. These geometry diagnostics use fixed correspondence, not official benchmark scoring.
+
+### Alternative-reference diagnostic
+
+The two identical-sequence monomer pairs in `data/alternative_state_panel.json` were selected from validation reference geometry before inspecting predictions. The apo/bound CA separations are 4.397 Å (EgtU) and 2.173 Å (BmCBP). Matching uses common observed CA positions; state recovery requires RMSD below min(2 Å, half the reference separation). At the unmasking method's model-compute budget, ordinary sampling from apo EgtU reaches both reference neighborhoods in both seeds; tree and unmasking reach only the apo neighborhood. No method reaches the strict BmCBP neighborhoods. These are two ligand-dependent validation examples, not evidence of broad ensemble recovery. See `plots/alternative-states.png` and per-candidate CSVs.

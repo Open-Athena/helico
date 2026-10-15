@@ -155,7 +155,50 @@ def summarize_search(records, output):
                     **{'selected_' + k: v for k, v in selected.items() if k not in {'method', 'parent'}}})
     df = pd.DataFrame(rows)
     df.to_csv(output / 'search_matched_time.csv', index=False)
+    if len(df):
+        metrics=['selected_observed_lddt','selected_interface_lddt','oracle_observed_lddt','candidates']
+        metrics=[m for m in metrics if m in df]
+        target_means=df.groupby(['pdb_id','weights','horizon','method'],as_index=False)[metrics].mean()
+        target_means.to_csv(output/'search_per_target.csv',index=False)
+        summary=[]; paired=[]
+        for (weight,horizon,method),frame in target_means.groupby(['weights','horizon','method']):
+            for metric in metrics:
+                summary.append(dict(weights=weight,horizon=horizon,method=method,metric=metric,
+                                    **bootstrap_mean(frame[metric])))
+        for (weight,horizon),frame in target_means.groupby(['weights','horizon']):
+            for metric in metrics:
+                wide=frame.pivot(index='pdb_id',columns='method',values=metric)
+                for method in ('tree','unmask'):
+                    if {method,'ordinary'}<=set(wide):
+                        paired.append(dict(weights=weight,horizon=horizon,contrast=method+'-minus-ordinary',
+                                           metric=metric,**bootstrap_mean(wide[method]-wide.ordinary)))
+        pd.DataFrame(summary).to_csv(output/'search_summary.csv',index=False)
+        pd.DataFrame(paired).to_csv(output/'search_paired_differences.csv',index=False)
     return df
+
+
+def summarize_conditioning(records, panel, output):
+    """Paired effects average seeds within targets before target bootstrap."""
+    output=Path(output); output.mkdir(parents=True,exist_ok=True)
+    groups={r['pdb_id']:r['panel_group'] for r in panel}
+    rows=[]
+    for record in records:
+        if record.get('status')!='complete' or record.get('mode','unknown')=='unknown':continue
+        for metric in record['metrics']:
+            rows.append(dict(pdb_id=record['pdb_id'],group=groups[record['pdb_id']],
+                msa=record['msa'],mode=record['mode'],seed=record['seed'],**metric))
+    if not rows:return pd.DataFrame()
+    df=pd.DataFrame(rows);df.to_csv(output/'conditioning_per_sample.csv',index=False)
+    numerical=[k for k in df if k.startswith(('change_','control_','requested_'))]
+    target_means=df.groupby(['pdb_id','group','msa','mode'],as_index=False)[numerical].mean()
+    target_means.to_csv(output/'conditioning_per_target.csv',index=False)
+    summary=[]
+    for (group,msa,mode),frame in target_means.groupby(['group','msa','mode']):
+        for metric in numerical:
+            summary.append(dict(group=group,msa=msa,mode=mode,metric=metric,
+                                **bootstrap_mean(frame[metric])))
+    result=pd.DataFrame(summary);result.to_csv(output/'conditioning_summary.csv',index=False)
+    return result
 
 
 def main():

@@ -263,6 +263,7 @@ def evaluate(config, config_path):
         if any(r['status'] != 'complete' or r['failures'] for r in results):
             raise RuntimeError('An evaluation rank did not complete cleanly')
         result = dict(status='complete', targets=sum(r['targets'] for r in results),
+            resource_failures=sum(r.get('resource_failures', 0) for r in results),
             ranks=len(results), wall_seconds=time.monotonic() - started,
             code_sha=os.environ['HELICO_CODE_SHA'])
         fs.pipe_file(output_uri + '/result.json', json.dumps(result).encode())

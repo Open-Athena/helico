@@ -113,3 +113,26 @@ def test_time_budget_counts_complete_batches_and_selection_ignores_quality():
     assert result['candidates'] == 2
     assert result['selected']['observed_lddt'] == .4
     assert result['oracle_observed_lddt'] == .8
+
+
+def test_official_summary_selects_confidence_and_keeps_failed_denominator(tmp_path):
+    import pandas as pd
+    from helico.contact_foldbench_score import summarize
+    category='interface_protein_ligand'
+    predictions=pd.DataFrame([dict(model='ema',pdb_id='a',seed=0,sample=0,ranking_score=.9),
+                              dict(model='ema',pdb_id='a',seed=0,sample=1,ranking_score=.2)])
+    scores=pd.DataFrame([{**r,'category':category,'status':'complete','success':r['sample']==1,
+                          'rmsd':4. if r['sample']==0 else 1.,'lddt_pli':.9}
+                         for r in predictions.to_dict('records')])
+    targets=pd.DataFrame([dict(pdb_id=p,category=category) for p in ['a','b']])
+    result=summarize(predictions,scores,targets,tmp_path).iloc[0]
+    assert result.denominator==2 and result.scored==1 and result.failed_or_missing==1
+    assert result.successes==0 and result.success_rate_all==0
+
+
+def test_rmsd_removes_rigid_motion_but_not_reflections():
+    from helico.contact_state_analysis import aligned_rmsd
+    points=np.array([[0.,0.,0.],[1.,0.,0.],[0.,2.,0.],[0.,0.,3.]])
+    rotation=np.array([[0.,1.,0.],[-1.,0.,0.],[0.,0.,1.]])
+    assert aligned_rmsd(points,points@rotation+7.)<1e-6
+    assert aligned_rmsd(points,points*np.array([-1.,1.,1.]))>.1

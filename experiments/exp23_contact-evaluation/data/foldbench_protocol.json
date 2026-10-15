@@ -1,0 +1,24 @@
+{
+  "model_weights": "ema",
+  "initialization_baseline": "protenix_base_default_v1.0.0",
+  "cycles": 1,
+  "diffusion_steps": 200,
+  "msa_max_rows": 512,
+  "seeds": [
+    0
+  ],
+  "samples": 4,
+  "max_full_input_tokens": 2048,
+  "templates": false,
+  "contacts": "all unknown for the baseline model comparison",
+  "model_selection": "predicted ranking score across samples; report oracle separately",
+  "reference_geometry": "unavailable during inference",
+  "failure_policy": "all official category denominators retained; resource/input/scoring failures explicit",
+  "parallelism": {
+    "gpus_per_job": 8,
+    "shards_per_model": 2,
+    "models": 2
+  },
+  "evaluation_inputs": "full sequence/CCD and independently prepared MSAs; no cropping or native pocket",
+  "search_decision": "Use validation matched-time results to decide whether any adaptive method warrants a separate blind comparison; retain ordinary sampling when search does not improve validation selection quality."
+}
