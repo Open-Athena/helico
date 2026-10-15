@@ -17,12 +17,22 @@ import numpy as np
 import pandas as pd
 
 
+def native_chains(target):
+    """FoldBench uses different chain columns for ligands and polymers."""
+    for prefix in ['native_chain_id_', 'interface_chain_id_']:
+        if prefix+'1' in target and prefix+'2' in target:
+            return str(target[prefix+'1']), str(target[prefix+'2'])
+    if 'chain_id' in target:
+        return str(target['chain_id']), str(target['chain_id'])
+    raise ValueError('Target has no recognized native chain identifiers')
+
+
 def score_prediction(task):
     row, targets, refs, output, ost, timeout, foldbench = task
     folder = Path(output) / row['model'] / row['pdb_id'] / f"s{row['seed']}-{row['sample']}"
     folder.mkdir(parents=True, exist_ok=True)
     marker = folder / 'scores.json'
-    identity = hashlib.sha256(json.dumps(dict(row=row, targets=targets), sort_keys=True).encode()).hexdigest()
+    identity = hashlib.sha256(json.dumps(dict(scoring_schema=2, row=row, targets=targets), sort_keys=True).encode()).hexdigest()
     if marker.exists():
         saved = json.loads(marker.read_text())
         if saved['identity'] != identity: raise ValueError('Changed prediction or target metadata')
@@ -49,7 +59,7 @@ def score_prediction(task):
     for target in targets:
         result = {**row, **target, 'status':'complete'}
         category = target['category']; mode = 'ligand' if category=='interface_protein_ligand' else 'structure'
-        a, b = target.get('native_chain_id_1',target.get('chain_id')), target.get('native_chain_id_2',target.get('chain_id'))
+        a, b = native_chains(target)
         try:
             if mode in failures: raise RuntimeError(failures[mode])
             if mode == 'ligand':

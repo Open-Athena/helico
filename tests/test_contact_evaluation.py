@@ -136,3 +136,10 @@ def test_rmsd_removes_rigid_motion_but_not_reflections():
     rotation=np.array([[0.,1.,0.],[-1.,0.,0.],[0.,0.,1.]])
     assert aligned_rmsd(points,points@rotation+7.)<1e-6
     assert aligned_rmsd(points,points*np.array([-1.,1.,1.]))>.1
+
+
+def test_official_target_chain_schemas_for_polymer_ligand_and_monomer():
+    from helico.contact_foldbench_score import native_chains
+    assert native_chains(dict(native_chain_id_1='A-2',native_chain_id_2='F-2'))==('A-2','F-2')
+    assert native_chains(dict(interface_chain_id_1='A',interface_chain_id_2='C'))==('A','C')
+    assert native_chains(dict(chain_id='B'))==('B','B')

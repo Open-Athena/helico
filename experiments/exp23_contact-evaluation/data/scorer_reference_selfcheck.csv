@@ -1,0 +1,11 @@
+pdb_id,category,interface_chain_id_1,interface_chain_id_2,native_chain_id_1,native_chain_id_2,chain_id,status,dockq,lddt,rmsd,lddt_pli,tm_score
+8c3l-assembly1,interface_antibody_antigen,A,B,,,,complete,1.0,1.0,0.0,,1.0
+8pm5-assembly1,interface_protein_dna,A,B,,,,complete,0.999999999999996,1.0,0.0,,1.0
+8pm5-assembly1,interface_protein_dna,A,C,,,,complete,0.9999999999998748,1.0,0.0,,1.0
+8chi-assembly1,interface_protein_ligand,,,A,C,,complete,,,3.0928481464798097e-06,1.0,
+8s6o-assembly1,interface_protein_peptide,A,B,,,,complete,1.0,1.0,0.0,,1.0
+8gqp-assembly1,interface_protein_protein,A,B,,,,complete,1.0,1.0,0.0,,1.0
+8ey6-assembly1,interface_protein_rna,A,B,,,,complete,0.9999999999996436,1.0,0.0,,1.0
+8twh-assembly1,monomer_dna,,,,,A,complete,,1.0,0.0,,1.0
+5sbj-assembly1,monomer_protein,,,,,A,complete,,1.0,0.0,,1.0
+8utg-assembly1,monomer_rna,,,,,A,complete,,1.0,0.0,,1.0
