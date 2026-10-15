@@ -7,6 +7,27 @@ from helico.model.diffusion import DiffusionAttentionPairBias, _partition_to_win
 
 
 @pytest.mark.parametrize("mode", ["starting", "ending"])
+@pytest.mark.parametrize("masked", [False, True])
+def test_chunked_template_attention_preserves_outputs_and_gradients(mode, masked):
+    torch.manual_seed(23)
+    module = _TemplateTriAtt(16, 2, 8, mode).double()
+    full = torch.randn(2, 7, 7, 16, dtype=torch.float64, requires_grad=True)
+    chunked = full.detach().clone().requires_grad_()
+    mask = None
+    if masked:
+        token_mask = torch.tensor([[1, 1, 1, 1, 1, 0, 0], [1, 1, 1, 0, 0, 0, 0]])
+        mask = token_mask[:, :, None] * token_mask[:, None, :]
+    expected = module(full, mask)
+    actual = module(chunked, mask, anchor_chunk_size=3)
+    torch.testing.assert_close(actual, expected)
+    variables = tuple(module.parameters())
+    expected_grad = torch.autograd.grad(expected.square().sum(), (full, *variables))
+    actual_grad = torch.autograd.grad(actual.square().sum(), (chunked, *variables))
+    for a, b in zip(actual_grad, expected_grad):
+        torch.testing.assert_close(a, b)
+
+
+@pytest.mark.parametrize("mode", ["starting", "ending"])
 def test_padded_template_attention_preserves_real_pairs_and_finite_backward(mode):
     torch.manual_seed(7)
     module = _TemplateTriAtt(16, 2, 8, mode)

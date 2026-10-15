@@ -70,6 +70,17 @@ def select_panel(manifest, per_group=8, seed=2301):
     return selected
 
 
+def assign_targets(records, world, balanced=False):
+    ready=[r for r in records if r['status']=='ready']
+    if not balanced:return [ready[rank::world] for rank in range(world)]
+    partitions=[[] for _ in range(world)];loads=[0]*world
+    for record in sorted(ready,key=lambda r:(-r['tokens'],r['pdb_id'])):
+        rank=min(range(world),key=lambda i:loads[i])
+        partitions[rank].append(record)
+        loads[rank]+=record['tokens']**2+100*record['tokens']
+    return partitions
+
+
 class ArtifactStore:
     def __init__(self, root, uri, fs, config_hash):
         self.root, self.uri, self.fs, self.config_hash = Path(root), uri.rstrip('/'), fs, config_hash
@@ -356,6 +367,52 @@ def run_blind_generation(model, payload, record, cfg, store, weights):
             seed=offset, msa=True, tokens=n, seconds=seconds, metrics=metrics), prediction)
 
 
+def run_contact_hypotheses(model, payload, record, cfg, store, weights):
+    """Trunk-only absorbing transitions followed by one structure per hypothesis."""
+    f=payload['features'];n=f['n_tokens']
+    groups=input_pair_groups(f,payload['protein_token'],payload['ligand_token'])
+    empty=torch.zeros(n,n,dtype=torch.uint8)
+    for offset in cfg.get('seeds',[0,1]):
+        name=f"search/{weights}/{record['pdb_id']}/s{offset}"
+        if store.done(name):continue
+        seed=payload['seed']+offset*100000
+        rows,tensors,costs=[],{},{}
+        def score(prediction,state,method,call,elapsed,head_calls):
+            for sample,coords in enumerate(prediction['all_coords'][0]):
+                metrics=structure_metrics(coords,f,groups,state)[0]
+                metrics.update(method=method,call=call,sample=sample,parent=-1,
+                    available_seconds=elapsed,head_calls=head_calls,
+                    ranking=float(prediction['all_ranking_score'][0,sample]),
+                    ptm=float(prediction['all_ptm'][0,sample]),
+                    iptm=float(prediction['all_iptm'][0,sample]),
+                    model_has_clash=float(prediction['all_has_clash'][0,sample]))
+                rows.append(metrics)
+            tensors[f'{method}-{call}']={**prediction,'contact_state':state}
+        for method,schedule in cfg['contact_schedules'].items():
+            elapsed=0.
+            for call in range(cfg.get('hypotheses',4)):
+                state=empty.clone();hypothesis_seed=seed+call*1000
+                generator=torch.Generator().manual_seed(hypothesis_seed)
+                for step,(t,s) in enumerate(zip(schedule,schedule[1:])):
+                    logits,seconds=forward_contacts(model,f,state,True,hypothesis_seed+step)
+                    elapsed+=seconds
+                    state=reverse_mask_step(state,logits.sigmoid(),groups['all'],t,s,generator)
+                prediction,seconds=predict(model,f,state,True,hypothesis_seed,1)
+                elapsed+=seconds
+                score(prediction,state,method,call,elapsed,len(schedule)-1)
+            costs[method]=elapsed
+        elapsed,call=0.,0
+        while elapsed<max(costs.values()):
+            prediction,seconds=predict(model,f,empty,True,seed+call,
+                                       cfg.get('baseline_batch_samples',4))
+            elapsed+=seconds;score(prediction,empty,'ordinary',call,elapsed,0);call+=1
+            if call>=cfg.get('baseline_max_batches',32):break
+        costs['ordinary']=elapsed
+        store.save(name,dict(status='complete',pdb_id=record['pdb_id'],weights=weights,seed=seed,
+            oracle=False,tokens=n,costs=costs,metrics=rows,
+            baseline_covers_search=elapsed>=max(costs.values())),tensors)
+
+
 def load_payload(path):
     with gzip.open(path, 'rb') as handle:
         return torch.load(handle, map_location='cpu', weights_only=False)
@@ -381,7 +438,7 @@ def main():
         manifest = select_panel(manifest, cfg['panel_per_group'], cfg.get('seed', 2301))
     if cfg.get('target_ids'):
         manifest = [r for r in manifest if r['pdb_id'] in cfg['target_ids']]
-    targets = [r for r in manifest if r['status'] == 'ready'][rank::world]
+    targets = assign_targets(manifest, world, cfg.get('balance_by_tokens',False))[rank]
     checkpoint = torch.load(args.checkpoint, map_location='cpu', weights_only=False, mmap=True)
     if checkpoint['step'] != 20000 or checkpoint['data_lock_sha256'] != cfg['data_lock_sha256']:
         raise ValueError('Wrong model checkpoint or data lock')
@@ -407,6 +464,8 @@ def main():
                     run_search(model, payload, record, cfg, store, weights)
                 elif cfg['stage'] == 'blind':
                     run_blind_generation(model, payload, record, cfg, store, weights)
+                elif cfg['stage'] == 'contact-hypotheses':
+                    run_contact_hypotheses(model,payload,record,cfg,store,weights)
                 else:
                     raise ValueError('Unsupported evaluation stage: ' + cfg['stage'])
             except Exception as error:

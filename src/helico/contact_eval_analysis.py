@@ -141,9 +141,9 @@ def summarize_search(records, output):
             continue
         # Both full adaptive horizons are reported. Within each horizon all
         # methods have exactly the same GPU-time allowance.
-        for horizon in ('tree', 'unmask'):
+        for horizon in (k for k in r['costs'] if k!='ordinary'):
             budget = r['costs'][horizon]
-            for method in ('ordinary', 'tree', 'unmask'):
+            for method in r['costs']:
                 candidates = candidates_at_budget([m for m in r['metrics'] if m['method'] == method], budget)
                 identity = dict(pdb_id=r['pdb_id'], weights=r['weights'], seed=r['seed'],
                                 horizon=horizon, budget_seconds=budget, method=method)
@@ -168,7 +168,7 @@ def summarize_search(records, output):
         for (weight,horizon),frame in target_means.groupby(['weights','horizon']):
             for metric in metrics:
                 wide=frame.pivot(index='pdb_id',columns='method',values=metric)
-                for method in ('tree','unmask'):
+                for method in (k for k in wide.columns if k!='ordinary'):
                     if {method,'ordinary'}<=set(wide):
                         paired.append(dict(weights=weight,horizon=horizon,contrast=method+'-minus-ordinary',
                                            metric=metric,**bootstrap_mean(wide[method]-wide.ordinary)))

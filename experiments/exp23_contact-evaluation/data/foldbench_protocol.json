@@ -17,7 +17,8 @@
   "parallelism": {
     "gpus_per_job": 8,
     "shards_per_model": 2,
-    "models": 2
+    "models": 2,
+    "assignment": "deterministic greedy balancing by token count squared; exact same target partitions for both model weights"
   },
   "evaluation_inputs": "full sequence/CCD and independently prepared MSAs; no cropping or native pocket",
   "search_decision": "Use validation matched-time results to decide whether any adaptive method warrants a separate blind comparison; retain ordinary sampling when search does not improve validation selection quality."

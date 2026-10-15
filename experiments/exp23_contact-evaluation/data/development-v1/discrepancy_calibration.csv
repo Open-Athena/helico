@@ -1,0 +1,4 @@
+group,proposals,observed,mean_predicted_probability,native_contact_fraction,note
+intra,49,36,0.8511284722222222,0.4722222222222222,"Top candidate among first 16 missing-contact proposals satisfying 7A distance; missing labels excluded from calibration, never from selection"
+pl,43,43,0.6091024709302325,0.32558139534883723,"Top candidate among first 16 missing-contact proposals satisfying 7A distance; missing labels excluded from calibration, never from selection"
+pp,35,23,0.4111328125,0.13043478260869565,"Top candidate among first 16 missing-contact proposals satisfying 7A distance; missing labels excluded from calibration, never from selection"

@@ -89,7 +89,8 @@ class _TemplateTriAtt(nn.Module):
         self.gate = nn.Linear(d, inner, bias=False)
         nn.init.zeros_(self.gate.weight)
 
-    def forward(self, z: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, z: torch.Tensor, mask: torch.Tensor | None = None,
+                anchor_chunk_size: int | None = None) -> torch.Tensor:
         B, N, _, D = z.shape
         H, dh = self.n_heads, self.d_head
         z_in = z if self.mode == "starting" else z.transpose(1, 2).contiguous()
@@ -98,21 +99,31 @@ class _TemplateTriAtt(nn.Module):
         q = q.permute(0, 1, 3, 2, 4)  # (B, N, H, N, dh)
         k = k.permute(0, 1, 3, 2, 4)
         v = v.permute(0, 1, 3, 2, 4)
-        attn = torch.einsum("bnhid,bnhjd->bnhij", q, k) * self.scale
         bias = self.bias_proj(h).permute(0, 3, 1, 2).unsqueeze(1)
-        attn = attn + bias
-        if mask is not None:
-            m = mask if self.mode == "starting" else mask.transpose(1, 2)
-            allowed = m.unsqueeze(2).unsqueeze(3).bool()
-            has_keys = allowed.any(dim=-1, keepdim=True)
-            attn = attn.masked_fill(~allowed, float("-inf"))
-            # Padded anchor rows have no keys. Avoid softmax(-inf, ...),
-            # including its NaN backward, then explicitly zero these rows.
-            attn = torch.where(has_keys, attn, 0.0)
-        attn = F.softmax(attn, dim=-1)
-        if mask is not None:
-            attn = attn * has_keys.to(attn.dtype)
-        out = torch.einsum("bnhij,bnhjd->bnhid", attn, v)
+        m = None if mask is None else (mask if self.mode == "starting" else mask.transpose(1, 2))
+        # Anchor rows are independent. Bound the cubic attention allocation
+        # for full complexes while retaining every key and the same weights.
+        # Keep the existing training and <=1024-token evaluation path intact.
+        if anchor_chunk_size is None:
+            anchor_chunk_size = 16 if not self.training and N > 1024 else N
+        if anchor_chunk_size < 1:
+            raise ValueError("anchor_chunk_size must be positive")
+        pieces = []
+        for start in range(0, N, anchor_chunk_size):
+            stop = start + anchor_chunk_size
+            attn = torch.einsum("bnhid,bnhjd->bnhij", q[:, start:stop], k[:, start:stop]) * self.scale
+            attn = attn + bias
+            if m is not None:
+                allowed = m[:, start:stop].unsqueeze(2).unsqueeze(3).bool()
+                has_keys = allowed.any(dim=-1, keepdim=True)
+                attn = attn.masked_fill(~allowed, float("-inf"))
+                # Padded anchors have no keys; avoid NaN softmax/backward.
+                attn = torch.where(has_keys, attn, 0.0)
+            attn = F.softmax(attn, dim=-1)
+            if m is not None:
+                attn = attn * has_keys.to(attn.dtype)
+            pieces.append(torch.einsum("bnhij,bnhjd->bnhid", attn, v[:, start:stop]))
+        out = torch.cat(pieces, dim=1)
         out = out.permute(0, 1, 3, 2, 4).reshape(B, N, N, H * dh)
         gate = torch.sigmoid(self.gate(h))
         out = self.out_proj(out * gate)

@@ -1,0 +1,38 @@
+{
+  "data_lock_sha256": "2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114",
+  "checkpoint_uri": "s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v11/final.pt",
+  "checkpoint_sha256": "355788e40f610c8cc662e4c10f8225204668dfdcaf92ee1f04d744f8d5ea8b9a",
+  "features_uri": "s3://marin-us-east-02a/helico/evaluations/exp23/foldbench-preflight-v1",
+  "features_manifest_sha256": "4e122e0e2033897cb0d47b6c36d957c8404c1579455a11761eaf5ce711a340ab",
+  "gpus": 4,
+  "cycles": 1,
+  "diffusion_steps": 200,
+  "seed": 2301,
+  "run_name": "exp23-contact-eval-blind-preflight-v2",
+  "output_uri": "s3://marin-us-east-02a/helico/evaluations/exp23/blind-preflight-v2",
+  "stage": "blind",
+  "weights": [
+    "ema",
+    "protenix"
+  ],
+  "msa_modes": [
+    true
+  ],
+  "seeds": [
+    0
+  ],
+  "samples": 4,
+  "features_dataset": {
+    "repo_id": "timodonnell/helico-foldbench-eval-v1",
+    "revision": "ce41e6d03eef1a83b9f0bdab2fe11b469031f905",
+    "manifest_path": "preflight_manifest.json",
+    "features_prefix": "features"
+  },
+  "model_source": {
+    "repo_id": "timodonnell/helico-masked-contact-exp22",
+    "revision": "01a6025408d078aa8305f302d1d664a0291c45ee",
+    "weights": "ema.pt"
+  },
+  "balance_by_tokens": true,
+  "allow_resource_failures": true
+}

@@ -71,15 +71,15 @@ def score_alternative_references(records, root, features_root, panel, output, fs
             rows.append(dict(pdb_id=record['pdb_id'],protein=pair['protein'],seed=record['seed'],
                 input_state='apo' if record['pdb_id']==pair['apo'] else 'bound',
                 method=metric['method'],call=metric['call'],sample=metric['sample'],ranking=metric['ranking'],
-                available_seconds=metric['available_seconds'],tree_budget=record['costs']['tree'],
-                unmask_budget=record['costs']['unmask'],rmsd_apo=ra,rmsd_bound=rb,
+                available_seconds=metric['available_seconds'],
+                **{k+'_budget':v for k,v in record['costs'].items() if k!='ordinary'},rmsd_apo=ra,rmsd_bound=rb,
                 native_separation=native_separation,recovery_threshold=threshold,
                 recovered_apo=ra<threshold,recovered_bound=rb<threshold))
     df=pd.DataFrame(rows);df.to_csv(output/'alternative_state_candidates.csv',index=False)
     summary=[]
     if len(df):
         for (pid,seed,method),frame in df.groupby(['pdb_id','seed','method']):
-            for horizon in ['tree','unmask']:
+            for horizon in [k.removesuffix('_budget') for k in frame if k.endswith('_budget')]:
                 frame_at_budget=frame[frame.available_seconds<=frame[horizon+'_budget'].iloc[0]]
                 if not len(frame_at_budget):continue
                 selected=frame_at_budget.loc[frame_at_budget.ranking.idxmax()]
@@ -102,8 +102,8 @@ def candidate_diversity(records, root, features_root, output, fs=None, uri=None)
         indices=list(protein_ca_indices(payload).values())
         if len(indices)<3:continue
         artifact=read_artifact(record,root,fs,uri)
-        for horizon in ['tree','unmask']:
-            for method in ['ordinary','tree','unmask']:
+        for horizon in (k for k in record['costs'] if k!='ordinary'):
+            for method in record['costs']:
                 metrics=[m for m in record['metrics'] if m['method']==method and m['available_seconds']<=record['costs'][horizon]]
                 metrics.sort(key=lambda m:-m['ranking'])
                 xyz=[artifact[f"{method}-{m['call']}"]['all_coords'][0,m['sample']][indices].numpy() for m in metrics]
