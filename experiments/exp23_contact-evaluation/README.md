@@ -45,7 +45,7 @@ import os
 from helico.experiment import set_experiment, ensure_bench_run
 set_experiment('exp23_contact-evaluation')
 stage = os.environ.get('HELICO_EVAL_STAGE', 'smoke')
-stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2), 'development': ('contact-development-v1', 4)}
+stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2), 'development': ('contact-development-v1', 4), 'conditioning': ('contact-conditioning-v1', 4), 'search': ('contact-search-v1', 6), 'validation-structures': ('contact-validation-structures-v1', 6)}
 config_name, hours = stage_configs[stage]
 # Whole-study allowance: $96 incremental storage/transfer, <=512 prepaid H100-hours.
 spec = dict(job_name=f'helico-exp23-{config_name}', mode='evaluate', gpus=8,
@@ -63,3 +63,7 @@ print(run.meta)
 ## Status
 
 All 384 full validation inputs were prepared without failures. Twelve initial inference-isolation, masking, scoring and priority checks pass. GPU preflight, full evaluation and search results are pending.
+
+### Validation weight selection
+
+Across the fixed 24-target development panel, confidence-selected EMA predictions have mean observed-atom lDDT 0.84442, versus 0.84374 for regular weights (paired difference +0.00068; 95% target-bootstrap interval −0.00125 to +0.00245). Interface lDDT slightly favors regular weights (0.58495 vs 0.58180); neither difference is resolved by this panel. EMA is selected for the subsequent conditioning/search and blind test based on the full-complex mean, with the near-tie recorded explicitly. No FoldBench predictions or scores were used. These geometry diagnostics use fixed correspondence, not official benchmark scoring.

@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -109,6 +110,14 @@ class ArtifactStore:
         print(json.dumps(dict(event='result', name=name, status=row['status'])), flush=True)
         return row
 
+    def tensors(self, name):
+        row = json.loads(self.fs.cat_file(self.uri + '/' + name + '.json'))
+        data = self.fs.cat_file(self.uri + '/' + row['artifact'])
+        if hashlib.sha256(data).hexdigest() != row['artifact_sha256']:
+            raise ValueError('Evaluation artifact checksum mismatch: ' + name)
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as handle:
+            return torch.load(handle, map_location='cpu', weights_only=False)
+
 
 def load_model(checkpoint, weights, cfg, initial=None):
     config = HelicoConfig(**checkpoint['model_config'])
@@ -176,11 +185,16 @@ def run_generation(model, payload, record, cfg, store, weights, conditioning=Fal
         seed = payload['seed'] + seed_offset * 100000
         modes = ['unknown']
         if conditioning:
-            modes += ['positive1', 'positive4', 'positive16', 'negative16', 'full']
+            modes += ['positive1', 'positive4', 'positive16', 'negative16',
+                      'rescue_positive4', 'corrective_negative4', 'full']
         for msa in cfg.get('msa_modes', [True]):
+            baseline = None
             for mode in modes:
                 name = f"generation/{weights}/{record['pdb_id']}/s{seed_offset}-msa{int(msa)}-{mode}"
-                if store.done(name): continue
+                if store.done(name):
+                    if conditioning and mode == 'unknown':
+                        baseline = store.tensors(name)
+                    continue
                 state = torch.zeros(n, n, dtype=torch.uint8)
                 generator = torch.Generator().manual_seed(seed)
                 if mode.startswith('positive'):
@@ -189,15 +203,30 @@ def run_generation(model, payload, record, cfg, store, weights, conditioning=Fal
                 elif mode.startswith('negative'):
                     state = oracle_state(f['contact_target'], f['contact_valid'], eligible,
                         int(mode[8:]), False, generator)
+                elif mode in {'rescue_positive4', 'corrective_negative4'}:
+                    baseline_contacts = geometry_contacts(baseline['all_coords'][0, 0], f)
+                    positive = mode == 'rescue_positive4'
+                    violated = ~baseline_contacts if positive else baseline_contacts
+                    state = oracle_state(f['contact_target'], f['contact_valid'],
+                        eligible & violated, 4, positive, generator)
                 elif mode == 'full':
                     state = torch.where(f['contact_valid'], f['contact_target'].to(torch.uint8) + 1, 0)
                 prediction, seconds = predict(model, f, state, msa, seed, cfg.get('samples', 1))
+                if mode == 'unknown':
+                    baseline = prediction
                 rows = []
                 for i, coords in enumerate(prediction['all_coords'][0]):
                     metrics, contacts = structure_metrics(coords, f, groups, state)
                     metrics.update(sample=i, ranking=float(prediction['all_ranking_score'][0, i]),
                         ptm=float(prediction['all_ptm'][0, i]), iptm=float(prediction['all_iptm'][0, i]),
                         model_has_clash=float(prediction['all_has_clash'][0, i]))
+                    if conditioning and mode != 'unknown':
+                        control_metrics, _ = structure_metrics(baseline['all_coords'][0, i], f, groups, state)
+                        for key in ('requested_contact_satisfaction', 'requested_no_contact_satisfaction',
+                                    'observed_lddt', 'interface_lddt', 'pp_unrequested_recall',
+                                    'pl_unrequested_recall', 'intra_unrequested_recall'):
+                            metrics['control_' + key] = control_metrics[key]
+                            metrics['change_' + key] = metrics[key] - control_metrics[key]
                     if 'contact_probs' in prediction and mode == 'unknown':
                         probabilities = prediction['contact_probs'][0, :n, :n]
                         proposals = []
@@ -238,7 +267,8 @@ def run_search(model, payload, record, cfg, store, weights):
 
         def score(prediction, state, method, call, parent, cumulative):
             for sample, coords in enumerate(prediction['all_coords'][0]):
-                metrics, contacts = structure_metrics(coords, f, groups, state)
+                metrics = (structure_metrics(coords, f, groups, state)[0]
+                           if 'contact_target' in f else {})
                 metrics.update(method=method, call=call, sample=sample, parent=parent,
                     available_seconds=cumulative,
                     ranking=float(prediction['all_ranking_score'][0, sample]),
@@ -306,6 +336,26 @@ def run_search(model, payload, record, cfg, store, weights):
             baseline_covers_search=costs['ordinary'] >= max(costs['tree'], costs['unmask'])), tensors)
 
 
+def run_blind_generation(model, payload, record, cfg, store, weights):
+    """Test inference has no reference labels available, including for scoring."""
+    f = payload['features']; n = f['n_tokens']
+    if LABEL_KEYS & f.keys():
+        raise ValueError('Blind test payload contains reference labels')
+    state = torch.zeros(n, n, dtype=torch.uint8)
+    for offset in cfg.get('seeds', [0]):
+        name = f"blind/{weights}/{record['pdb_id']}/s{offset}"
+        if store.done(name): continue
+        prediction, seconds = predict(model, f, state, True,
+                                      payload['seed'] + offset * 100000, cfg.get('samples', 2))
+        metrics = [dict(sample=i, ranking=float(prediction['all_ranking_score'][0, i]),
+                       ptm=float(prediction['all_ptm'][0, i]),
+                       iptm=float(prediction['all_iptm'][0, i]),
+                       model_has_clash=float(prediction['all_has_clash'][0, i]))
+                   for i in range(cfg.get('samples', 2))]
+        store.save(name, dict(status='complete', pdb_id=record['pdb_id'], weights=weights,
+            seed=offset, msa=True, tokens=n, seconds=seconds, metrics=metrics), prediction)
+
+
 def load_payload(path):
     with gzip.open(path, 'rb') as handle:
         return torch.load(handle, map_location='cpu', weights_only=False)
@@ -353,6 +403,8 @@ def main():
                     run_generation(model, payload, record, cfg, store, weights, cfg['stage'] == 'conditioning')
                 elif cfg['stage'] == 'search':
                     run_search(model, payload, record, cfg, store, weights)
+                elif cfg['stage'] == 'blind':
+                    run_blind_generation(model, payload, record, cfg, store, weights)
                 else:
                     raise ValueError('Unsupported evaluation stage: ' + cfg['stage'])
             except Exception as error:

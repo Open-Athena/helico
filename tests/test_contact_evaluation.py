@@ -101,3 +101,15 @@ def test_panel_selection_is_disjoint_and_order_independent():
     b = select_panel(list(reversed(records)), per_group=2)
     assert a == b
     assert len({r['pdb_id'] for r in a}) == 6
+
+
+def test_time_budget_counts_complete_batches_and_selection_ignores_quality():
+    from helico.contact_eval_analysis import candidates_at_budget
+    candidates = [dict(available_seconds=10., ranking=.9, observed_lddt=.4),
+                  dict(available_seconds=10., ranking=.2, observed_lddt=.8),
+                  dict(available_seconds=20., ranking=1., observed_lddt=.95)]
+    assert candidates_at_budget(candidates, 9.) is None
+    result = candidates_at_budget(candidates, 15.)
+    assert result['candidates'] == 2
+    assert result['selected']['observed_lddt'] == .4
+    assert result['oracle_observed_lddt'] == .8

@@ -1,0 +1,34 @@
+{
+  "data_lock_sha256": "2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114",
+  "checkpoint_uri": "s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v11/final.pt",
+  "checkpoint_sha256": "355788e40f610c8cc662e4c10f8225204668dfdcaf92ee1f04d744f8d5ea8b9a",
+  "features_uri": "s3://marin-us-east-02a/helico/evaluations/exp23/validation-v1",
+  "features_manifest_sha256": "6e7e16b4bd38fdb2ee533ef8c6813687ab307f95e3e8f5594d6725cbd8116f70",
+  "gpus": 8,
+  "cycles": 1,
+  "diffusion_steps": 200,
+  "seed": 2301,
+  "run_name": "exp23-contact-eval-validation-structures-v1",
+  "output_uri": "s3://marin-us-east-02a/helico/evaluations/exp23/validation-structures-v1",
+  "stage": "generation",
+  "weights": [
+    "ema",
+    "protenix"
+  ],
+  "msa_modes": [
+    true
+  ],
+  "seeds": [
+    0
+  ],
+  "samples": 2,
+  "features_dataset": {
+    "repo_id": "timodonnell/helico-contact-eval-v1",
+    "revision": "ec4de019de89f79f03da31c5e026ddf7d858e77e"
+  },
+  "model_source": {
+    "repo_id": "timodonnell/helico-masked-contact-exp22",
+    "revision": "01a6025408d078aa8305f302d1d664a0291c45ee",
+    "weights": "ema.pt"
+  }
+}
