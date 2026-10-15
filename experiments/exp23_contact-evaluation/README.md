@@ -45,10 +45,10 @@ import os
 from helico.experiment import set_experiment, ensure_bench_run
 set_experiment('exp23_contact-evaluation')
 stage = os.environ.get('HELICO_EVAL_STAGE', 'smoke')
-stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2), 'development': ('contact-development-v1', 4), 'conditioning': ('contact-conditioning-v1', 4), 'search': ('contact-search-v1', 6), 'validation-structures': ('contact-validation-structures-v1', 6), 'alternative-states': ('contact-alternative-states-v1', 2), 'blind-preflight': ('contact-blind-preflight-v2', 3), 'contact-hypotheses': ('contact-contact-hypotheses-v1', 4)}
+stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2), 'development': ('contact-development-v1', 4), 'conditioning': ('contact-conditioning-v1', 4), 'search': ('contact-search-v1', 6), 'validation-structures': ('contact-validation-structures-v2', 6), 'alternative-states': ('contact-alternative-states-v1', 2), 'blind-preflight': ('contact-blind-preflight-v2', 3), 'contact-hypotheses': ('contact-contact-hypotheses-v1', 4)}
 config_name, hours = stage_configs[stage]
 # Whole-study allowance: $96 incremental storage/transfer, <=512 prepaid H100-hours.
-gpus = 4 if stage in {'alternative-states', 'contact-hypotheses', 'blind-preflight'} else 8
+gpus = 4 if stage in {'alternative-states', 'contact-hypotheses', 'blind-preflight', 'validation-structures'} else 8
 spec = dict(job_name=f'helico-exp23-{config_name}', mode='evaluate', gpus=gpus,
     cpu=12*gpus, memory=f'{125*gpus}g', disk='200g',
     image='pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca',
@@ -63,7 +63,7 @@ print(run.meta)
 
 ## Status
 
-All 384 full validation inputs were prepared without failures. The GPU preflight, full 384-target contact audit and 24-target structural development evaluation completed without failures. Conditioning, matched-time search and a 384-target structure comparison are running. FoldBench inputs and the official scoring harness are being prepared; blind benchmark results are pending.
+All 384 full validation inputs were prepared without failures. The GPU preflight, full 384-target contact audit and 24-target structural development evaluation completed without failures. Conditioning and matched-time search are complete; efficient contact-hypothesis sampling and the 384-target structure comparison are pending completion. FoldBench inputs and the official scoring harness are being prepared; blind benchmark results are pending.
 
 ### Validation weight selection
 
@@ -80,3 +80,7 @@ All 768 conditioning arms completed (24 targets, two seeds, MSA on/off, eight mo
 A further contact-hypotheses stage uses 7 or 32 trunk/contact-head transitions and generates coordinates only at the end of each of four independently sampled absorbing trajectories. Its primary comparison uses the original 24-target panel; three extra entries complete the separately reported alternative-reference panel. Ordinary batched sampling gets the same measured model-compute budget. This stage separates contact generation cost from repeatedly generating coordinates at every revelation step.
 
 The first blind shape preflight exposed a cubic dummy-template attention allocation at 1,672 and 2,043 tokens. Inference above 1,024 tokens now chunks independent anchor rows, retaining all attention keys and the learned dummy-template computation. CPU output/gradient parity and GPU BF16 parity are checked; smaller evaluation inputs and training retain the existing path. The failed attempt is preserved and a versioned preflight reruns all eight molecule/size examples. Resource failures remain explicit.
+
+The complete 24-target matched-time comparison does not resolve an accuracy advantage: tree minus ordinary confidence-selected observed-atom lDDT is +0.00369 (95% target-bootstrap interval −0.00172 to +0.00990), and progressive unmasking is +0.00046 (−0.00339 to +0.00424). Oracle-best quality also does not improve. These numbers use the full unmasking time horizon, where all 24 targets have ordinary candidates; the shorter tree horizon has one target without a complete ordinary batch and reports that missing value explicitly. See `plots/contact-search.png`.
+
+The 8-GPU validation-structures-v1 allocation was preempted before producing any predictions and then remained queued. It was canceled and replaced by validation-structures-v2, using four GPUs and deterministic token-count balancing. Input identities, seeds, model settings and the target set are unchanged. Full FoldBench is planned as four 4-GPU shards per model, for up to 32 GPUs without requiring eight free GPUs on a single node.
