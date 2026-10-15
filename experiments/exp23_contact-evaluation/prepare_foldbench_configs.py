@@ -30,7 +30,8 @@ def main():
         initial=json.loads(args.completion_of.read_text())
         deferred={r['pdb_id'] for r in initial if r['status']=='alignment_pending'}
         records=[r for r in records if r['pdb_id'] in deferred]
-        if not deferred or any(r['status']!='ready' for r in records):
+        if not deferred or len(records)!=len(deferred) or any(
+                r['status']!='ready' and 'resource ceiling' not in r.get('error','') for r in records):
             raise ValueError('Completion inputs are still unavailable or failed')
     shard_count=1 if args.completion_of else 4
     partitions=assign_targets(records,4*shard_count,balanced=True)
@@ -69,7 +70,7 @@ def main():
     protocol['initialization_and_ema_comparison_frozen_before_scoring']=True
     (output/'foldbench_protocol.json').write_text(json.dumps(protocol,indent=2)+'\n')
     print('Shard sizes:',[len(s) for s in shards])
-    print('Ready:',sum(map(len,shards)),'explicit input resource failures:',sum(r['status']!='ready' for r in records))
+    print('Ready:',sum(map(len,shards)),'explicit deferred/failed inputs:',sum(r['status']!='ready' for r in records))
 
 
 if __name__=='__main__':main()
