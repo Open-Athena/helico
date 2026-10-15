@@ -45,24 +45,25 @@ import os
 from helico.experiment import set_experiment, ensure_bench_run
 set_experiment('exp23_contact-evaluation')
 stage = os.environ.get('HELICO_EVAL_STAGE', 'smoke')
-stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2), 'development': ('contact-development-v1', 4), 'conditioning': ('contact-conditioning-v1', 4), 'search': ('contact-search-v1', 6), 'validation-structures': ('contact-validation-structures-v1', 6)}
+stage_configs = {'smoke': ('contact-smoke-v2', 2), 'audit': ('contact-audit-v1', 2), 'development': ('contact-development-v1', 4), 'conditioning': ('contact-conditioning-v1', 4), 'search': ('contact-search-v1', 6), 'validation-structures': ('contact-validation-structures-v1', 6), 'alternative-states': ('contact-alternative-states-v1', 2)}
 config_name, hours = stage_configs[stage]
 # Whole-study allowance: $96 incremental storage/transfer, <=512 prepaid H100-hours.
-spec = dict(job_name=f'helico-exp23-{config_name}', mode='evaluate', gpus=8,
-    cpu=96, memory='1000g', disk='200g',
+gpus = 4 if stage == 'alternative-states' else 8
+spec = dict(job_name=f'helico-exp23-{config_name}', mode='evaluate', gpus=gpus,
+    cpu=12*gpus, memory=f'{125*gpus}g', disk='200g',
     image='pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca',
     timeout_seconds=hours * 3600, config=f'configs/eval/{config_name}.json',
     output_uri=f"s3://marin-us-east-02a/helico/evaluations/exp23/{config_name.removeprefix('contact-')}",
     priority_band='interactive', estimated_incremental_cost_usd=96,
     cost_accounting='Whole exp23 study: <=512 prepaid H100-hours and $96 first-month storage/transfer allowance')
-run = ensure_bench_run(config_name, coreweave=spec, gpu='H100', workers=8,
+run = ensure_bench_run(config_name, coreweave=spec, gpu='H100', workers=gpus,
     est_wall_hours=hours)
 print(run.meta)
 ```
 
 ## Status
 
-All 384 full validation inputs were prepared without failures. Twelve initial inference-isolation, masking, scoring and priority checks pass. GPU preflight, full evaluation and search results are pending.
+All 384 full validation inputs were prepared without failures. The GPU preflight, full 384-target contact audit and 24-target structural development evaluation completed without failures. Conditioning, matched-time search and a 384-target structure comparison are running. FoldBench inputs and the official scoring harness are being prepared; blind benchmark results are pending.
 
 ### Validation weight selection
 

@@ -389,6 +389,8 @@ def main():
     for weights in cfg['weights']:
         model = load_model(checkpoint, weights, cfg, args.initial)
         for record in targets:
+            if cfg.get('default_panel_group'):
+                record = {**record, 'panel_group': cfg['default_panel_group']}
             print(json.dumps(dict(event='target', rank=rank, weights=weights,
                 pdb_id=record['pdb_id'], stage=cfg['stage'])), flush=True)
             try:
