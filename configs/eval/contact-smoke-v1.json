@@ -32,5 +32,9 @@
     "7vp4",
     "7qeh",
     "7vt8"
-  ]
+  ],
+  "features_dataset": {
+    "repo_id": "timodonnell/helico-contact-eval-v1",
+    "revision": "ec4de019de89f79f03da31c5e026ddf7d858e77e"
+  }
 }
