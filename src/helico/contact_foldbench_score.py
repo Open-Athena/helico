@@ -32,7 +32,7 @@ def score_prediction(task):
     folder = Path(output) / row['model'] / row['pdb_id'] / f"s{row['seed']}-{row['sample']}"
     folder.mkdir(parents=True, exist_ok=True)
     marker = folder / 'scores.json'
-    identity = hashlib.sha256(json.dumps(dict(scoring_schema=2, row=row, targets=targets), sort_keys=True).encode()).hexdigest()
+    identity = hashlib.sha256(json.dumps(dict(scoring_schema=3, row=row, targets=targets), sort_keys=True).encode()).hexdigest()
     if marker.exists():
         saved = json.loads(marker.read_text())
         if saved['identity'] != identity: raise ValueError('Changed prediction or target metadata')
@@ -61,15 +61,21 @@ def score_prediction(task):
         category = target['category']; mode = 'ligand' if category=='interface_protein_ligand' else 'structure'
         a, b = native_chains(target)
         try:
-            if mode in failures: raise RuntimeError(failures[mode])
+            na_interface=category in {'interface_protein_dna','interface_protein_rna'}
+            if mode in failures and not na_interface: raise RuntimeError(failures[mode])
             if mode == 'ligand':
                 rmsd, lddt_lp, lddt_pli = get_ligand_value(str(folder/'ligand.json'),a,b)
-                if rmsd is None or lddt_pli is None: raise ValueError('Unassigned native ligand')
+                if rmsd is None or lddt_pli is None or not np.isfinite([rmsd,lddt_pli]).all():
+                    raise ValueError('Unassigned native ligand or nonfinite score')
                 result.update(rmsd=rmsd, lddt_lp=lddt_lp, lddt_pli=lddt_pli,
                               success=bool(rmsd<2 and lddt_pli>.8))
             else:
-                dockq, irmsd, lrmsd, _, lddt, tm, gdt, rmsd = get_structure_value(str(folder/'structure.json'),a,b)
-                if category in {'interface_protein_dna','interface_protein_rna'}:
+                dockq=irmsd=lrmsd=lddt=tm=gdt=rmsd=None
+                if mode not in failures:
+                    dockq, irmsd, lrmsd, _, lddt, tm, gdt, rmsd = get_structure_value(str(folder/'structure.json'),a,b)
+                else:
+                    result['auxiliary_structure_error']=failures[mode]
+                if na_interface:
                     # Official modified DockQv2 handles nucleic-acid interfaces.
                     # A separate bounded subprocess prevents pathological chain
                     # permutations from hanging the scoring pool.
@@ -81,8 +87,9 @@ def score_prediction(task):
                         proc=subprocess.run(command,capture_output=True,text=True,timeout=timeout)
                         if proc.returncode: raise RuntimeError(proc.stderr[-500:])
                     na = json.loads(na_path.read_text());dockq,irmsd,lrmsd=na['dockq'],na['irmsd'],na['lrmsd']
-                if lddt is None: raise ValueError('OST returned no lDDT')
-                if category.startswith('interface') and dockq is None: raise ValueError('Unassigned native interface')
+                if category.startswith('interface'):
+                    if dockq is None or not np.isfinite(dockq):raise ValueError('Unassigned native interface or nonfinite DockQ')
+                elif lddt is None or not np.isfinite(lddt):raise ValueError('OST returned no finite lDDT')
                 result.update(dockq=dockq,irmsd=irmsd,lrmsd=lrmsd,lddt=lddt,tm_score=tm,gdt_ts=gdt,rmsd=rmsd)
                 if category.startswith('interface'): result['success']=bool(dockq>=.23)
         except Exception as error:
@@ -106,14 +113,59 @@ def summarize(predictions, scores, targets, output):
             row=dict(model=model,category=category,denominator=len(reference),predicted=len(frame),
                      scored=len(good),failed_or_missing=len(reference)-len(good))
             if category.startswith('interface'):
-                successes=int(good.success.fillna(False).astype(bool).sum())
+                successes=int(good.success.eq(True).sum())
                 row.update(successes=successes,success_rate_all=successes/len(reference),
                            success_rate_scored=successes/len(good) if len(good) else np.nan)
+            elif 'lddt' in good:
+                row['mean_lddt_all']=good.lddt.sum()/len(reference)
             for metric in ['lddt','dockq','rmsd','lddt_pli','tm_score']:
                 if metric in good:row['mean_'+metric]=good[metric].mean()
             rows.append(row)
     result=pd.DataFrame(rows);result.to_csv(output/'summary.csv',index=False)
+    if 'target_index' in scores and 'target_index' in targets:
+        summarize_oracle(scores,targets,output)
+        summarize_paired(selected,targets,output)
     return result
+
+
+def summarize_oracle(scores, targets, output):
+    """Per-target best-of-samples upper bound, explicitly separate from ranking."""
+    rows=[]
+    for model in scores.model.unique():
+        for category,reference in targets.groupby('category'):
+            good=scores[(scores.model==model)&(scores.category==category)&(scores.status=='complete')]
+            row=dict(model=model,category=category,denominator=len(reference),
+                     scored=good.target_index.nunique(),selection='per-target oracle')
+            if category.startswith('interface'):
+                successes=int(good.assign(hit=good.success.eq(True)).groupby('target_index').hit.max().sum())
+                row.update(successes=successes,success_rate_all=successes/len(reference))
+            else:
+                best=good.groupby('target_index').lddt.max()
+                row.update(mean_lddt_all=best.sum()/len(reference),mean_lddt_scored=best.mean())
+            rows.append(row)
+    pd.DataFrame(rows).to_csv(Path(output)/'oracle_summary.csv',index=False)
+
+
+def summarize_paired(selected, targets, output):
+    """Target-weighted deltas, bootstrapping whole assemblies with shared seeds."""
+    if not {'ema','protenix'}<=set(selected.model):return
+    rows=[]
+    for category,reference in targets.groupby('category'):
+        values={};valid={}
+        for model in ['ema','protenix']:
+            good=selected[(selected.model==model)&(selected.category==category)&(selected.status=='complete')].set_index('target_index')
+            values[model]=(good.success.eq(True).astype(float) if category.startswith('interface') else good.lddt).reindex(reference.target_index).fillna(0).to_numpy()
+            valid[model]=reference.target_index.isin(good.index).to_numpy()
+        delta=values['ema']-values['protenix'];common=valid['ema']&valid['protenix']
+        clusters=reference.assign(delta=delta).groupby('pdb_id').delta.agg(['sum','size'])
+        indices=np.random.default_rng(2301).integers(len(clusters),size=(4000,len(clusters)))
+        draws=clusters['sum'].to_numpy()[indices].sum(1)/clusters['size'].to_numpy()[indices].sum(1)
+        rows.append(dict(category=category,contrast='ema-minus-protenix',
+            metric='success_rate_all' if category.startswith('interface') else 'mean_lddt_all',
+            denominator=len(reference),assemblies=len(clusters),mean=float(delta.mean()),
+            low=float(np.quantile(draws,.025)),high=float(np.quantile(draws,.975)),
+            common_scored=int(common.sum()),mean_common_scored=float(delta[common].mean()) if common.any() else np.nan))
+    pd.DataFrame(rows).to_csv(Path(output)/'paired_differences.csv',index=False)
 
 
 def main():
@@ -136,6 +188,7 @@ def main():
         return
     predictions=pd.read_csv(args.predictions)
     targets=pd.concat([pd.read_csv(p).assign(category=p.stem) for p in sorted((args.foldbench_root/'targets').glob('*.csv'))],ignore_index=True)
+    targets['target_index']=np.arange(len(targets))
     by_id={pid:[{k:v for k,v in row.items() if pd.notna(v)} for row in frame.to_dict('records')]
            for pid,frame in targets.groupby('pdb_id')}
     tasks=[(row,by_id[row['pdb_id']],str(args.references),str(args.output),args.ost,args.timeout,str(args.foldbench_root))

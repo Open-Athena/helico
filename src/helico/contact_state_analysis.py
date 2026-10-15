@@ -11,6 +11,7 @@ import pandas as pd
 import torch
 
 from helico.contact_evaluate import load_payload
+from helico.contact_eval_metrics import contact_distances
 
 
 def aligned_rmsd(a,b):
@@ -120,4 +121,33 @@ def candidate_diversity(records, root, features_root, output, fs=None, uri=None)
                     cluster_center_mean_lddt=float(np.mean([metrics[i]['observed_lddt'] for i in centers])) if centers else np.nan))
     df=pd.DataFrame(rows);Path(output).mkdir(parents=True,exist_ok=True)
     df.to_csv(Path(output)/'search_diversity.csv',index=False)
+    return df
+
+
+def requested_distance_changes(records, root, features_root, output, fs=None, uri=None):
+    """Continuous paired steering diagnostic, beyond the 5-A contact boundary."""
+    rows=[]
+    controls={(r['pdb_id'],r['seed'],r['msa'],r['weights']):r for r in records
+              if r.get('status')=='complete' and r.get('mode')=='unknown'}
+    for record in records:
+        if record.get('status')!='complete' or record.get('mode') not in {'rescue_positive4','corrective_negative4'}:
+            continue
+        key=tuple(record[k] for k in ['pdb_id','seed','msa','weights'])
+        control=read_artifact(controls[key],root,fs,uri)
+        intervention=read_artifact(record,root,fs,uri)
+        f=load_payload(Path(features_root)/(record['pdb_id']+'.pt.gz'))['features']
+        state=intervention['contact_state']
+        pairs=torch.triu(state>0,diagonal=1).nonzero()
+        heavy=f['atom_element_idx']!=0
+        before=contact_distances(control['all_coords'][0,0],f['atom_to_token'],pairs,heavy)
+        after=contact_distances(intervention['all_coords'][0,0],f['atom_to_token'],pairs,heavy)
+        native=contact_distances(f['atom_coords'],f['atom_to_token'],pairs,heavy)
+        for (a,b),x,y,z in zip(pairs.tolist(),before,after,native):
+            positive=bool(state[a,b]==2)
+            rows.append(dict(pdb_id=key[0],seed=key[1],msa=key[2],weights=key[3],mode=record['mode'],
+                token_i=a,token_j=b,requested_contact=positive,before_distance=x,after_distance=y,
+                native_distance=z,toward_request_angstrom=(x-y if positive else y-x),
+                satisfied=bool(y<5) if positive else bool(y>=5)))
+    df=pd.DataFrame(rows);Path(output).mkdir(parents=True,exist_ok=True)
+    df.to_csv(Path(output)/'conditioning_requested_distances.csv',index=False)
     return df

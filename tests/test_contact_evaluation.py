@@ -121,13 +121,15 @@ def test_official_summary_selects_confidence_and_keeps_failed_denominator(tmp_pa
     category='interface_protein_ligand'
     predictions=pd.DataFrame([dict(model='ema',pdb_id='a',seed=0,sample=0,ranking_score=.9),
                               dict(model='ema',pdb_id='a',seed=0,sample=1,ranking_score=.2)])
-    scores=pd.DataFrame([{**r,'category':category,'status':'complete','success':r['sample']==1,
+    scores=pd.DataFrame([{**r,'category':category,'target_index':0,'status':'complete','success':r['sample']==1,
                           'rmsd':4. if r['sample']==0 else 1.,'lddt_pli':.9}
                          for r in predictions.to_dict('records')])
-    targets=pd.DataFrame([dict(pdb_id=p,category=category) for p in ['a','b']])
+    targets=pd.DataFrame([dict(pdb_id=p,category=category,target_index=i) for i,p in enumerate(['a','b'])])
     result=summarize(predictions,scores,targets,tmp_path).iloc[0]
     assert result.denominator==2 and result.scored==1 and result.failed_or_missing==1
     assert result.successes==0 and result.success_rate_all==0
+    oracle=pd.read_csv(tmp_path/'oracle_summary.csv').iloc[0]
+    assert oracle.successes==1 and oracle.success_rate_all==.5
 
 
 def test_rmsd_removes_rigid_motion_but_not_reflections():
@@ -143,3 +145,19 @@ def test_official_target_chain_schemas_for_polymer_ligand_and_monomer():
     assert native_chains(dict(native_chain_id_1='A-2',native_chain_id_2='F-2'))==('A-2','F-2')
     assert native_chains(dict(interface_chain_id_1='A',interface_chain_id_2='C'))==('A','C')
     assert native_chains(dict(chain_id='B'))==('B','B')
+
+
+def test_official_paired_effect_weights_targets_and_counts_missing_as_failure(tmp_path):
+    import pandas as pd
+    from helico.contact_foldbench_score import summarize_paired
+    category='interface_protein_protein'
+    targets=pd.DataFrame([dict(category=category,pdb_id=p,target_index=i)
+                          for i,p in enumerate(['a','a','b'])])
+    selected=pd.DataFrame([dict(category=category,model=model,target_index=i,status='complete',success=hit)
+                          for model,entries in [('ema',[(0,True),(1,True)]),
+                                                ('protenix',[(0,False),(1,False),(2,True)])]
+                          for i,hit in entries])
+    summarize_paired(selected,targets,tmp_path)
+    row=pd.read_csv(tmp_path/'paired_differences.csv').iloc[0]
+    assert row.denominator==3 and row.assemblies==2 and row.common_scored==2
+    assert abs(row['mean']-1/3)<1e-10 and row.mean_common_scored==1
