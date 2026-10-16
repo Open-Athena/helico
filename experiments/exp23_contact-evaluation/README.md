@@ -69,6 +69,8 @@ print(run.meta)
 
 All validation stages are complete without target failures, including contact-only hypothesis sampling. Eight full-input FoldBench shards are submitted for 1,482 ready complexes, with another 13 awaiting external alignments and 27 explicit resource-cap failures. Official blind results are pending.
 
+Completed validation records, all candidate tensor artifacts, CSVs and figures are published at [timodonnell/helico-contact-exp23-results@509631e9036ce59f0875b149545cf0da18765d8c](https://huggingface.co/datasets/timodonnell/helico-contact-exp23-results/tree/509631e9036ce59f0875b149545cf0da18765d8c). All 131 uploaded files were verified against remote content hashes; per-stage manifests retain each tensor artifact's producer checksum, source commit and configuration hash. Full benchmark outputs will be added after completion.
+
 ### Validation weight selection
 
 Across the fixed 24-target development panel, confidence-selected EMA predictions have mean observed-atom lDDT 0.84442, versus 0.84374 for regular weights (paired difference +0.00068; 95% target-bootstrap interval −0.00125 to +0.00245). Interface lDDT slightly favors regular weights (0.58495 vs 0.58180); neither difference is resolved by this panel. EMA is selected for the subsequent conditioning/search and blind test based on the full-complex mean, with the near-tie recorded explicitly. No FoldBench predictions or scores were used. These geometry diagnostics use fixed correspondence, not official benchmark scoring.
