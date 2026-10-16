@@ -1,0 +1,25 @@
+{
+  "checkpoint_sha256": "64cf2d396bfc497455c55043674066c90e7762b753d8fb032dd340f6832c6a9d",
+  "input_sha256": "f6905ca3dc7dc3e22e3f39a37b04b88f40dd5966d5fbbef9819784b06b096dbc",
+  "prediction_sha256": "3c6d9d5ed4576bf2444e807df0cc5d3c867c1a4814bd6f4f5a1f9e1e676dcb19",
+  "seconds": 8.861978583969176,
+  "weight_variant": "ema",
+  "step": 20000,
+  "seed": 2387,
+  "samples": 2,
+  "cycles": 1,
+  "diffusion_steps": 200,
+  "msa": true,
+  "contacts": "all unknown",
+  "max_absolute_difference_from_full_checkpoint_smoke": {
+    "contact_logits": 0.875,
+    "contact_probs": 0.08984375,
+    "all_coords": 3.6565051078796387,
+    "all_ptm": 0.0007210373878479004,
+    "all_iptm": 0.0,
+    "all_ranking_score": 0.0007210373878479004,
+    "all_has_clash": 0.0
+  },
+  "source_input": "timodonnell/helico-contact-eval-v1@ec4de019de89f79f03da31c5e026ddf7d858e77e/7qeh.pt.gz",
+  "note": "Local A5000 smoke; not included in H100 model-time comparisons."
+}

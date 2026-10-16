@@ -146,3 +146,15 @@ The [source pipeline](https://github.com/TernaryTx/flock) defines its PDB negati
 The full benchmark exposed two execution defects outside the primary metric definitions. OpenStructure's optional rigid-body metrics can abort an otherwise valid lDDT/DockQ computation (8c5h); the wrapper recovers the same primary metrics without the optional rigid/TM metrics and retains the original error. Its ligand CLI also formats a documented pair of inconsistent residues as one residue (8cqi, 8qk9). A wrapper around OpenStructure's public ligand-scoring APIs preserves the CLI's loading, cleanup, assignment and numerical settings while serializing that metadata correctly. Assigned ligands and all primary ligand scores match the original working CLI outputs within 1e-7 on all 16 preflight ligand predictions; see `data/scorer_recovery_verification.json`. No library functions are patched at runtime.
 
 Completed successful primary scores remain cached unchanged. Failed records are revisited uniformly for both models, original failed records/logs are retained, and stage receipts count recovered and remaining failures. Native-versus-native scoring also fails for the 8cs0 protein–DNA case in the official modified DockQ code; unsupported/unassigned interfaces remain explicit failures in the original denominators. Model weights, inference inputs and selection rules are unchanged.
+
+## Reproduce one released-model prediction
+
+With the repository's CUDA dependencies installed and source at `5806c0f` or later, download the pinned release and one prepared validation input:
+
+```text
+hf download timodonnell/helico-masked-contact-exp22 ema.pt --revision 01a6025408d078aa8305f302d1d664a0291c45ee --local-dir /tmp/helico-model
+hf download timodonnell/helico-contact-eval-v1 7qeh.pt.gz --type dataset --revision ec4de019de89f79f03da31c5e026ddf7d858e77e --local-dir /tmp/helico-input
+python experiments/exp23_contact-evaluation/predict_released.py --checkpoint /tmp/helico-model/ema.pt --features /tmp/helico-input/7qeh.pt.gz --output /tmp/helico-prediction.pt
+```
+
+The tensor output contains generated coordinates, contact probabilities and confidence. Its companion JSON records input/weight/output checksums and inference settings. All native coordinates, contact labels and observation masks are removed before the model call. This example uses full prepared inputs with MSA and unknown contacts; arbitrary sequences and ligands require the full input-preparation pipeline. The released-weight smoke matches the corresponding full-checkpoint prediction exactly on the same local GPU; see `data/released_model_inference_check.json`.
