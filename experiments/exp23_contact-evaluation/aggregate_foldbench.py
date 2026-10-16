@@ -32,8 +32,13 @@ def main():
     predictions=[];scores=[];failures=[];stages=[]
     for name in names:
         stage=json.loads((args.results/name/'done.json').read_text());stages.append(stage)
-        predictions.append(pd.read_csv(stage['predictions']))
-        scores.append(pd.read_csv(stage['scores']))
+        # Paths resolve after extracting the published per-stage score archives.
+        for destination, path in [(predictions, stage['predictions']),
+                                  (scores, stage['scores'])]:
+            frame=pd.read_csv(path)
+            frame['prediction_path']=frame.prediction_path.map(
+                lambda p: str(Path(p).resolve().relative_to(args.results.resolve())))
+            destination.append(frame)
         for path in (args.raw/'.cache'/name/'errors').rglob('*.json'):
             r=json.loads(path.read_text())
             failures.append(dict(model=r['weights'],pdb_id=r['pdb_id'],kind='inference',error=r['error']))
