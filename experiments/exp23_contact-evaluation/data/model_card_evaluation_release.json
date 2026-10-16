@@ -1,0 +1,10 @@
+{
+  "repo_id": "timodonnell/helico-masked-contact-exp22",
+  "revision": "ea1f0c7bd72ba169c09ff1e9757578a089023a5d",
+  "weights_unchanged": {
+    "raw.pt": "8e1b8caaa7d1683346001bd8a06ebe34981b50dc0719e155a9b2de8fceecff3c",
+    "ema.pt": "64cf2d396bfc497455c55043674066c90e7762b753d8fb032dd340f6832c6a9d"
+  },
+  "results_revision": "98c1e62dc33c5052d8ec6feeba5036887dcf6789",
+  "source_commit": "d764b577019b9611b9f8356ffa2d6cd7268d559f"
+}

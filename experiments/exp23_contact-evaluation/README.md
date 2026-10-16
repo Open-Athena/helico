@@ -79,6 +79,8 @@ print(run.meta)
 
 ## Status
 
+Published: [verified results and all prediction archives](https://huggingface.co/datasets/timodonnell/helico-contact-exp23-results/tree/98c1e62dc33c5052d8ec6feeba5036887dcf6789) · [model and evaluated usage](https://huggingface.co/timodonnell/helico-masked-contact-exp22/tree/ea1f0c7bd72ba169c09ff1e9757578a089023a5d) · [completed W&B summary](https://wandb.ai/timodonnell/helico/runs/exp23-contact-evaluation-results-v1). All 255 analysis-snapshot files and 24 raw/scored stage archives were verified; the model card update preserves both weight-file hashes.
+
 All corrected validation and full-input FoldBench stages are complete, with zero inference failures on ready inputs. Official scores, full failure denominators, candidate predictions and reproducible analysis are published in the experiment release. FoldBench does not resolve improvements on protein–ligand or protein–protein success or protein monomer lDDT; protein–DNA success declines by 3.64 percentage points (nominal 95% interval −7.32 to −0.29). The modest validation lDDT gain does not establish a general benchmark improvement. The primary method decision is frozen in `data/foldbench_protocol_v2.json`: EMA versus the Protenix initialization, ordinary batched coordinate diffusion, four samples, 200 steps, one recycling cycle, at most 512 MSA rows, no templates or supplied contacts. These baseline settings are shared; the initialization arm is not the published Protenix default inference recipe.
 
 ### Model evaluated
