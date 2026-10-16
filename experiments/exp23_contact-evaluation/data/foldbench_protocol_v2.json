@@ -32,7 +32,7 @@
   "inference_geometry": "fp32_rigid_rotation",
   "inference_correction_commit": "5806c0f",
   "supersedes_protocol": "foldbench_protocol.json",
-  "corrected_blind_quality_inspected": false,
+  "corrected_blind_quality_inspected": true,
   "historical_search_selection": {
     "search_method_selected": "ordinary batched coordinate diffusion",
     "search_decision_utc": "2026-10-15T23:50:30.387175+00:00",
@@ -49,5 +49,7 @@
     "conditioning-repeat-v1/repeat_control_summary.csv": "141984bf4a85e4a7fa8726911e876d89e73c03bc045bde280e8c49e5068fcb0a",
     "development-v2/structure_paired_differences.csv": "ab6ed0f23b68cd1179362ee192f6e939a13d5e8fa4a6b71e92c2d7a1437f7fc1"
   },
-  "selection_note": "Corrected validation measurements only. Historical FoldBench predictions diagnosed the coordinate-precision defect; corrected blind numerical quality scores have not been inspected at this decision."
+  "selection_note": "Corrected validation measurements only. Historical FoldBench predictions diagnosed the coordinate-precision defect; corrected blind numerical quality scores have not been inspected at this decision.",
+  "corrected_blind_first_quality_inspection_utc": "2026-10-16T02:51:01Z",
+  "corrected_blind_quality_inspection_note": "First incidental partial numerical score output during operational scoring-log review; subsequent quality analysis follows the validation decision frozen at 02:38:08 UTC. No inference or selection settings changed."
 }

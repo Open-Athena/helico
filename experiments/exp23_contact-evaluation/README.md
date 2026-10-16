@@ -79,7 +79,7 @@ print(run.meta)
 
 ## Status
 
-All corrected validation stages are complete with no target inference failures. The full-input FoldBench comparison is finishing; numerical benchmark results are pending final aggregation. The primary method decision is frozen in `data/foldbench_protocol_v2.json`: EMA versus the Protenix initialization, ordinary batched coordinate diffusion, four samples, 200 steps, one recycling cycle, at most 512 MSA rows, no templates or supplied contacts. These baseline settings are shared; the initialization arm is not the published Protenix default inference recipe.
+All corrected validation and full-input FoldBench stages are complete, with zero inference failures on ready inputs. Official scores, full failure denominators, candidate predictions and reproducible analysis are published in the experiment release. FoldBench does not resolve improvements on protein–ligand or protein–protein success or protein monomer lDDT; protein–DNA success declines by 3.64 percentage points (nominal 95% interval −7.32 to −0.29). The modest validation lDDT gain does not establish a general benchmark improvement. The primary method decision is frozen in `data/foldbench_protocol_v2.json`: EMA versus the Protenix initialization, ordinary batched coordinate diffusion, four samples, 200 steps, one recycling cycle, at most 512 MSA rows, no templates or supplied contacts. These baseline settings are shared; the initialization arm is not the published Protenix default inference recipe.
 
 ### Model evaluated
 
@@ -125,17 +125,39 @@ Two identical-sequence apo/bound pairs were selected from validation reference g
 
 ### FoldBench inputs, scoring and coverage
 
-The initial immutable input release contains 1,482 ready full complexes, 27 explicit failures above the 2,048-token resource cap, and 13 assemblies awaiting one existing external alignment batch. Normal-length proteins with query-only placeholders cannot enter ready features. Inputs retain full sequences/chemical identities and independently prepared paired/unpaired MSAs; native coordinates, pockets, contacts and observation masks are unavailable to inference. No target is cropped. All 1,522 assemblies and 1,823 official category targets remain in final denominators, including unresolved inputs or scoring failures.
+The initial immutable input release contains 1,482 ready full complexes, 27 explicit failures above the 2,048-token resource cap, and 13 assemblies whose existing external alignment batch remained unavailable after bounded recovery. Normal-length proteins with query-only placeholders cannot enter ready features. Inputs retain full sequences/chemical identities and independently prepared paired/unpaired MSAs; native coordinates, pockets, contacts and observation masks are unavailable to inference. No target is cropped. All 1,522 assemblies and 1,823 official category targets remain in final denominators, including unresolved inputs or scoring failures.
 
 Primary interface success uses official DockQ ≥0.23, or ligand RMSD <2 Å and lDDT-PLI >0.8; monomers use OpenStructure lDDT with stereochemical checks. Confidence-selected performance and oracle best-of-four are separate. Paired intervals resample whole PDB assemblies while preserving target weighting. Reference-self checks cover all nine categories. An optional rigid-metric failure can be retried using the same primary metrics; the ligand CLI serialization defect is handled through a wrapper around public OpenStructure APIs, with numerical parity checked on all 16 preflight ligand predictions. No imported library is monkey-patched. Unassigned/unsupported interfaces remain failures; original errors and recovery receipts are retained.
 
 The large-input preflight exposed excessive dummy-template attention allocation. Above 1,024 tokens, evaluation chunks independent anchor rows while retaining all attention keys and the learned dummy-template computation; CPU output/gradient and GPU BF16 parity checks pass. Both models completed the eight-target shape preflight through 2,043 tokens. A later CPU export process lost its Protenix environment; it was restarted with the correct environment and durable inference outputs, without GPU reruns. See `data/postprocessing_environment_recovery.json`.
 
+### Completed official FoldBench comparison
+
+| Category | Targets | Initialization | EMA | Paired difference (95% CI) |
+|---|---:|---:|---:|---:|
+| Protein–protein | 279 | 58.06% | 56.99% | -1.08 pp [-4.12, +1.82] |
+| Protein–ligand | 558 | 43.91% | 44.44% | +0.54 pp [-2.15, +3.57] |
+| Antibody–antigen | 172 | 25.00% | 25.00% | +0.00 pp [-4.97, +4.84] |
+| Protein–peptide | 51 | 70.59% | 60.78% | -9.80 pp [-23.53, +1.96] |
+| Protein–DNA | 330 | 67.58% | 63.94% | -3.64 pp [-7.32, -0.29] |
+| Protein–RNA | 70 | 44.29% | 50.00% | +5.71 pp [-2.90, +14.76] |
+| Protein monomer | 334 | 0.8289 | 0.8278 | -0.0011 [-0.0049, +0.0023] |
+| RNA monomer | 15 | 0.6124 | 0.6330 | +0.0206 [-0.0119, +0.0542] |
+| DNA monomer | 14 | 0.5436 | 0.5487 | +0.0051 [-0.0304, +0.0421] |
+
+Interface values are success rates; monomers use OpenStructure lDDT with stereochemical checks. Each model selects one of four samples by predicted confidence. The initialization baseline uses identical Helico inference settings, not the published default Protenix recipe. Intervals are nominal paired whole-assembly bootstrap intervals (4,000 draws), without correction across categories. Every official target remains in the denominator; missing/input/resource/scoring failures score zero. Oracle best-of-four and scored-only summaries are separate CSVs.
+
+All 1482 ready complexes completed for both models, producing 11,856 structures with zero inference failures. The 27 resource-cap exclusions and 13 unresolved alignment inputs remain explicit. The existing external alignment ticket did not complete within the bounded recovery window; no query-only substitute was used. Combined official scoring contains 14,096 sample–target rows; 257 failed rows span 26 assemblies. Native-versus-native diagnostics reproduce failures on 19 of 35 checked targets. These checks explain limitations and do not remove failures or alter model scores.
+
+CoreWeave execution totals 93.49 H100-hours across 71 attempts and 36 jobs, including failed, preempted and superseded work; peak concurrency was 48 H100s. All current GPU jobs and their 16 W&B stage runs finished. This is execution accounting, not an invoice; local A5000 diagnostics and repository CI are separate. The 512 prepaid H100-hour / $96 storage-transfer allowance was retained. One unchanged-source GPU CI run intermittently failed the pre-recycle BF16 snapshot comparison; its unchanged rerun passed all 394 tests (three optional fixture skips), and the original evidence is recorded in `data/ci_snapshot_repeatability.json`. No snapshot or tolerance was changed.
+
+See `data/foldbench-v2/`, `data/scorer_failed_target_native_selfcheck.csv`, `data/resource_accounting/` and `plots/corrected/foldbench.png`.
+
 ### Next training recipe and candidate interaction data
 
 The mask-support audit identifies a mismatch with the intended few-contact use case. For a fully observed 384-residue protein crop with the configured sequence exclusion, there are 71,631 eligible unordered pairs. At the sparsest nonterminal training time (999/1000), the expected revealed count is still 71.6; the probability of at most four reveals is about 8.75e-26. Actual crops vary, but the existing sparse bucket does not explicitly train 1/4/16-label inputs. See `data/mask_support_audit.json`.
 
-A subsequent run should retain value-independent Bernoulli absorption while sampling noise levels according to the number of eligible pairs, explicitly covering expected revealed counts 1, 4, 16 and 64 alongside broad noise and endpoint cases. Use finer or continuous diffusion time. Establish contact-head response and geometric satisfaction of supplied constraints on held-out targets before spending more compute on search; do not force every marginal head prediction into one structure. The present study launches no further training.
+A subsequent run should retain value-independent Bernoulli absorption while sampling noise levels according to the number of eligible pairs, explicitly covering expected revealed counts 1, 4, 16 and 64 alongside broad noise and endpoint cases. Use finer or continuous diffusion time. Establish contact-head response and geometric satisfaction of supplied constraints on held-out targets before spending more compute on search; do not force every marginal head prediction into one structure. The present study launches no further training. Confidence ranking also deserves validation: EMA ligand best-of-four success is 54.12%, versus 44.44% for confidence selection; DNA oracle success is 68.48% versus initialization 68.79%, while selected performance falls to 63.94% versus 67.58%. These oracle gaps are upper bounds, not evidence that a deployable ranking rule will recover them; future ranking choices must use validation rather than this benchmark.
 
 A read-only audit of [Flock revision c2c993c3](https://huggingface.co/datasets/ternarytx/flock/tree/c2c993c31bf33184f12446bb33a3dc3c86e0f42b) finds 26,934 positive and 377,643 negative pairs: 368,937 negatives are PDB-derived and 8,706 literature-derived. Respect `published_as_negative` in the evidence table. Its 2023-06-01 cutoff does not preserve this project's 2021-09-30 split; its [source pipeline](https://github.com/TernaryTx/flock) uses Cβ separation above 8 Å, distinct from our heavy-atom definition. Recompute geometric labels and sequence/interface exclusions before release. Keep structural noncontact and assay noninteraction as distinct supervision types. Nonstructural positive binding evidence cannot justify invented dense contact maps or coordinates. These data may help specificity, but do not by themselves fix weak structural control.
 

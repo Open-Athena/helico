@@ -41,7 +41,7 @@ def main():
         left.barh(y + offset, 100 * np.array(values), height=.32, color=color, label=label)
     labels = [f"{CATEGORIES[name]}  (n={int(paired.loc[name, 'denominator'])})" for name in names]
     left.set_yticks(y, labels); left.invert_yaxis(); left.set_xlim(0, 100)
-    left.set_xlabel('Interface success rate / monomer lDDT (%)')
+    left.set_xlabel('Interface success (%) / monomer lDDT (0–100)')
     left.set_title('Confidence-selected, four samples')
     fig.legend(*left.get_legend_handles_labels(), loc='upper center',
                bbox_to_anchor=(.57, .93), ncol=2, frameon=False, fontsize=9)
@@ -50,7 +50,7 @@ def main():
     error = 100 * np.stack([values['mean'] - values['low'], values['high'] - values['mean']])
     right.errorbar(mid, y, xerr=error, fmt='o', color='#247ba0', capsize=3)
     right.axvline(0, color='#7c828c', lw=1)
-    right.set_xlabel('Helico − initialization (percentage points)')
+    right.set_xlabel('Helico − initialization (points)')
     right.set_title('Paired difference, 95% interval')
     for axis in [left, right]:
         axis.spines[['top', 'right']].set_visible(False)

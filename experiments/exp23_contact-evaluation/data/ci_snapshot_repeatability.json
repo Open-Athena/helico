@@ -1,0 +1,15 @@
+{
+  "failed_run": "https://github.com/Open-Athena/helico/actions/runs/38842416822",
+  "source_commit": "1b86d7a65edc6f6a65042c02337a6129e57c56ff",
+  "preceding_passing_run": "https://github.com/Open-Athena/helico/actions/runs/38841876574",
+  "preceding_source_commit": "fa2b4570fe555398e23184da2513140658e09eaa",
+  "failure": "tests/test_snapshots.py::TestTrunkSnapshot::test_z_init; max absolute difference 0.5, tolerance 0.05; max relative difference 1.562e6, tolerance 0.01. 393 passed, 3 skipped, one failed.",
+  "model_and_test_diff_empty": true,
+  "action": "One unchanged failed-job rerun requested; no tolerance or snapshot modifications. Root cause not established.",
+  "retry_pending": false,
+  "retry_conclusion": "success",
+  "retry_note": "One unchanged failed-job rerun passed the complete suite; no model, fixture, snapshot or tolerance modifications. Original intermittent failure retained.",
+  "retry_attempt": 2,
+  "retry_job_url": "https://github.com/Open-Athena/helico/actions/runs/38842416822/job/116787675078",
+  "retry_log_sha256": "3f53d137bdb26add66cbdf66cb5ec8da1235a15089aa40ca0bc75a9bfa88b417"
+}
