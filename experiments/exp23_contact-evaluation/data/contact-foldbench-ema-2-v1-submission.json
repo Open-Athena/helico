@@ -1,0 +1,21 @@
+{
+  "job_id": "/bizon/helico-exp23-contact-foldbench-ema-2-v1",
+  "cluster": "cw-rno2a",
+  "status": "submitted",
+  "spec": {
+    "job_name": "helico-exp23-contact-foldbench-ema-2-v1",
+    "mode": "evaluate",
+    "gpus": 4,
+    "cpu": 48,
+    "memory": "500g",
+    "disk": "200g",
+    "image": "pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca",
+    "timeout_seconds": 21600,
+    "config": "configs/eval/contact-foldbench-ema-2-v1.json",
+    "output_uri": "s3://marin-us-east-02a/helico/evaluations/exp23/foldbench-ema-2-v1",
+    "priority_band": "interactive",
+    "estimated_incremental_cost_usd": 96,
+    "cost_accounting": "Whole exp23 study: <=512 prepaid H100-hours and $96 first-month storage/transfer allowance",
+    "git_sha": "81061edd889be6ab1be34bde986996d2ed225e4a"
+  }
+}

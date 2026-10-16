@@ -1,0 +1,25 @@
+{
+  "run_name": "exp22-contact-scale-v3",
+  "provenance.json": {
+    "initial_checkpoint_sha256": "2b7d5a8b30494514fc47fd2271a16260528cdba170ba09cc112fdecd8f85ec04",
+    "upstream_sha": "85767b811c40ed46e73a9b39519cf6bfca8701ba",
+    "code_sha": "3fe2242c11c54101b01ec242219dbab15ca0cd4d",
+    "data_lock_sha256": "2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114"
+  },
+  "latest.json": {
+    "step": 1,
+    "checkpoint": "s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v3/step-000001.pt",
+    "data_lock_sha256": "2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114"
+  },
+  "checkpoint_bytes": 5795897603,
+  "checkpoint_validation": {
+    "step": 1,
+    "data_lock_sha256": "2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114",
+    "git_sha": "3fe2242c11c54101b01ec242219dbab15ca0cd4d",
+    "model_tensors": 3832,
+    "ema_tensors": 3832,
+    "optimizer_parameters": 3538,
+    "contact_head_weight_norm": 4.525452368397964e-06,
+    "contact_conditioning_weight_norm": 7.817968253220897e-06
+  }
+}

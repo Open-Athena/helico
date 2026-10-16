@@ -1,0 +1,10 @@
+{
+  "observed_at_ms": 1792119027415.044,
+  "jobs": 36,
+  "attempts": 71,
+  "observed_execution_h100_hours": 93.48781222222225,
+  "whole_study_h100_hour_cap": 512,
+  "incremental_storage_transfer_allowance_usd": 96,
+  "active_jobs": [],
+  "accounting_scope": "All Iris attempts, including failures, preemptions and superseded inference. Execution timestamps do not include queue time or exact container-start GPU reservation. Local A5000 diagnostic smoke checks are separate; this is not an invoice."
+}

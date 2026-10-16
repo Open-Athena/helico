@@ -1,0 +1,26 @@
+{
+  "status": "complete",
+  "initial_shards": 8,
+  "completion_shards": 0,
+  "unavailable_inputs_retained": 13,
+  "raw_archives_verified": 8,
+  "scored_archives_verified": 8,
+  "stopped_waiting_monitors": [
+    {
+      "pid": 1538298,
+      "script": "/tmp/helico-exp23-recover-foldbench-scores-v2.py"
+    },
+    {
+      "pid": 1538440,
+      "script": "/tmp/helico-exp23-publish-foldbench-raw-v2.py"
+    },
+    {
+      "pid": 1538513,
+      "script": "/tmp/helico-exp23-publish-foldbench-scores-v2.py"
+    },
+    {
+      "pid": 1687702,
+      "script": "/tmp/helico-exp23-finish-foldbench-v2.py"
+    }
+  ]
+}

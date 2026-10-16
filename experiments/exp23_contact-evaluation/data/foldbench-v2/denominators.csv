@@ -1,0 +1,10 @@
+category,targets,assemblies
+interface_antibody_antigen,172,113
+interface_protein_dna,330,190
+interface_protein_ligand,558,554
+interface_protein_peptide,51,51
+interface_protein_protein,279,239
+interface_protein_rna,70,49
+monomer_dna,14,14
+monomer_protein,334,334
+monomer_rna,15,15

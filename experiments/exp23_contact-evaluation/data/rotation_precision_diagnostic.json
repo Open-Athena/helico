@@ -1,0 +1,85 @@
+{
+  "validation_pdb": "7qeh",
+  "source_commit": "5806c0f",
+  "checkpoint_unchanged": true,
+  "diagnostic": "Distances for observed intratoken atom pairs whose native distance is 1.1\u20131.8 \u00c5; a geometry diagnostic, not an official bond assignment",
+  "regression_before": {
+    "mean_error_angstrom": 0.04893462359905243,
+    "max_error_angstrom": 0.25
+  },
+  "regression_after": "CPU/CUDA distance-preserving and autocast-invariant tests pass at 5e-5 A tolerance",
+  "predictions": [
+    {
+      "model": "protenix",
+      "sample": 0,
+      "seconds": 8.798636463470757,
+      "observed_lddt": 0.9262856550080981,
+      "native_close_intratoken_pairs": 853,
+      "mean_distance_error": 0.013766396790742874,
+      "fraction_error_over_0p2": 0.0,
+      "sampler": "rotation_fp32"
+    },
+    {
+      "model": "protenix",
+      "sample": 1,
+      "seconds": 8.798636463470757,
+      "observed_lddt": 0.930764700370772,
+      "native_close_intratoken_pairs": 853,
+      "mean_distance_error": 0.014658591710031033,
+      "fraction_error_over_0p2": 0.0,
+      "sampler": "rotation_fp32"
+    },
+    {
+      "model": "ema",
+      "sample": 0,
+      "seconds": 7.888950530439615,
+      "observed_lddt": 0.9162818402066686,
+      "native_close_intratoken_pairs": 853,
+      "mean_distance_error": 0.01098912674933672,
+      "fraction_error_over_0p2": 0.0,
+      "sampler": "rotation_fp32"
+    },
+    {
+      "model": "ema",
+      "sample": 1,
+      "seconds": 7.888950530439615,
+      "observed_lddt": 0.920881352982907,
+      "native_close_intratoken_pairs": 853,
+      "mean_distance_error": 0.010541521944105625,
+      "fraction_error_over_0p2": 0.0,
+      "sampler": "rotation_fp32"
+    },
+    {
+      "model": "protenix",
+      "sample": 0,
+      "sampler": "original",
+      "observed_lddt": 0.9186309547711788,
+      "mean_distance_error": 0.05374108999967575,
+      "fraction_error_over_0p2": 0.031652990728616714
+    },
+    {
+      "model": "protenix",
+      "sample": 1,
+      "sampler": "original",
+      "observed_lddt": 0.9288639922900855,
+      "mean_distance_error": 0.054759956896305084,
+      "fraction_error_over_0p2": 0.030480656772851944
+    },
+    {
+      "model": "ema",
+      "sample": 0,
+      "sampler": "original",
+      "observed_lddt": 0.9107068760122609,
+      "mean_distance_error": 0.06572379916906357,
+      "fraction_error_over_0p2": 0.056271981447935104
+    },
+    {
+      "model": "ema",
+      "sample": 1,
+      "sampler": "original",
+      "observed_lddt": 0.9181290072146595,
+      "mean_distance_error": 0.06672212481498718,
+      "fraction_error_over_0p2": 0.05041031539440155
+    }
+  ]
+}

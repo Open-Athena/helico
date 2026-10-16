@@ -1,0 +1,16 @@
+[
+  {
+    "repo_id": "timodonnell/helico-contact-exp23-results",
+    "repo_type": "dataset",
+    "revision": "fbba21268fae25187032d854ff999cbc2695bd70",
+    "verified_path": "README.md",
+    "weights_changed": false
+  },
+  {
+    "repo_id": "timodonnell/helico-masked-contact-exp22",
+    "repo_type": "model",
+    "revision": "bf41ecddf3c70a78fc73d53b1c2714ffac287d62",
+    "verified_path": "README.md",
+    "weights_changed": false
+  }
+]

@@ -1,0 +1,22 @@
+Process 683: /tmp/helico/venv/bin/python -u -m helico.train_contacts --config /app/configs/train/contact-scale-v6.json --bundle /tmp/helico/data.paths.json --checkpoint /tmp/helico/protenix_base_default_v1.0.0.pt --output /tmp/helico/run --resume /tmp/helico/resume.pt
+Python v3.12.3 (/usr/bin/python3.12)
+
+Thread 683 (idle): "MainThread"
+    progress (helico/protenix_data.py:140)
+    __getitem__ (helico/protenix_data.py:146)
+    fetch (torch/utils/data/_utils/fetch.py:54)
+    _worker_loop (torch/utils/data/_utils/worker.py:358)
+    run (multiprocessing/process.py:108)
+    _bootstrap (multiprocessing/process.py:314)
+    _launch (multiprocessing/popen_fork.py:71)
+    __init__ (multiprocessing/popen_fork.py:19)
+    _Popen (multiprocessing/context.py:282)
+    _Popen (multiprocessing/context.py:224)
+    start (multiprocessing/process.py:121)
+    __init__ (torch/utils/data/dataloader.py:1192)
+    _get_iterator (torch/utils/data/dataloader.py:433)
+    __iter__ (torch/utils/data/dataloader.py:495)
+    main (helico/train_contacts.py:238)
+    <module> (helico/train_contacts.py:335)
+    _run_code (<frozen runpy>:88)
+    _run_module_as_main (<frozen runpy>:198)

@@ -25,8 +25,8 @@ def diffusion_loss(
     weighting factor 1/σ² normalizes across sampled noise levels so the
     gradient doesn't blow up at small σ.
     """
-    while sigma.dim() < gt_coords.dim():
-        sigma = sigma.unsqueeze(-1)
+    # One weight per diffusion sample, not a B x B outer product.
+    sigma = sigma.reshape(-1, 1)
     weight = 1.0 / sigma.pow(2).clamp(min=1e-6)
 
     loss = weight * (x_denoised - gt_coords).pow(2).sum(dim=-1)

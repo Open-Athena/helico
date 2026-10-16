@@ -1,0 +1,8 @@
+{
+  "snapshot": "382ad3219097b764500c75475aaae3f82547f4fd",
+  "prefix_bytes": 2147483648,
+  "prefix_sha256": "996c56e7eb28d02e1c07e232b6af045ac7139cfa473d4eef9e4767ad220ac417",
+  "msa_archive": "https://boltz1.s3.us-east-2.amazonaws.com/rcsb_raw_msa.tar",
+  "seed": 20,
+  "split_filter": "temporal + global alignment score/min length <=0.4; not a clustered benchmark"
+}

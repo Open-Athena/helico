@@ -1,0 +1,17 @@
+weights,horizon,contrast,metric,n,mean,low,high
+ema,tree,tree-minus-ordinary,selected_observed_lddt,4,0.00731240771686012,-0.004317950644484286,0.02105661338507253
+ema,tree,unmask-minus-ordinary,selected_observed_lddt,4,0.008154443360329666,-0.0023647600262863278,0.019768357065596487
+ema,tree,tree-minus-ordinary,selected_interface_lddt,2,-0.02911359547809811,-0.05574500208246569,-0.0024821888737305287
+ema,tree,unmask-minus-ordinary,selected_interface_lddt,2,0.011241288691419216,0.00026527209337567914,0.022217305289462752
+ema,tree,tree-minus-ordinary,oracle_observed_lddt,4,-0.0012587146664385651,-0.0033724104976106672,0.000854981164733537
+ema,tree,unmask-minus-ordinary,oracle_observed_lddt,4,-0.0006935535720816455,-0.002339201976145955,0.0009520948319826639
+ema,tree,tree-minus-ordinary,candidates,4,-5.125,-7.0,-4.0
+ema,tree,unmask-minus-ordinary,candidates,4,-5.375,-7.125,-4.25
+ema,unmask,tree-minus-ordinary,selected_observed_lddt,4,0.007250958418413805,-0.004379399942930601,0.02105661338507253
+ema,unmask,unmask-minus-ordinary,selected_observed_lddt,4,0.007497211415214505,-0.0023647600262863278,0.019111125120481326
+ema,unmask,tree-minus-ordinary,selected_interface_lddt,2,-0.02911359547809811,-0.05574500208246569,-0.0024821888737305287
+ema,unmask,unmask-minus-ordinary,selected_interface_lddt,2,0.011080230634726795,-5.6844020009161333e-05,0.022217305289462752
+ema,unmask,tree-minus-ordinary,oracle_observed_lddt,4,-0.0013302351341468732,-0.0035154514330272835,0.000854981164733537
+ema,unmask,unmask-minus-ordinary,oracle_observed_lddt,4,-0.0006935535720816455,-0.002339201976145955,0.0009520948319826639
+ema,unmask,tree-minus-ordinary,candidates,4,-5.875,-8.0,-4.625
+ema,unmask,unmask-minus-ordinary,candidates,4,-5.0,-7.0,-4.0

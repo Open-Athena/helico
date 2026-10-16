@@ -1,0 +1,10 @@
+{
+  "repo_id": "timodonnell/helico-contact-exp23-results",
+  "revision": "98c1e62dc33c5052d8ec6feeba5036887dcf6789",
+  "verified_files": 255,
+  "verified_current_archive_receipts": 23,
+  "source_commit": "d764b577019b9611b9f8356ffa2d6cd7268d559f",
+  "full_foldbench_pending": false,
+  "completed_validation_stages": 8,
+  "completed_foldbench_stages": 8
+}

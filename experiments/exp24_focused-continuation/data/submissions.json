@@ -1,0 +1,44 @@
+{
+  "train-500": {
+    "job_id": "/bizon/helico-exp24-focused-500-v1",
+    "spec": {
+      "job_name": "helico-exp24-focused-500-v1",
+      "mode": "train",
+      "gpus": 8,
+      "cpu": 96,
+      "memory": "1000g",
+      "disk": "3000g",
+      "image": "pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca",
+      "timeout_seconds": 14400,
+      "config": "configs/train/contact-focused-500-v1.json",
+      "output_uri": "s3://marin-us-east-02a/helico/runs/exp24-focused-500-v1",
+      "priority_band": "interactive",
+      "estimated_incremental_cost_usd": 8,
+      "cost_accounting": "Whole study: prepaid cw-rno2a fleet; at most 400 GiB NEW artifacts x $0.06/GiB-month; existing data mirror reused.",
+      "git_sha": "8fae3f211dfddce630df12358f3f8ef8df4d9c44"
+    },
+    "deadline": 1792180600.7628133,
+    "submitted_at": 1792166211.387107
+  },
+  "parent": {
+    "job_id": "/bizon/helico-exp24-focused-eval-parent-v1",
+    "spec": {
+      "job_name": "helico-exp24-focused-eval-parent-v1",
+      "mode": "evaluate",
+      "gpus": 8,
+      "cpu": 32,
+      "memory": "400g",
+      "disk": "300g",
+      "image": "pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca",
+      "timeout_seconds": 7200,
+      "config": "configs/eval/contact-focused-parent-v1.json",
+      "output_uri": "s3://marin-us-east-02a/helico/evaluations/exp24/parent-v1",
+      "priority_band": "interactive",
+      "estimated_incremental_cost_usd": 2,
+      "cost_accounting": "Whole study: prepaid cw-rno2a fleet; at most 400 GiB NEW artifacts x $0.06/GiB-month; existing data mirror reused.",
+      "git_sha": "8fae3f211dfddce630df12358f3f8ef8df4d9c44"
+    },
+    "deadline": 1792173421.3906198,
+    "submitted_at": 1792166233.229336
+  }
+}

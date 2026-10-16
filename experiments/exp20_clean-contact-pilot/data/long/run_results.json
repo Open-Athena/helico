@@ -1,0 +1,20 @@
+[
+  {
+    "arm": "masked",
+    "steps": 2048,
+    "wall_seconds": 6234.688241930038,
+    "gpu_hours": 13.854862762731113,
+    "train_examples": 53,
+    "validation_examples": 8,
+    "wandb_url": "https://wandb.ai/timodonnell/helico/runs/hhyjl3y9"
+  },
+  {
+    "arm": "unknown",
+    "steps": 2048,
+    "wall_seconds": 6301.312868425972,
+    "gpu_hours": 14.002917495524356,
+    "train_examples": 53,
+    "validation_examples": 8,
+    "wandb_url": "https://wandb.ai/timodonnell/helico/runs/ufigo0rg"
+  }
+]

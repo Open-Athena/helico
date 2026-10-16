@@ -1,0 +1,3 @@
+atomic_bonds,draw,error,msa_rows,n_atoms,n_tokens,pdb_id,retry_enabled,seconds,structural_bond_sum,wrapped
+,69546,resovled_atom_num=np.int64(0) <= 4 after ContiguousCropping,,,,6x6j,False,11.138186967931688,,True
+3155,69546,,2607,3134,384,6x6j,True,20.753739553503692,0,True

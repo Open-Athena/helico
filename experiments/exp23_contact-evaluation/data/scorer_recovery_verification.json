@@ -1,0 +1,89 @@
+{
+  "ligand_cli_public_api_parity_cases": 16,
+  "tolerance": 1e-07,
+  "cases": [
+    {
+      "pdb_id": "8bcc-assembly1",
+      "model": "ema",
+      "sample": 0
+    },
+    {
+      "pdb_id": "8bcc-assembly1",
+      "model": "ema",
+      "sample": 1
+    },
+    {
+      "pdb_id": "8bcc-assembly1",
+      "model": "ema",
+      "sample": 2
+    },
+    {
+      "pdb_id": "8bcc-assembly1",
+      "model": "ema",
+      "sample": 3
+    },
+    {
+      "pdb_id": "8c3g-assembly1",
+      "model": "ema",
+      "sample": 0
+    },
+    {
+      "pdb_id": "8c3g-assembly1",
+      "model": "ema",
+      "sample": 1
+    },
+    {
+      "pdb_id": "8c3g-assembly1",
+      "model": "ema",
+      "sample": 2
+    },
+    {
+      "pdb_id": "8c3g-assembly1",
+      "model": "ema",
+      "sample": 3
+    },
+    {
+      "pdb_id": "8bcc-assembly1",
+      "model": "protenix",
+      "sample": 0
+    },
+    {
+      "pdb_id": "8bcc-assembly1",
+      "model": "protenix",
+      "sample": 1
+    },
+    {
+      "pdb_id": "8bcc-assembly1",
+      "model": "protenix",
+      "sample": 2
+    },
+    {
+      "pdb_id": "8bcc-assembly1",
+      "model": "protenix",
+      "sample": 3
+    },
+    {
+      "pdb_id": "8c3g-assembly1",
+      "model": "protenix",
+      "sample": 0
+    },
+    {
+      "pdb_id": "8c3g-assembly1",
+      "model": "protenix",
+      "sample": 1
+    },
+    {
+      "pdb_id": "8c3g-assembly1",
+      "model": "protenix",
+      "sample": 2
+    },
+    {
+      "pdb_id": "8c3g-assembly1",
+      "model": "protenix",
+      "sample": 3
+    }
+  ],
+  "known_ligand_serialization_failure_recovered": "8cqi-assembly1",
+  "optional_rigid_failure_primary_metrics_recovered": "8c5h-assembly1",
+  "official_native_selfcheck_failed": "8cs0-assembly1 protein-DNA; retained as scoring limitation"
+}

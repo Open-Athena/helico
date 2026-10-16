@@ -1,0 +1,20 @@
+{
+  "scope": "Analytical mask-support check for a fully observed 384-residue protein crop; actual eligible counts vary with missing atoms and molecule composition.",
+  "tokens": 384,
+  "unordered_eligible_pairs": 71631,
+  "minimum_sequence_separation": 6,
+  "diffusion_steps": 1000,
+  "sparse_training_times": [
+    995,
+    999
+  ],
+  "expected_revealed_pairs_at_t999": 71.631,
+  "expected_revealed_pairs_at_t995": 358.15500000000003,
+  "probability_at_most_four_revealed_pairs_at_t999": 8.748722148972559e-26,
+  "implication": "The existing sparse time bucket usually supplies tens to hundreds of labels at the training crop size. It does not explicitly concentrate on 1/4/16 total labels as used in sparse steering.",
+  "candidate_next_recipe": "Retain value-independent Bernoulli absorbing masks. Increase time resolution or use continuous masking probability, and oversample times selected to give expected revealed counts 1, 4, 16 and 64 using eligible-pair count. Keep endpoint and broad-noise examples; do not add class-dependent revelation.",
+  "code": [
+    "src/helico/contact_pilot.py::sampled_time",
+    "src/helico/contact_diffusion.py::absorbing_mask"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "observed_utc": "2026-10-16T03:04:52.000624+00:00",
+  "ticket_id": "_OsmdenBZRiAUdBe0SkCOXjxTF5ivVA3Qu7D3w",
+  "status_endpoint": "https://api.colabfold.com/ticket/_OsmdenBZRiAUdBe0SkCOXjxTF5ivVA3Qu7D3w",
+  "http_status": 200,
+  "response": {
+    "id": "_OsmdenBZRiAUdBe0SkCOXjxTF5ivVA3Qu7D3w",
+    "status": "PENDING"
+  },
+  "bounded_recovery": "Original recovery plus an additional three-hour continuation, 2026-10-16 00:04:23\u201303:04:23 UTC. No new server submission.",
+  "unavailable_assemblies": [
+    "8bmv-assembly1",
+    "8fz9-assembly1",
+    "8por-assembly1",
+    "8q6q-assembly1",
+    "8rja-assembly1",
+    "8s4h-assembly1",
+    "8ubs-assembly1",
+    "8urf-assembly1",
+    "8vqk-assembly1",
+    "8vvl-assembly1",
+    "8whi-assembly1",
+    "8x5v-assembly1",
+    "9dp2-assembly1"
+  ],
+  "initial_manifest_sha256": "fbd9d5832930a9f62ae7e9c23e57266253bbbff9e849fb075e959f97ec00fb32",
+  "policy": "These 13 assemblies remain in every applicable official denominator as unavailable input / zero primary performance. No normal-length query-only substitute and no native-derived alignment input. Current completed predictions and model settings are unchanged."
+}

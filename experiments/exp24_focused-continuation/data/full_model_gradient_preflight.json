@@ -1,0 +1,14 @@
+{
+  "pdb_id": "7qeh",
+  "parent_step": 20000,
+  "tokens": 144,
+  "parameters": 368537859,
+  "compliance": 0.002658104756847024,
+  "contact_projection_gradient_norm": 0.17131349444389343,
+  "all_gradients_finite": true,
+  "positive_pairs": 315,
+  "negative_pairs": 6588,
+  "seconds": 3.6895481711253524,
+  "peak_gpu_memory_gb": 7.810169344,
+  "optimizer_updated": false
+}

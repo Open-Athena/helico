@@ -1,0 +1,9 @@
+{
+  "parent_step": 20000,
+  "parent_source": "46cffd6939c9ea17d2103d5b8f5d79ba9e35444d",
+  "model_tensors": 3832,
+  "ema_tensors": 3832,
+  "optimizer_parameters": 3538,
+  "architecture_identical": true,
+  "stage_resume_compatible": true
+}

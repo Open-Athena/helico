@@ -1,0 +1,2 @@
+pdb_id,draw,checkpoint_step,loss,contact_bce,gradient_norm,gpu_memory_gb,seconds,optimizer_updates
+1ob5,5315,150,1.9622763395309448,0.02141794003546238,42.40412902832031,44.583223296,7.080433228984475,0

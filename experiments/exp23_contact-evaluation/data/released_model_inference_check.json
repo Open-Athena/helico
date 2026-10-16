@@ -1,0 +1,63 @@
+{
+  "checkpoint_sha256": "64cf2d396bfc497455c55043674066c90e7762b753d8fb032dd340f6832c6a9d",
+  "input_sha256": "f6905ca3dc7dc3e22e3f39a37b04b88f40dd5966d5fbbef9819784b06b096dbc",
+  "prediction_sha256": "3c6d9d5ed4576bf2444e807df0cc5d3c867c1a4814bd6f4f5a1f9e1e676dcb19",
+  "seconds": 8.861978583969176,
+  "weight_variant": "ema",
+  "step": 20000,
+  "seed": 2387,
+  "samples": 2,
+  "cycles": 1,
+  "diffusion_steps": 200,
+  "msa": true,
+  "contacts": "all unknown",
+  "max_absolute_difference_from_full_checkpoint_smoke": {
+    "contact_logits": 0.875,
+    "contact_probs": 0.08984375,
+    "all_coords": 3.6565051078796387,
+    "all_ptm": 0.0007210373878479004,
+    "all_iptm": 0.0,
+    "all_ranking_score": 0.0007210373878479004,
+    "all_has_clash": 0.0
+  },
+  "source_input": "timodonnell/helico-contact-eval-v1@ec4de019de89f79f03da31c5e026ddf7d858e77e/7qeh.pt.gz",
+  "note": "Local A5000 smoke; not included in H100 model-time comparisons.",
+  "verified_ema_tensor_count": 3832,
+  "full_checkpoint_tensor_differences": 0,
+  "prediction_bitwise_reproducibility_claimed": false,
+  "repeatability_diagnostic": {
+    "device": "NVIDIA RTX A5000",
+    "same_seed_separate_process_max_absolute_difference": {
+      "contact_logits": 0.875,
+      "contact_probs": 0.171875,
+      "all_coords": 1.8739128112792969,
+      "all_ptm": 0.0015221238136291504,
+      "all_iptm": 0.0,
+      "all_ranking_score": 0.0015221238136291504,
+      "all_has_clash": 0.0
+    },
+    "same_seed_same_process_max_absolute_difference": {
+      "contact_logits": 0.90625,
+      "contact_probs": 0.125,
+      "all_coords": 4.217288970947266,
+      "all_ptm": 0.0008241534233093262,
+      "all_iptm": 0.0,
+      "all_ranking_score": 0.0008241534233093262,
+      "all_has_clash": 0.0
+    },
+    "mean_contact_probability_absolute_difference": 0.00048457563389092684,
+    "samples": [
+      {
+        "aligned_all_atom_rmsd": 0.1538555735708501,
+        "first_lddt": 0.9160358859039741,
+        "repeat_lddt": 0.9150303176324137
+      },
+      {
+        "aligned_all_atom_rmsd": 0.10425764901573685,
+        "first_lddt": 0.9197536441392603,
+        "repeat_lddt": 0.9202873817076925
+      }
+    ],
+    "conclusion": "Weight identity is verified. The mixed-precision implementation is not bitwise deterministic even after resetting seeds; source of numerical nondeterminism is not isolated. Local diagnostic only, not an H100 benchmark measurement."
+  }
+}
