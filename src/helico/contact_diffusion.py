@@ -36,7 +36,7 @@ The diagonal is always false; eligibility for supervision is supplied separately
     return torch.from_numpy(labels)
 
 
-def absorbing_mask(target: torch.Tensor, valid: torch.Tensor, t: int, *,
+def absorbing_mask(target: torch.Tensor, valid: torch.Tensor, t: float, *,
                    steps: int = 1000, generator=None) -> torch.Tensor:
     """q(x_t|x_0): retain each unordered valid pair with probability 1-t/T.
 
@@ -53,6 +53,30 @@ There is no label corruption or class-dependent revelation.
     keep = torch.triu(keep & valid, diagonal=1)
     keep = keep | keep.T
     return torch.where(keep, target.to(torch.uint8) + 1, 0)
+
+
+def focused_time(valid, rng, mixture):
+    """Continuous absorbing time, with sparse expected counts, never exact counts.
+
+    Counting each eligible unordered pair once makes the sparse support stable
+    across crop sizes. The selected time and Bernoulli mask never read labels.
+    """
+    probabilities = [mixture[k] for k in ("unknown", "full", "sparse", "uniform")]
+    if any(p < 0 for p in probabilities) or abs(sum(probabilities) - 1) > 1e-8:
+        raise ValueError("Mask mixture probabilities must sum to one")
+    u = rng.random()
+    if u < probabilities[0]:
+        return 1000.
+    if u < sum(probabilities[:2]):
+        return 0.
+    if u < sum(probabilities[:3]):
+        counts = mixture["expected_counts"]
+        if not counts or min(counts) <= 0:
+            raise ValueError("Sparse expected counts must be positive")
+        count = rng.choice(counts)
+        eligible = int(torch.triu(valid.bool(), 1).sum())
+        return 1000 * (1 - min(1., count / max(eligible, 1)))
+    return 1000 * rng.random()
 
 
 def contact_bce(logits, target, valid, conditioning):

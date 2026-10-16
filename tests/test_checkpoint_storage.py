@@ -47,7 +47,9 @@ def test_incomplete_upload_retries_full_bytes_then_advances_pointer(tmp_path):
     assert fs.uploads == [b"complete checkpoint bytes"] * 2
     assert fs.objects[uri] == b"complete checkpoint bytes"
     assert json.loads(fs.objects["run/latest.json"]) == {
-        "step": 9250, "checkpoint": uri, "data_lock_sha256": "data-lock"}
+        "step": 9250, "checkpoint": uri, "data_lock_sha256": "data-lock",
+        "sha256": __import__("hashlib").sha256(b"complete checkpoint bytes").hexdigest(),
+        "bytes": len(b"complete checkpoint bytes")}
 
 
 def test_pointer_retry_does_not_repeat_checkpoint_upload(tmp_path):

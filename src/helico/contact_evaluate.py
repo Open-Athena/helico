@@ -188,6 +188,63 @@ def run_audit(model, payload, record, cfg, store, weights):
             dict(logits=logits.to(torch.float16)))
 
 
+def run_focused(model, payload, record, cfg, store, weights):
+    """Fixed parent-derived missed contacts and matched repeated null predictions.
+
+    The parent run saves every constraint matrix. Continuations reuse those
+    exact constraints, so changes in which contacts the model misses cannot
+    change the evaluation task. Native labels remain outside inference_batch.
+    """
+    f = payload['features']; n = f['n_tokens']
+    groups = input_pair_groups(f, payload['protein_token'], payload['ligand_token'])
+    group = cfg['target_groups'][record['pdb_id']]
+    eligible = groups[group] if group in {'intra', 'pp', 'pl'} else groups['all']
+    reference = (ArtifactStore(store.root, cfg['reference_uri'], store.fs, '')
+                 if cfg.get('reference_uri') else store)
+    for offset in cfg.get('seeds', [0, 1]):
+        seed = payload['seed'] + offset * 100000
+        prefix = f"focused/{weights}/{record['pdb_id']}/s{offset}-"
+        reference_prefix = f"focused/ema/{record['pdb_id']}/s{offset}-"
+        baseline = repeat = None
+        modes = ['unknown', 'repeat']
+        if group in {'intra', 'pp', 'pl'}:
+            modes += ['rescue1', 'rescue4', 'rescue16', 'negative4']
+        for mode in modes:
+            name = prefix + mode
+            if store.done(name):
+                saved = store.tensors(name)
+                if mode == 'unknown': baseline = saved
+                if mode == 'repeat': repeat = saved
+                continue
+            state = torch.zeros(n, n, dtype=torch.uint8)
+            if mode not in {'unknown', 'repeat'}:
+                if cfg.get('reference_uri'):
+                    state = reference.tensors(reference_prefix + mode)['contact_state']
+                else:
+                    contacts = geometry_contacts(baseline['all_coords'][0, 0], f)
+                    positive = mode.startswith('rescue')
+                    count = int(mode[6:]) if positive else 4
+                    state = oracle_state(f['contact_target'], f['contact_valid'],
+                        eligible & (~contacts if positive else contacts), count, positive,
+                        torch.Generator().manual_seed(seed))
+            prediction, seconds = predict(model, f, state, True, seed, 1)
+            if mode == 'unknown': baseline = prediction
+            if mode == 'repeat': repeat = prediction
+            metrics, _ = structure_metrics(prediction['all_coords'][0, 0], f, groups, state)
+            if mode not in {'unknown', 'repeat'}:
+                null, _ = structure_metrics(repeat['all_coords'][0, 0], f, groups, state)
+                for key in ('requested_contact_satisfaction', 'requested_no_contact_satisfaction',
+                            'observed_lddt', 'interface_lddt'):
+                    metrics['repeat_' + key] = null[key]
+                    metrics['change_' + key] = metrics[key] - null[key]
+                mask = state != 0
+                metrics['contact_head_response'] = (float((prediction['contact_probs'][0, :n, :n][mask]
+                    - repeat['contact_probs'][0, :n, :n][mask]).mean()) if mask.any() else float('nan'))
+            store.save(name, dict(status='complete', pdb_id=record['pdb_id'], weights=weights,
+                group=group, seed=seed, mode=mode, oracle=mode not in {'unknown', 'repeat'},
+                tokens=n, seconds=seconds, metrics=[metrics]), {**prediction, 'contact_state': state})
+
+
 def run_generation(model, payload, record, cfg, store, weights, conditioning=False):
     f = payload['features']; n = f['n_tokens']
     groups = input_pair_groups(f, payload['protein_token'], payload['ligand_token'])
@@ -440,7 +497,7 @@ def main():
         manifest = [r for r in manifest if r['pdb_id'] in cfg['target_ids']]
     targets = assign_targets(manifest, world, cfg.get('balance_by_tokens',False))[rank]
     checkpoint = torch.load(args.checkpoint, map_location='cpu', weights_only=False, mmap=True)
-    if checkpoint['step'] != 20000 or checkpoint['data_lock_sha256'] != cfg['data_lock_sha256']:
+    if checkpoint['step'] != cfg.get('checkpoint_step', 20000) or checkpoint['data_lock_sha256'] != cfg['data_lock_sha256']:
         raise ValueError('Wrong model checkpoint or data lock')
     failed, resource_failed = [], []
     for weights in cfg['weights']:
@@ -458,6 +515,8 @@ def main():
                     run_generation(model, payload, record, cfg, store, weights)
                 elif cfg['stage'] == 'audit':
                     run_audit(model, payload, record, cfg, store, weights)
+                elif cfg['stage'] == 'focused':
+                    run_focused(model, payload, record, cfg, store, weights)
                 elif cfg['stage'] in {'generation', 'conditioning'}:
                     run_generation(model, payload, record, cfg, store, weights, cfg['stage'] == 'conditioning')
                 elif cfg['stage'] == 'search':

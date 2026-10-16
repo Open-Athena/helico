@@ -19,7 +19,8 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
-from helico.contact_diffusion import absorbing_mask
+from helico.contact_diffusion import absorbing_mask, focused_time
+from helico.contact_compliance import prepare_constraints, compliance_loss
 from helico.contact_pilot import sampled_time
 from helico.datasets import record_run_data, write_json
 from helico.load_protenix import load_protenix_checkpoint
@@ -31,7 +32,7 @@ from helico.protenix_data import load_datasets, SeededCrops, batch_example, adap
 # Operational changes may accompany recovery; model/data/optimizer settings may not.
 RESUME_OPERATIONAL_KEYS = {"run_name", "output_uri", "resume_uri", "data_cache_dir",
     "mirror_uri", "download_workers", "extract_workers", "save_every", "startup_save_every",
-    "validate_every", "workers", "loader_timeout_seconds", "collective_timeout_seconds"}
+    "validate_every", "workers", "loader_timeout_seconds", "collective_timeout_seconds", "stop_after_step"}
 
 
 def check_resume_config(previous, current):
@@ -44,6 +45,21 @@ def check_resume_config(previous, current):
     after = {k: v for k, v in current.items() if k not in operational}
     if before != after:
         raise ValueError("Resume training configuration changed")
+
+
+def check_continuation(checkpoint, config, model_config, lock_sha):
+    """An explicit new recipe restores all state, with a new schedule/draw seed."""
+    parent = config["continuation"]
+    if checkpoint["step"] != parent["step"] or checkpoint["git_sha"] != parent["git_sha"]:
+        raise ValueError("Continuation parent step/source mismatch")
+    if checkpoint["data_lock_sha256"] != lock_sha:
+        raise ValueError("Continuation data mismatch")
+    previous = {**checkpoint["model_config"], "use_msa": True}
+    if previous != {**model_config, "use_msa": True}:
+        raise ValueError("Continuation architecture changed")
+    old = checkpoint["training_config"]
+    if old["contact_lr"] / old["lr"] != config["contact_lr"] / config["lr"]:
+        raise ValueError("Continuation optimizer parameter-group scale changed")
 
 
 def checkpoint_due(step, config):
@@ -106,9 +122,11 @@ def structure_losses(result, batch, sigma_data=16.):
     return mse, smooth
 
 
-def make_batch(features, draw, seed, device, *, validation=False, msa_depth=512):
+def make_batch(features, draw, seed, device, *, validation=False, msa_depth=512, mask_mixture=None,
+               geometry_constraints=False):
     rng = random.Random(seed + draw * 37)
-    t = 1000 if validation else sampled_time(rng)
+    t = 1000 if validation else (focused_time(features["contact_valid"], rng, mask_mixture)
+                                if mask_mixture else sampled_time(rng))
     state = absorbing_mask(features["contact_target"], features["contact_valid"], t,
                            generator=torch.Generator().manual_seed(seed + draw))
     if len(features["msa"]) > msa_depth:
@@ -118,6 +136,8 @@ def make_batch(features, draw, seed, device, *, validation=False, msa_depth=512)
         features = {**features, **{k: features[k][rows]
             for k in ("msa", "has_deletion", "deletion_value")}}
     batch = batch_example(features, state, device)
+    if geometry_constraints:
+        batch.update(prepare_constraints(features, state, device))
     batch["atom_coords"] = _centre_random_augmentation(batch["atom_coords"], batch["coordinate_mask"])
     batch["atom_coords"] *= batch["coordinate_mask"].unsqueeze(-1)
     return batch, (True if validation else rng.random() >= .2), t
@@ -153,7 +173,9 @@ def save_checkpoint(output, model, optimizer, ema, step, config, lock, *, final=
     tmp = path.with_suffix(".pending")
     torch.save({"model_state_dict": model.state_dict(), "ema_state_dict": ema,
                 "model_config": {**asdict(model.config), "use_msa": True}, "optimizer_state_dict": optimizer.state_dict(),
-                "step": step, "training_config": config, "data_lock": lock,
+                "step": step, "parent_step": config.get("continuation", {}).get("step", 0),
+                "total_step": step + config.get("continuation", {}).get("step", 0),
+                "training_config": config, "data_lock": lock,
                 "data_lock_sha256": lock["lock_sha256"], "git_sha": os.environ["HELICO_CODE_SHA"],
                 "sampler": "global-weighted-draw-seed-v1"}, tmp)
     tmp.replace(path)
@@ -172,7 +194,9 @@ def main():
     p.add_argument("--bundle", type=Path, required=True)
     p.add_argument("--checkpoint", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
-    p.add_argument("--resume", type=Path)
+    restore = p.add_mutually_exclusive_group()
+    restore.add_argument("--resume", type=Path)
+    restore.add_argument("--continue-from", type=Path)
     args = p.parse_args()
     cfg = json.loads(args.config.read_text())
     lock = json.loads(Path(cfg["data_lock"]).read_text())
@@ -216,16 +240,23 @@ def main():
         lr=cfg["lr"], betas=(.9, .95), weight_decay=.01)
     ema = {k: v.detach().clone() for k, v in model.state_dict().items()}
     start = 0
-    if args.resume:
-        checkpoint = torch.load(args.resume, map_location="cpu", weights_only=False)
+    if args.resume or args.continue_from:
+        checkpoint = torch.load(args.resume or args.continue_from, map_location="cpu", weights_only=False)
         if checkpoint["data_lock_sha256"] != lock["lock_sha256"]:
             raise ValueError("Resume data mismatch")
-        check_resume_config(checkpoint["training_config"], cfg)
+        if args.continue_from:
+            check_continuation(checkpoint, cfg, asdict(model_cfg), lock["lock_sha256"])
+        else:
+            check_resume_config(checkpoint["training_config"], cfg)
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         ema = {k: v.cuda() for k, v in checkpoint["ema_state_dict"].items()}
-        start = checkpoint["step"]
+        start = checkpoint["step"] if args.resume else 0
+        print(json.dumps({"restored_step": checkpoint["step"], "new_recipe": bool(args.continue_from),
+                          "optimizer_restored": True, "ema_restored": True}), flush=True)
         del checkpoint
+    elif cfg.get("continuation"):
+        raise ValueError("Continuation requires the verified parent checkpoint")
     train_data, validation = load_datasets(lock, bundle, cfg["crop_size"], args.output / "data-errors")
     # Validation uses fixed 384-token crops for online diagnostics. The original
     # 384-entry validation membership is unchanged; final FoldBench uses full inputs.
@@ -253,14 +284,15 @@ def main():
         print(json.dumps({"wandb": run.url, "records": len(train_data), "start_step": start}), flush=True)
     began = time.monotonic()
     step = start
-    for step in range(start + 1, cfg["steps"] + 1):
+    stop_step = min(cfg["steps"], cfg.get("stop_after_step", cfg["steps"]))
+    for step in range(start + 1, stop_step + 1):
         tick = time.monotonic(); optimizer.zero_grad(set_to_none=True)
         lr = cfg["lr"] * min(1., step / cfg["warmup_steps"]) * (
             .1 + .9 * .5 * (1 + math.cos(math.pi * max(0, step - cfg["warmup_steps"]) /
                                        max(1, cfg["steps"] - cfg["warmup_steps"]))))
         for group in optimizer.param_groups:
             group["lr"] = lr * group["lr_scale"]
-        totals = torch.zeros(8, device="cuda", dtype=torch.float64)
+        totals = torch.zeros(15, device="cuda", dtype=torch.float64)
         crops = []
         for micro in range(cfg["accumulation"]):
             expected_draw = (step - 1) * world * cfg["accumulation"] + micro * world + rank
@@ -268,7 +300,8 @@ def main():
             feature, pdb_id, draw = next(iterator)
             progress("preparing_crop", pdb_id=pdb_id, draw=draw, tokens=feature["n_tokens"], atoms=feature["n_atoms"])
             torch.manual_seed(cfg["seed"] + draw); torch.cuda.manual_seed_all(cfg["seed"] + draw)
-            batch, use_msa, t = make_batch(feature, draw, cfg["seed"], "cuda", msa_depth=cfg["msa_depth"])
+            batch, use_msa, t = make_batch(feature, draw, cfg["seed"], "cuda", msa_depth=cfg["msa_depth"],
+                mask_mixture=cfg.get("mask_mixture"), geometry_constraints=bool(cfg.get("compliance")))
             model.config.use_msa = use_msa
             crops.append({"pdb_id": pdb_id, "draw": draw, "tokens": feature["n_tokens"],
                           "use_msa": use_msa, "contact_time": t})
@@ -280,13 +313,24 @@ def main():
                 progress("structure_loss")
                 mse, smooth = structure_losses(out, batch)
                 loss = 4 * (mse + smooth) + .03 * out["distogram_loss"] + .1 * out["contact_loss"] + .01 * out["contact_observed_loss"]
+                geometry = out["contact_loss"] * 0
+                gm = dict(positive_loss=geometry, negative_loss=geometry,
+                          positive_count=0, negative_count=0, positive_satisfaction=0., negative_satisfaction=0.)
+                if cfg.get("compliance"):
+                    settings = cfg["compliance"]
+                    geometry, gm = compliance_loss(out["x_denoised"], batch,
+                        threshold=settings["threshold"], margin=settings["margin"], chunk_size=settings["chunk_size"])
+                    loss = loss + settings["weight"] * geometry
                 if not torch.isfinite(loss):
                     raise FloatingPointError(f"Nonfinite loss at step={step}, PDB={pdb_id}, draw={draw}")
                 progress("backward")
                 (loss / cfg["accumulation"]).backward()
             totals += torch.tensor([loss.detach(), mse.detach(), smooth.detach(),
                 out["distogram_loss"].detach(), out["contact_loss"].detach(),
-                out["contact_observed_loss"].detach(), float(use_msa), t], device="cuda")
+                out["contact_observed_loss"].detach(), float(use_msa), t,
+                geometry.detach(), gm["positive_loss"].detach(), gm["negative_loss"].detach(),
+                gm["positive_count"], gm["negative_count"], gm["positive_satisfaction"],
+                gm["negative_satisfaction"]], device="cuda")
         progress("optimizer")
         try:
             grad = torch.nn.utils.clip_grad_norm_(model.parameters(), 1., error_if_nonfinite=True)
@@ -301,7 +345,10 @@ def main():
         dist.all_reduce(totals); totals /= world * cfg["accumulation"]
         if rank == 0 and (step <= 5 or step % 10 == 0):
             metrics = dict(zip(["train/loss", "train/mse", "train/smooth_lddt", "train/distogram",
-                "train/contact_bce", "train/observed_bce", "train/msa_fraction", "train/contact_time"], totals.tolist()))
+                "train/contact_bce", "train/observed_bce", "train/msa_fraction", "train/contact_time",
+                "train/compliance", "train/positive_compliance", "train/negative_compliance",
+                "train/known_positive_pairs", "train/known_negative_pairs",
+                "train/positive_satisfaction_zero_if_empty", "train/negative_satisfaction_zero_if_empty"], totals.tolist()))
             metrics.update({"train/lr": lr, "train/grad_norm": float(grad),
                             "train/step_seconds": time.monotonic() - tick,
                             "train/examples_seen": step * world * cfg["accumulation"],
@@ -328,7 +375,9 @@ def main():
     if rank == 0:
         save_checkpoint(args.output, model, optimizer, ema, step, cfg, lock, final=True)
         write_json(args.output / "result.json", {"step": step, "requested_steps": cfg["steps"],
-            "finished_steps": step == cfg["steps"], "wall_seconds": time.monotonic() - began})
+            "finished_steps": step == cfg["steps"], "stage_complete": step == stop_step,
+            "total_step": step + cfg.get("continuation", {}).get("step", 0),
+            "wall_seconds": time.monotonic() - began})
         run.finish()
     dist.barrier(); dist.destroy_process_group()
     progress("complete", completed_step=step)

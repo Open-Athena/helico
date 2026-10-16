@@ -1,0 +1,21 @@
+[helico.experiment] ensure_training_run('train-500') — dry-run (~$8.00)
+
+{'name': 'train-500', 'experiment': 'exp24_focused-continuation', 'dry_run': True, 'run_name': 'exp24_focused-continuation-train-500', 'volume_path': 's3://marin-us-east-02a/helico/runs/exp24-focused-500-v1', 'est_cost_usd': 8.0}
+[helico.experiment] ensure_bench_run('parent') — dry-run (~$2.00)
+
+{'name': 'parent', 'experiment': 'exp24_focused-continuation', 'dry_run': True, 'est_cost_usd': 2.0}
+[helico.experiment] ensure_bench_run('eval-500') — dry-run (~$2.00)
+
+{'name': 'eval-500', 'experiment': 'exp24_focused-continuation', 'dry_run': True, 'est_cost_usd': 2.0}
+[helico.experiment] ensure_training_run('train-1500') — dry-run (~$4.00)
+
+{'name': 'train-1500', 'experiment': 'exp24_focused-continuation', 'dry_run': True, 'run_name': 'exp24_focused-continuation-train-1500', 'volume_path': 's3://marin-us-east-02a/helico/runs/exp24-focused-1500-v1', 'est_cost_usd': 4.0}
+[helico.experiment] ensure_bench_run('eval-1500') — dry-run (~$2.00)
+
+{'name': 'eval-1500', 'experiment': 'exp24_focused-continuation', 'dry_run': True, 'est_cost_usd': 2.0}
+[helico.experiment] ensure_training_run('train-5000') — dry-run (~$4.00)
+
+{'name': 'train-5000', 'experiment': 'exp24_focused-continuation', 'dry_run': True, 'run_name': 'exp24_focused-continuation-train-5000', 'volume_path': 's3://marin-us-east-02a/helico/runs/exp24-focused-5000-v1', 'est_cost_usd': 4.0}
+[helico.experiment] ensure_bench_run('eval-5000') — dry-run (~$2.00)
+
+{'name': 'eval-5000', 'experiment': 'exp24_focused-continuation', 'dry_run': True, 'est_cost_usd': 2.0}

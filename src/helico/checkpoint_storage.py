@@ -26,6 +26,8 @@ def publish_checkpoint(fs, path, output_uri, step, data_lock_sha256, *, attempts
     if attempts < 1:
         raise ValueError("attempts must be positive")
     path = Path(path)
+    from helico.datasets import file_sha256
+    sha256 = file_sha256(path)
     uri = output_uri + "/" + path.name
 
     def retry(operation, label):
@@ -49,6 +51,7 @@ def publish_checkpoint(fs, path, output_uri, step, data_lock_sha256, *, attempts
 
     retry(upload, "checkpoint")
     pointer = json.dumps({"step": step, "checkpoint": uri,
-                          "data_lock_sha256": data_lock_sha256}).encode()
+                          "data_lock_sha256": data_lock_sha256, "sha256": sha256,
+                          "bytes": path.stat().st_size}).encode()
     retry(lambda: fs.pipe_file(output_uri + "/latest.json", pointer), "latest.json")
     return uri

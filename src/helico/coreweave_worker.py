@@ -198,8 +198,20 @@ def train(config, config_path):
             raise ValueError("Remote run data lock changed")
         local = scratch / "resume.pt"
         fs.get_file(state["checkpoint"], str(local), chunksize=256 * 1024**2, max_concurrency=4)
+        if state.get("sha256") and file_sha256(local) != state["sha256"]:
+            raise ValueError("Resume checkpoint checksum mismatch")
         resume = ["--resume", str(local)]
         print(json.dumps({"resume_checkpoint": state}), flush=True)
+    elif config.get("continuation"):
+        if config.get("resume_uri"):
+            raise ValueError("Continuation stage requires its preceding stage checkpoint")
+        parent = config["continuation"]
+        local = scratch / "continuation-parent.pt"
+        fs.get_file(parent["checkpoint_uri"], str(local), chunksize=256 * 1024**2, max_concurrency=4)
+        if file_sha256(local) != parent["sha256"]:
+            raise ValueError("Continuation parent checkpoint checksum mismatch")
+        resume = ["--continue-from", str(local)]
+        print(json.dumps({"continuation_parent": parent}), flush=True)
     command = [sys.executable, "-m", "torch.distributed.run", "--standalone",
         "--nnodes=1", f"--nproc-per-node={config['gpus']}", "-m", "helico.train_contacts",
         "--config", str(config_path), "--bundle", str(scratch / "data.paths.json"),
@@ -216,6 +228,13 @@ def evaluate(config, config_path):
     scratch = Path('/tmp/helico/evaluation'); scratch.mkdir(parents=True, exist_ok=True)
     fs = filesystem(durable=True)
     output_uri = config['output_uri']
+    if config.get('checkpoint_pointer_uri'):
+        pointer = json.loads(fs.cat_file(config['checkpoint_pointer_uri']))
+        if pointer['step'] != config['checkpoint_step'] or pointer['data_lock_sha256'] != config['data_lock_sha256']:
+            raise ValueError('Evaluation checkpoint pointer step/data mismatch')
+        config = {**config, 'checkpoint_uri': pointer['checkpoint'], 'checkpoint_sha256': pointer['sha256']}
+        config_path = scratch / 'resolved-evaluation.json'
+        write_json(config_path, config)
     fs.put_file(str(config_path), output_uri + '/evaluation.json')
     checkpoint = scratch / 'final.pt'
     if not checkpoint.exists() or file_sha256(checkpoint) != config['checkpoint_sha256']:
