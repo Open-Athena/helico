@@ -117,8 +117,62 @@ def contact_hypotheses():
     fig.savefig(PLOTS/'contact-hypotheses.png');fig.savefig(PLOTS/'contact-hypotheses.svg');plt.close(fig)
 
 
+def alternative_states():
+    data = pd.read_csv(ROOT/'data/alternative-states-v2/alternative_state_candidates.csv')
+    data = data[data.available_seconds <= data.unmask_budget]
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    styles = [('ordinary', 'Ordinary sampling', '#1e5c93', 'o'),
+              ('tree', 'Contact tree', '#b07732', '^'),
+              ('unmask', 'Progressive unmasking', '#8c4a7c', 's')]
+    for ax, ((protein, state), frame) in zip(axes.flat, data.groupby(['protein', 'input_state'])):
+        for method, label, color, marker in styles:
+            d = frame[frame.method == method]
+            ax.scatter(d.rmsd_apo, d.rmsd_bound, label=label, color=color,
+                       marker=marker, s=20, alpha=.7)
+        threshold = frame.recovery_threshold.iloc[0]
+        ax.axvline(threshold, color='.5', ls='--', lw=.8)
+        ax.axhline(threshold, color='.5', ls='--', lw=.8)
+        ax.set_title(f'{protein}: {state} input')
+        ax.set_xlabel('CA RMSD to apo reference (Å)')
+        ax.set_ylabel('CA RMSD to bound reference (Å)')
+        ax.set_xlim(left=0); ax.set_ylim(bottom=0)
+    fig.legend(*axes[0, 0].get_legend_handles_labels(), loc='upper center',
+               bbox_to_anchor=(.5, .95), ncol=3, frameon=False)
+    fig.suptitle('Alternative-state diagnostic: two ligand-dependent proteins', fontsize=14)
+    fig.text(.02, .015, 'All candidates within the same unmasking model-time budget; two seeds per input. Dashed lines mark the recovery threshold.\n'
+             'Fixed matching of common observed CA atoms. These two examples do not establish general ensemble recovery.', fontsize=9)
+    fig.tight_layout(rect=(0, .07, 1, .91))
+    for suffix in ['png', 'svg']:
+        fig.savefig(PLOTS/('alternative-states.' + suffix))
+    plt.close(fig)
+
+
+def rotation_geometry():
+    data = pd.read_csv(ROOT/'data/rotation_geometry_summary.csv')
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.4))
+    for ax, metric, scale, ylabel in zip(axes,
+            ['mean_distance_error', 'fraction_over_0p2'], [1, 100],
+            ['Mean absolute distance error (Å)', 'Pairs with error above 0.2 Å (%)']):
+        for version, shift, label, color in [('v1', -.18, 'Historical sampler', '#b07732'),
+                                             ('v2', .18, 'Corrected sampler', '#1e5c93')]:
+            rows = data[(data.version == version) & (data.metric == metric)].set_index('weights').loc[['protenix', 'ema']]
+            ax.bar(np.arange(2) + shift, rows['mean'] * scale, .34, label=label, color=color,
+                   yerr=np.stack([rows['mean'] - rows.low, rows.high - rows['mean']]) * scale, capsize=3)
+        ax.set_xticks([0, 1], ['Initialization', 'Helico EMA']); ax.set_ylabel(ylabel)
+    axes[0].legend(frameon=False)
+    fig.suptitle('Preserving coordinate precision restores short-range geometry', fontsize=14)
+    fig.text(.02, .015, 'Native-close heavy-atom pairs within each token (reference distance 1.1–1.8 Å); not a chemical bond assignment.\n'
+             '24 development targets; four samples per model and sampler. Target means and 95% bootstrap intervals.', fontsize=9)
+    fig.tight_layout(rect=(0, .12, 1, .93))
+    for suffix in ['png', 'svg']:
+        fig.savefig(PLOTS/('rotation-geometry.' + suffix))
+    plt.close(fig)
+
+
 if __name__ == '__main__':
     if (ROOT/'data/conditioning-v2/conditioning_summary.csv').exists():conditioning()
     if (ROOT/'data/search-v2/search_paired_differences.csv').exists():search()
     if (ROOT/'data/validation-structures-v3/structure_paired_differences.csv').exists():full_validation()
     if (ROOT/'data/contact-hypotheses-v2/search_paired_differences.csv').exists():contact_hypotheses()
+    if (ROOT/'data/alternative-states-v2/alternative_state_candidates.csv').exists():alternative_states()
+    if (ROOT/'data/rotation_geometry_summary.csv').exists():rotation_geometry()

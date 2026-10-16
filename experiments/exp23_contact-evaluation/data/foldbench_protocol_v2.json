@@ -29,12 +29,15 @@
     "manifest_sha256": "fbd9d5832930a9f62ae7e9c23e57266253bbbff9e849fb075e959f97ec00fb32"
   },
   "initialization_and_ema_comparison_frozen_before_scoring": true,
-  "search_method_selected": "ordinary batched coordinate diffusion",
-  "search_decision_utc": "2026-10-15T23:50:30.387175+00:00",
-  "search_selection_blind_quality_inspected": false,
-  "search_selection_measurements_sha256": "27f6e62724eb71cd0fb09ea79fad38e58d510137081780ba50c2706f983c9a0b",
   "inference_geometry": "fp32_rigid_rotation",
   "inference_correction_commit": "5806c0f",
   "supersedes_protocol": "foldbench_protocol.json",
-  "corrected_blind_quality_inspected": false
+  "corrected_blind_quality_inspected": false,
+  "historical_search_selection": {
+    "search_method_selected": "ordinary batched coordinate diffusion",
+    "search_decision_utc": "2026-10-15T23:50:30.387175+00:00",
+    "search_selection_blind_quality_inspected": false,
+    "search_selection_measurements_sha256": "27f6e62724eb71cd0fb09ea79fad38e58d510137081780ba50c2706f983c9a0b"
+  },
+  "corrected_search_selection_pending": true
 }

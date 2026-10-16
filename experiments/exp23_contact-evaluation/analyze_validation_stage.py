@@ -1,5 +1,6 @@
 """Summarize one checksum-verified corrected validation stage."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -31,6 +32,10 @@ def main():
         raise ValueError('Completed stage required')
     records = [json.loads(p.read_text()) for p in args.records.rglob('*.json')]
     records = [r for r in records if 'artifact' in r]
+    config = root.parents[1] / 'configs/eval' / ('contact-' + args.stage + '.json')
+    expected_config = hashlib.sha256(config.read_bytes()).hexdigest()
+    if any(r.get('config_sha256') != expected_config for r in records):
+        raise ValueError('Records do not match the immutable stage configuration')
     expected = {'development-v2': 144, 'conditioning-v2': 768, 'search-v2': 48,
                 'contact-hypotheses-v2': 54, 'validation-structures-v3': 768,
                 'alternative-states-v2': 8}

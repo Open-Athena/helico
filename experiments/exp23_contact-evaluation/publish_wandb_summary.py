@@ -41,7 +41,7 @@ def main():
             path = experiment / 'data' / (filename + '.csv')
             tables['validation/' + filename] = wandb.Table(dataframe=pd.read_csv(path))
         for name in ['full-validation', 'contact-conditioning', 'contact-search',
-                     'contact-hypotheses', 'alternative-states', 'foldbench']:
+                     'contact-hypotheses', 'alternative-states', 'rotation-geometry', 'foldbench']:
             path = experiment / 'plots/corrected' / (name + '.png')
             if path.exists():
                 tables['figures/' + name] = wandb.Image(str(path))
