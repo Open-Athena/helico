@@ -50,9 +50,17 @@ stage_configs.update({f'foldbench-{weight}-{shard}': (f'contact-foldbench-{weigh
     for weight in ['ema', 'protenix'] for shard in range(4)})
 stage_configs.update({f'foldbench-{weight}-completion': (f'contact-foldbench-{weight}-completion-v1', 2)
     for weight in ['ema', 'protenix']})
+# Corrected coordinate precision; original configurations remain immutable.
+stage_configs.update({name: ('contact-' + name, hours) for name, hours in [
+    ('development-v2', 4), ('conditioning-v2', 4), ('search-v2', 6),
+    ('alternative-states-v2', 2), ('contact-hypotheses-v2', 4), ('validation-structures-v3', 6)]})
+stage_configs.update({f'foldbench-v2-{weight}-{shard}': (f'contact-foldbench-{weight}-{shard}-v2', 6)
+    for weight in ['ema', 'protenix'] for shard in range(4)})
+stage_configs.update({f'foldbench-v2-{weight}-completion': (f'contact-foldbench-{weight}-completion-v2', 2)
+    for weight in ['ema', 'protenix']})
 config_name, hours = stage_configs[stage]
 # Whole-study allowance: $96 incremental storage/transfer, <=512 prepaid H100-hours.
-gpus = 4 if stage.startswith('foldbench-') or stage in {'alternative-states', 'contact-hypotheses', 'blind-preflight', 'validation-structures'} else 8
+gpus = 4 if stage.startswith('foldbench-') or stage.endswith(('-v2', '-v3')) or stage in {'alternative-states', 'contact-hypotheses', 'blind-preflight', 'validation-structures'} else 8
 spec = dict(job_name=f'helico-exp23-{config_name}', mode='evaluate', gpus=gpus,
     cpu=12*gpus, memory=f'{125*gpus}g', disk='200g',
     image='pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca',
@@ -66,6 +74,8 @@ print(run.meta)
 ```
 
 ## Status
+
+**Inference correction, October 16:** the sampler's rigid coordinate rotation ran in BF16 under autocast, changing internal distances. The operation now preserves input coordinate precision (commit `5806c0f`); CPU/CUDA distance-invariance tests pass. A 144-token validation smoke check confirms improved short-distance geometry with unchanged model weights. Structure-generation, conditioning and search results below describe the original sampler and are superseded pending corrected runs. Contact-only classification measurements are unaffected. The five unfinished original FoldBench shards were canceled; their partial records and the three completed shards remain archived for provenance. Corrected configurations use separate output URIs and remain within the original whole-study resource cap.
 
 All validation stages are complete without target failures, including contact-only hypothesis sampling. Eight full-input FoldBench shards are submitted for 1,482 ready complexes, with another 13 awaiting external alignments and 27 explicit resource-cap failures. Official blind results are pending.
 

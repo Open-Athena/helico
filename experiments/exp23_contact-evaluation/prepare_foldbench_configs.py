@@ -18,6 +18,8 @@ def main():
     parser.add_argument('--features-uri',required=True)
     parser.add_argument('--completion-of',type=Path,
                         help='Initial manifest whose deferred entries this run completes')
+    parser.add_argument('--run-version', choices=['v1', 'v2'], default='v1')
+    parser.add_argument('--protocol-name', default='foldbench_protocol.json')
     args=parser.parse_args()
     if not re.fullmatch('[0-9a-f]{40}',args.dataset_revision):
         raise ValueError('An immutable HF dataset revision is required')
@@ -41,7 +43,7 @@ def main():
         rows.extend(dict(shard=i,pdb_id=r['pdb_id'],status=r['status'],tokens=r['tokens']) for r in shard)
         for weights in ['ema','protenix']:
             label='completion' if args.completion_of else str(i)
-            name=f'foldbench-{weights}-{label}-v1'
+            name=f'foldbench-{weights}-{label}-{args.run_version}'
             config={**template,'target_ids':sorted(r['pdb_id'] for r in shard),
                 'run_name':'exp23-contact-eval-'+name,
                 'output_uri':'s3://marin-us-east-02a/helico/evaluations/exp23/'+name,
@@ -50,6 +52,9 @@ def main():
                 'features_dataset':dict(repo_id='timodonnell/helico-foldbench-eval-v1',revision=args.dataset_revision),
                 'weights':[weights], 'allow_resource_failures':True,'balance_by_tokens':True,
                 'benchmark_shard':label,'benchmark_shards':shard_count}
+            if args.run_version == 'v2':
+                config.update(inference_geometry='fp32_rigid_rotation',
+                    supersedes_output_uri=config['output_uri'].removesuffix('-v2')+'-v1')
             if weights=='protenix':
                 config['model_source']=dict(url='https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_default_v1.0.0.pt',
                     sha256='2b7d5a8b30494514fc47fd2271a16260528cdba170ba09cc112fdecd8f85ec04')
@@ -62,13 +67,15 @@ def main():
                 for r in records if r['status']!='ready')
     output=root/'experiments/exp23_contact-evaluation/data'
     partition_file='foldbench_completion_partitions.csv' if args.completion_of else 'foldbench_partitions.csv'
+    if args.run_version != 'v1':
+        partition_file=partition_file.removesuffix('.csv')+'_'+args.run_version+'.csv'
     pd.DataFrame(rows).to_csv(output/partition_file,index=False)
-    protocol=json.loads((output/'foldbench_protocol.json').read_text())
+    protocol=json.loads((output/args.protocol_name).read_text())
     dataset=dict(repo_id='timodonnell/helico-foldbench-eval-v1',revision=args.dataset_revision,
                  manifest_sha256=hashlib.sha256(args.manifest.read_bytes()).hexdigest())
     protocol['completion_dataset' if args.completion_of else 'features_dataset']=dataset
     protocol['initialization_and_ema_comparison_frozen_before_scoring']=True
-    (output/'foldbench_protocol.json').write_text(json.dumps(protocol,indent=2)+'\n')
+    (output/args.protocol_name).write_text(json.dumps(protocol,indent=2)+'\n')
     print('Shard sizes:',[len(s) for s in shards])
     print('Ready:',sum(map(len,shards)),'explicit deferred/failed inputs:',sum(r['status']!='ready' for r in records))
 
