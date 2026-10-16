@@ -58,9 +58,10 @@ stage_configs.update({f'foldbench-v2-{weight}-{shard}': (f'contact-foldbench-{we
     for weight in ['ema', 'protenix'] for shard in range(4)})
 stage_configs.update({f'foldbench-v2-{weight}-completion': (f'contact-foldbench-{weight}-completion-v2', 2)
     for weight in ['ema', 'protenix']})
+stage_configs['conditioning-repeat-v1'] = ('contact-conditioning-repeat-v1', 2)
 config_name, hours = stage_configs[stage]
 # Whole-study allowance: $96 incremental storage/transfer, <=512 prepaid H100-hours.
-gpus = 4 if stage.startswith('foldbench-') or stage.endswith(('-v2', '-v3')) or stage in {'alternative-states', 'contact-hypotheses', 'blind-preflight', 'validation-structures'} else 8
+gpus = 4 if stage.startswith('foldbench-') or stage.endswith(('-v2', '-v3')) or stage in {'alternative-states', 'contact-hypotheses', 'blind-preflight', 'validation-structures', 'conditioning-repeat-v1'} else 8
 spec = dict(job_name=f'helico-exp23-{config_name}', mode='evaluate', gpus=gpus,
     cpu=12*gpus, memory=f'{125*gpus}g', disk='200g',
     image='pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca',
@@ -158,3 +159,5 @@ python experiments/exp23_contact-evaluation/predict_released.py --checkpoint /tm
 ```
 
 The tensor output contains generated coordinates, contact probabilities and confidence. Its companion JSON records input/weight/output checksums and inference settings. All native coordinates, contact labels and observation masks are removed before the model call. This example uses full prepared inputs with MSA and unknown contacts; arbitrary sequences and ligands require the full input-preparation pipeline. Every released EMA tensor matches the full training checkpoint exactly, and the released-weight smoke produces finite predictions; see `data/released_model_inference_check.json`.
+
+A same-seed unconditioned inference repeat (`conditioning-repeat-v1`, no new training) measures how much of the small sparse steering response exceeds numerical repeatability. It reuses the fixed 24 targets, both seeds and MSA modes; native-selected constraints from the completed conditioning diagnostic are used only for subsequent scoring.
