@@ -32,6 +32,8 @@ def main():
     predictions=[];scores=[];failures=[];stages=[]
     for name in names:
         stage=json.loads((args.results/name/'done.json').read_text());stages.append(stage)
+        if stage.get('scoring_recovery_schema') != 1:
+            raise ValueError('Primary-metric recovery is not complete for ' + name)
         # Paths resolve after extracting the published per-stage score archives.
         for destination, path in [(predictions, stage['predictions']),
                                   (scores, stage['scores'])]:

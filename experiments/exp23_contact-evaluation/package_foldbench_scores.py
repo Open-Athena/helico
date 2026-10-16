@@ -24,6 +24,8 @@ def package(stage, output):
     done = json.loads((stage / 'done.json').read_text())
     if done['stage'] != stage.name:
         raise ValueError('Stage identity mismatch')
+    if done.get('scoring_recovery_schema') != 1:
+        raise ValueError('Primary-metric recovery must finish before release')
     predictions = pd.read_csv(stage / 'predictions/prediction_reference.csv')
     if len(predictions) != done['structures']:
         raise ValueError('Prediction count differs from completion receipt')

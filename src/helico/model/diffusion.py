@@ -668,7 +668,11 @@ def _centre_random_augmentation(
     x = x - center
 
     rot = _uniform_random_rotation(B, device, dtype)
-    x = torch.einsum("bij,baj->bai", rot, x)
+    # A rigid augmentation must preserve atomic distances. Autocast would run
+    # this contraction in BF16, quantizing coordinates even when x is FP32.
+    # Repeating that rounding at every sampler step damages bond geometry.
+    with torch.autocast(device_type=device.type, enabled=False):
+        x = torch.einsum("bij,baj->bai", rot, x)
 
     trans = s_trans * torch.randn(B, 1, 3, device=device, dtype=dtype)
     x = x + trans
