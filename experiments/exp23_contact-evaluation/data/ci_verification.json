@@ -1,0 +1,8 @@
+{
+  "source_commit": "06839a7",
+  "url": "https://github.com/Open-Athena/helico/actions/runs/38829943975",
+  "passed": 391,
+  "skipped": 3,
+  "skipped_reason": "Optional external MarinFold contact export fixtures are unavailable",
+  "seconds": 349.53
+}
