@@ -1,0 +1,23 @@
+{
+  "source": "8fae3f211dfddce630df12358f3f8ef8df4d9c44",
+  "run": 38927942551,
+  "attempt1": {
+    "passed": 401,
+    "skipped": 3,
+    "failed": 1,
+    "test": "tests/test_snapshots.py::TestTrunkSnapshot::test_z_init",
+    "max_abs_diff": 0.5,
+    "max_rel_diff": 1562500,
+    "atol": 0.05,
+    "rtol": 0.01
+  },
+  "unchanged_retry": {
+    "attempt": 2,
+    "passed": 402,
+    "skipped": 3,
+    "failed": 0,
+    "job_url": "https://github.com/Open-Athena/helico/actions/runs/38927942551/job/117067176075"
+  },
+  "prior_evidence": "experiments/exp23_contact-evaluation/data/ci_snapshot_repeatability.json",
+  "snapshot_or_tolerance_changes": false
+}
