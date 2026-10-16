@@ -1,0 +1,63 @@
+{
+  "recorded_at": "2026-10-16T02:43:15.833799+00:00",
+  "original_job": "/bizon/helico-exp23-contact-foldbench-ema-3-v2",
+  "original_attempts": [
+    {
+      "job_id": "/bizon/helico-exp23-contact-foldbench-ema-3-v2",
+      "job_state": "worker_failed",
+      "task_id": "/bizon/helico-exp23-contact-foldbench-ema-3-v2/0",
+      "attempt": 0,
+      "state": "preempted",
+      "start_ms": 1792114516358,
+      "end_ms": 1792116855073,
+      "observed_seconds": 2338.715,
+      "pod": "iris-bizon-helico-exp23-contact-fol-a9b97383-0-9a6fd3c4369bc832",
+      "node": "gb95a00",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: c49fe985-ee25-4939-89a6-edeb35964923, JobUID: fa63859d-92ce-472a-8a83-253447e8daef) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+    },
+    {
+      "job_id": "/bizon/helico-exp23-contact-foldbench-ema-3-v2",
+      "job_state": "worker_failed",
+      "task_id": "/bizon/helico-exp23-contact-foldbench-ema-3-v2/0",
+      "attempt": 1,
+      "state": "preempted",
+      "start_ms": 1792117029594,
+      "end_ms": 1792117782979,
+      "observed_seconds": 753.385,
+      "pod": "iris-bizon-helico-exp23-contact-fol-a9b97383-1-4330123cac64b132",
+      "node": "g1cc6b2",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 3210a5ea-5827-41b1-b47d-5daac0b42839, JobUID: cbd78d0f-98d0-4e77-a83c-57d0fce49d7f) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+    },
+    {
+      "job_id": "/bizon/helico-exp23-contact-foldbench-ema-3-v2",
+      "job_state": "worker_failed",
+      "task_id": "/bizon/helico-exp23-contact-foldbench-ema-3-v2/0",
+      "attempt": 2,
+      "state": "preempted",
+      "start_ms": 1792117837724,
+      "end_ms": 1792118080349,
+      "observed_seconds": 242.625,
+      "pod": "iris-bizon-helico-exp23-contact-fol-a9b97383-2-e920e837ad86a9b7",
+      "node": "gb99af0",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: f3757137-cc22-4c23-b1a4-f22de570f410, JobUID: 53fa9fde-869f-4d6a-83b4-60b4ea91506a) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+    },
+    {
+      "job_id": "/bizon/helico-exp23-contact-foldbench-ema-3-v2",
+      "job_state": "worker_failed",
+      "task_id": "/bizon/helico-exp23-contact-foldbench-ema-3-v2/0",
+      "attempt": 3,
+      "state": "preempted",
+      "start_ms": 1792118139641,
+      "end_ms": 1792118322587,
+      "observed_seconds": 182.946,
+      "pod": "iris-bizon-helico-exp23-contact-fol-a9b97383-3-41ecbd7312c63cbc",
+      "node": "g7596c2",
+      "terminal_reason": "WorkloadEvictedDueToPreempted: Preempted to accommodate a workload (UID: 54640dab-db93-4475-bc29-1ff0e4691098, JobUID: cd7bf436-1f00-4999-a8c0-8dc8054ac83d) due to prioritization in the ClusterQueue; preemptor path: /iris-cq; preemptee path: /iris-cq"
+    }
+  ],
+  "completed_targets_before_recovery": 274,
+  "expected_targets": 371,
+  "recovery": "Single bounded continuation with original configuration and output URI; durable completed records reused. No inference code, settings, weights or input changes.",
+  "original_source": "fb9bd91b326ebb5b2b6957bdb10f50a3095a30ca",
+  "config_sha256": "21f8553de33606f6cf0c6401a561313687aa05361982383d0e81fd6e9ddea97e"
+}

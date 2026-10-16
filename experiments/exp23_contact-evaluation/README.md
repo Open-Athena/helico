@@ -59,17 +59,20 @@ stage_configs.update({f'foldbench-v2-{weight}-{shard}': (f'contact-foldbench-{we
 stage_configs.update({f'foldbench-v2-{weight}-completion': (f'contact-foldbench-{weight}-completion-v2', 2)
     for weight in ['ema', 'protenix']})
 stage_configs['conditioning-repeat-v1'] = ('contact-conditioning-repeat-v1', 2)
+# Bounded continuation after the original job exhausted scheduler preemptions.
+stage_configs['foldbench-v2-ema-3-recovery1'] = ('contact-foldbench-ema-3-v2', 6)
 config_name, hours = stage_configs[stage]
+run_name = config_name + ('-recovery1' if stage == 'foldbench-v2-ema-3-recovery1' else '')
 # Whole-study allowance: $96 incremental storage/transfer, <=512 prepaid H100-hours.
 gpus = 4 if stage.startswith('foldbench-') or stage.endswith(('-v2', '-v3')) or stage in {'alternative-states', 'contact-hypotheses', 'blind-preflight', 'validation-structures', 'conditioning-repeat-v1'} else 8
-spec = dict(job_name=f'helico-exp23-{config_name}', mode='evaluate', gpus=gpus,
+spec = dict(job_name=f'helico-exp23-{run_name}', mode='evaluate', gpus=gpus,
     cpu=12*gpus, memory=f'{125*gpus}g', disk='200g',
     image='pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca',
     timeout_seconds=hours * 3600, config=f'configs/eval/{config_name}.json',
     output_uri=f"s3://marin-us-east-02a/helico/evaluations/exp23/{config_name.removeprefix('contact-')}",
     priority_band='interactive', estimated_incremental_cost_usd=96,
     cost_accounting='Whole exp23 study: <=512 prepaid H100-hours and $96 first-month storage/transfer allowance')
-run = ensure_bench_run(config_name, coreweave=spec, gpu='H100', workers=gpus,
+run = ensure_bench_run(run_name, coreweave=spec, gpu='H100', workers=gpus,
     est_wall_hours=hours)
 print(run.meta)
 ```
@@ -139,7 +142,7 @@ A read-only audit of [Flock revision c2c993c3](https://huggingface.co/datasets/t
 
 ## Reproduce one released-model prediction
 
-With the repository's CUDA dependencies installed and source at `5806c0f` or later, download the pinned release and one prepared validation input:
+With the repository's CUDA dependencies installed and source at `a50fe4ed546a86f0b740ff3e2dc4cfcc3bac0883` or later, download the pinned release and one prepared validation input:
 
 ```text
 hf download timodonnell/helico-masked-contact-exp22 ema.pt --revision 01a6025408d078aa8305f302d1d664a0291c45ee --local-dir /tmp/helico-model
