@@ -36,12 +36,16 @@ def score_prediction(task):
     if marker.exists():
         saved = json.loads(marker.read_text())
         if saved['identity'] != identity: raise ValueError('Changed prediction or target metadata')
-        return saved['scores']
+        if saved.get('recovery_schema') == 1 or all(r['status']=='complete' for r in saved['scores']):
+            return saved['scores']
+        original = folder / 'initial_scores.json'
+        if not original.exists(): original.write_bytes(marker.read_bytes())
     from evaluation.eval_by_ost import get_structure_value, get_ligand_value
     modes = {'ligand' if t['category']=='interface_protein_ligand' else 'structure' for t in targets}
-    failures = {}
+    failures = {}; score_paths = {}; recovery = {}
     for mode in modes:
         dest = folder / (mode + '.json')
+        score_paths[mode] = dest
         command = [ost, 'compare-ligand-structures' if mode=='ligand' else 'compare-structures',
                    '-m', row['prediction_path'], '-r', str(Path(refs)/(row['pdb_id']+'.cif')),
                    '--fault-tolerant', '-o', str(dest)]
@@ -52,19 +56,50 @@ def score_prediction(task):
                 result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
                 (folder/(mode+'.log')).write_text(result.stdout+'\n'+result.stderr)
                 if result.returncode: raise RuntimeError(f'OST exit {result.returncode}: {result.stderr[-500:]}')
-            json.loads(dest.read_text())
+            parsed = json.loads(dest.read_text())
+            if parsed.get('status') == 'FAILURE':
+                raise RuntimeError(parsed.get('exception', parsed.get('traceback', 'OST failure')))
         except Exception as error:
             failures[mode] = repr(error)
+    for mode, error in list(failures.items()):
+        # Optional rigid scores must not discard valid primary lDDT/DockQ.
+        # The ligand fallback only handles the known tuple-serialization defect.
+        if mode == 'ligand' and not ('tuple' in error and 'number' in error):
+            continue
+        dest = folder / (mode + '-primary.json')
+        if mode == 'structure':
+            command = [ost, 'compare-structures', '-m', row['prediction_path'],
+                       '-r', str(Path(refs)/(row['pdb_id']+'.cif')), '--fault-tolerant',
+                       '--min-pep-length', '4', '--min-nuc-length', '4', '--lddt', '--dockq',
+                       '-o', str(dest)]
+        else:
+            command = [sys.executable, '-m', 'helico.contact_foldbench_ligand',
+                       '--model', row['prediction_path'], '--reference',
+                       str(Path(refs)/(row['pdb_id']+'.cif')), '--output', str(dest)]
+        try:
+            if not dest.exists() or json.loads(dest.read_text()).get('status') != 'SUCCESS':
+                proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+                (folder/(mode+'-primary.log')).write_text(proc.stdout+'\n'+proc.stderr)
+                if proc.returncode: raise RuntimeError(proc.stderr[-500:])
+            if json.loads(dest.read_text()).get('status') != 'SUCCESS':
+                raise ValueError('Primary metric recovery did not succeed')
+            score_paths[mode] = dest
+            recovery[mode] = error
+            del failures[mode]
+        except Exception as repair_error:
+            failures[mode] = error + '; primary recovery: ' + repr(repair_error)
     scores = []
     for target in targets:
         result = {**row, **target, 'status':'complete'}
         category = target['category']; mode = 'ligand' if category=='interface_protein_ligand' else 'structure'
+        if mode in recovery:
+            result['scorer_recovery'] = 'primary metric recovery from: ' + recovery[mode]
         a, b = native_chains(target)
         try:
             na_interface=category in {'interface_protein_dna','interface_protein_rna'}
             if mode in failures and not na_interface: raise RuntimeError(failures[mode])
             if mode == 'ligand':
-                rmsd, lddt_lp, lddt_pli = get_ligand_value(str(folder/'ligand.json'),a,b)
+                rmsd, lddt_lp, lddt_pli = get_ligand_value(str(score_paths[mode]),a,b)
                 if rmsd is None or lddt_pli is None or not np.isfinite([rmsd,lddt_pli]).all():
                     raise ValueError('Unassigned native ligand or nonfinite score')
                 result.update(rmsd=rmsd, lddt_lp=lddt_lp, lddt_pli=lddt_pli,
@@ -72,7 +107,7 @@ def score_prediction(task):
             else:
                 dockq=irmsd=lrmsd=lddt=tm=gdt=rmsd=None
                 if mode not in failures:
-                    dockq, irmsd, lrmsd, _, lddt, tm, gdt, rmsd = get_structure_value(str(folder/'structure.json'),a,b)
+                    dockq, irmsd, lrmsd, _, lddt, tm, gdt, rmsd = get_structure_value(str(score_paths[mode]),a,b)
                 else:
                     result['auxiliary_structure_error']=failures[mode]
                 if na_interface:
@@ -95,7 +130,9 @@ def score_prediction(task):
         except Exception as error:
             result.update(status='failed',error=repr(error),success=False)
         scores.append(result)
-    marker.write_text(json.dumps(dict(identity=identity,scores=scores),indent=2)+'\n')
+    pending = marker.with_suffix('.json.pending')
+    pending.write_text(json.dumps(dict(identity=identity,recovery_schema=1,scores=scores),indent=2)+'\n')
+    pending.replace(marker)
     return scores
 
 

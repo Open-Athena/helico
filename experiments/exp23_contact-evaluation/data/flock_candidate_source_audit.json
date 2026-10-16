@@ -1,0 +1,41 @@
+{
+  "repo_id": "ternarytx/flock",
+  "revision": "c2c993c31bf33184f12446bb33a3dc3c86e0f42b",
+  "audited_utc": "2026-10-16",
+  "purpose": "Candidate-source audit only; no change to training or blind evaluation",
+  "pairs": 404577,
+  "labels": {
+    "Negative": 377643,
+    "Positive": 26934
+  },
+  "negative_sources": {
+    "pdb": 368937,
+    "literature": 8706
+  },
+  "evidence_rows": 10480,
+  "published_evidence_rows": 8896,
+  "published_literature_pairs": 8706,
+  "evidence_relationships": {
+    "non_interaction": 8896
+  },
+  "evidence_qualifiers": {
+    "full_length_pair": 8896
+  },
+  "source_benchmark_cutoff": "2023-06-01",
+  "helico_finetuning_cutoff": "2021-09-30",
+  "source_cbeta_negative_definition_matches_helico_heavy_atom_definition": false,
+  "files": {
+    "flock_pairs_v1_2026-08-24.csv": {
+      "bytes": 26082529,
+      "sha256": "2dae3d1557e3598fb42d6013401d9e87ddcc25fbd54d775334ec541e24984f38"
+    },
+    "literature_negatives_detail_v1_2026-08-24.csv": {
+      "bytes": 6571929,
+      "sha256": "221927fe804edf107afb8e49652f1e24cc8d92908764d95b6b33798b43a09ba0"
+    },
+    "README.md": {
+      "bytes": 18063,
+      "sha256": "ad6ef49be36099618d89a1747307d5f310c0c1e1d41c5347a9af3575de1c9117"
+    }
+  }
+}
