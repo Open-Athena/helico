@@ -174,3 +174,23 @@ def test_official_paired_effect_weights_targets_and_counts_missing_as_failure(tm
     row=pd.read_csv(tmp_path/'paired_differences.csv').iloc[0]
     assert row.denominator==3 and row.assemblies==2 and row.common_scored==2
     assert abs(row['mean']-1/3)<1e-10 and row.mean_common_scored==1
+
+
+def test_search_pairs_seeds_before_averaging_when_a_batch_does_not_fit(tmp_path):
+    import pandas as pd
+    from helico.contact_eval_analysis import summarize_search
+    records = []
+    for seed, tree_quality, ordinary_seconds in [(0, .9, 4.), (1, .1, 15.)]:
+        records.append(dict(status='complete', pdb_id='a', weights='ema', seed=seed,
+            costs={'tree': 10., 'ordinary': 20.}, metrics=[
+                dict(method='tree', available_seconds=3., ranking=.9,
+                     observed_lddt=tree_quality, interface_lddt=tree_quality),
+                dict(method='ordinary', available_seconds=ordinary_seconds, ranking=.9,
+                     observed_lddt=.8, interface_lddt=.8)]))
+    summarize_search(records, tmp_path)
+    rows = pd.read_csv(tmp_path/'search_paired_differences.csv')
+    row = rows[rows.metric.eq('selected_observed_lddt')].iloc[0]
+    assert row.n == 1 and row.paired_target_seed_cases == 1
+    assert row.missing_metric_cases == 1
+    # Averaging each arm's seeds first would give -.3, reversing the effect.
+    assert abs(row['mean'] - .1) < 1e-10

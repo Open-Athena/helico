@@ -35,13 +35,14 @@ def main():
             tables['foldbench/' + filename] = wandb.Table(
                 dataframe=pd.read_csv(args.foldbench_data / (filename + '.csv')))
         for filename in ['audit-v1/contact_summary', 'conditioning-v2/conditioning_summary',
-                         'conditioning-v2/conditioning_head_summary', 'validation-structures-v3/structure_paired_differences',
+                         'conditioning-v2/conditioning_head_summary',
+                         'conditioning-repeat-v1/repeat_control_summary', 'validation-structures-v3/structure_paired_differences',
                          'search-v2/search_paired_differences',
                          'contact-hypotheses-v2/search_paired_differences']:
             path = experiment / 'data' / (filename + '.csv')
             tables['validation/' + filename] = wandb.Table(dataframe=pd.read_csv(path))
         for name in ['full-validation', 'contact-conditioning', 'contact-search',
-                     'contact-hypotheses', 'alternative-states', 'rotation-geometry', 'foldbench']:
+                     'contact-hypotheses', 'alternative-states', 'rotation-geometry', 'contact-conditioning-repeat', 'foldbench']:
             path = experiment / 'plots/corrected' / (name + '.png')
             if path.exists():
                 tables['figures/' + name] = wandb.Image(str(path))

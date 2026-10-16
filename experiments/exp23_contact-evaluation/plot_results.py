@@ -169,6 +169,32 @@ def rotation_geometry():
     plt.close(fig)
 
 
+def conditioning_repeat():
+    data = pd.read_csv(ROOT/'data/conditioning-repeat-v1/repeat_control_summary.csv')
+    data = data[data.msa & data['mode'].eq('rescue_positive4')]
+    groups = ['intra', 'pp', 'pl']; labels = ['Within protein', 'Protein–protein', 'Protein–ligand*']
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.5))
+    for metric, shift, label, color in [('conditioned_satisfaction', -.18, 'Contact-conditioned', '#1e5c93'),
+                                        ('repeat_satisfaction', .18, 'Unconditioned repeat', '#8b94a3')]:
+        d = data[data.metric.eq(metric)].set_index('group').loc[groups]
+        axes[0].bar(np.arange(3)+shift, d['mean']*100, .34, label=label, color=color,
+                    yerr=np.stack([d['mean']-d.low, d.high-d['mean']])*100, capsize=3)
+    axes[0].set_xticks(range(3), labels, rotation=15, ha='right')
+    axes[0].set_ylabel('Requested contacts satisfied (%)'); axes[0].legend(frameon=False)
+    d = data[data.metric.eq('conditioned_minus_repeat_satisfaction')].set_index('group').loc[groups]
+    axes[1].errorbar(d['mean']*100, [2, 1, 0],
+        xerr=np.stack([d['mean']-d.low, d.high-d['mean']])*100, fmt='o', capsize=4, color='#1e5c93')
+    axes[1].axvline(0, color='.5', lw=.8); axes[1].set_yticks([2, 1, 0], labels)
+    axes[1].set_ylim(-.5, 2.5); axes[1].set_xlabel('Conditioned − repeat (percentage points)')
+    fig.suptitle('Sparse steering versus repeated unconditioned inference', fontsize=14)
+    fig.text(.02, .015, 'Up to four missed native contacts per case, MSA on; 8 targets/group and 2 seeds. 95% paired target-bootstrap intervals.\n'
+             'Both runs use the original seeds. Native-selected contacts enter only the conditioned arm; *includes ions/glycans.', fontsize=9)
+    fig.tight_layout(rect=(0, .12, 1, .93))
+    for suffix in ['png', 'svg']:
+        fig.savefig(PLOTS/('contact-conditioning-repeat.' + suffix))
+    plt.close(fig)
+
+
 if __name__ == '__main__':
     if (ROOT/'data/conditioning-v2/conditioning_summary.csv').exists():conditioning()
     if (ROOT/'data/search-v2/search_paired_differences.csv').exists():search()
@@ -176,3 +202,4 @@ if __name__ == '__main__':
     if (ROOT/'data/contact-hypotheses-v2/search_paired_differences.csv').exists():contact_hypotheses()
     if (ROOT/'data/alternative-states-v2/alternative_state_candidates.csv').exists():alternative_states()
     if (ROOT/'data/rotation_geometry_summary.csv').exists():rotation_geometry()
+    if (ROOT/'data/conditioning-repeat-v1/repeat_control_summary.csv').exists():conditioning_repeat()

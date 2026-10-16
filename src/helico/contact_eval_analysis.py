@@ -203,13 +203,19 @@ def summarize_search(records, output):
             for metric in metrics:
                 summary.append(dict(weights=weight,horizon=horizon,method=method,metric=metric,
                                     **bootstrap_mean(frame[metric])))
-        for (weight,horizon),frame in target_means.groupby(['weights','horizon']):
+        for (weight,horizon),frame in df.groupby(['weights','horizon']):
             for metric in metrics:
-                wide=frame.pivot(index='pdb_id',columns='method',values=metric)
+                # Pair the same target/seed before averaging seeds. Otherwise
+                # one method missing a complete batch can change the mixture
+                # of seeds and produce a spurious paired treatment effect.
+                wide=frame.pivot(index=['pdb_id','seed'],columns='method',values=metric)
                 for method in (k for k in wide.columns if k!='ordinary'):
                     if {method,'ordinary'}<=set(wide):
+                        differences=(wide[method]-wide.ordinary).dropna()
                         paired.append(dict(weights=weight,horizon=horizon,contrast=method+'-minus-ordinary',
-                                           metric=metric,**bootstrap_mean(wide[method]-wide.ordinary)))
+                            metric=metric,paired_target_seed_cases=len(differences),
+                            missing_metric_cases=len(wide)-len(differences),
+                            **bootstrap_mean(differences.groupby(level='pdb_id').mean())))
         pd.DataFrame(summary).to_csv(output/'search_summary.csv',index=False)
         pd.DataFrame(paired).to_csv(output/'search_paired_differences.csv',index=False)
     return df
