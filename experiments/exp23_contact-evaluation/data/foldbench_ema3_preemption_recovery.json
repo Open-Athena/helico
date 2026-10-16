@@ -59,5 +59,13 @@
   "expected_targets": 371,
   "recovery": "Single bounded continuation with original configuration and output URI; durable completed records reused. No inference code, settings, weights or input changes.",
   "original_source": "fb9bd91b326ebb5b2b6957bdb10f50a3095a30ca",
-  "config_sha256": "21f8553de33606f6cf0c6401a561313687aa05361982383d0e81fd6e9ddea97e"
+  "config_sha256": "21f8553de33606f6cf0c6401a561313687aa05361982383d0e81fd6e9ddea97e",
+  "recovery_source": "fa2b4570fe555398e23184da2513140658e09eaa",
+  "inference_source_unchanged_paths": [
+    "src/helico/contact_evaluate.py",
+    "src/helico/model",
+    "src/helico/coreweave_worker.py",
+    "configs/eval/contact-foldbench-ema-3-v2.json"
+  ],
+  "inference_source_diff_empty": true
 }
