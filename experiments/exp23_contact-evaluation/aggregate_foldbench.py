@@ -18,6 +18,7 @@ def main():
     parser.add_argument('--foldbench',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--completion',action='store_true')
+    parser.add_argument('--run-version', choices=['v1', 'v2'], default='v2')
     parser.add_argument('--unavailable-alignments-reason',type=Path,
                         help='Explicit bounded-recovery failure evidence, if alignments remain unavailable')
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=True)
@@ -27,8 +28,8 @@ def main():
     pending=[r for r in inputs if r['status']=='alignment_pending']
     if pending and not args.unavailable_alignments_reason:
         raise ValueError('Deferred alignments must complete or have explicit failure evidence')
-    names=[f'foldbench-{w}-{s}-v1' for s in range(4) for w in ['ema','protenix']]
-    if args.completion:names += [f'foldbench-{w}-completion-v1' for w in ['ema','protenix']]
+    names=[f'foldbench-{w}-{s}-{args.run_version}' for s in range(4) for w in ['ema','protenix']]
+    if args.completion:names += [f'foldbench-{w}-completion-{args.run_version}' for w in ['ema','protenix']]
     predictions=[];scores=[];failures=[];stages=[]
     for name in names:
         stage=json.loads((args.results/name/'done.json').read_text());stages.append(stage)
@@ -76,7 +77,7 @@ def main():
     pd.DataFrame(failures).to_csv(args.output/'input_inference_failures.csv',index=False)
     scores[scores.status.ne('complete')].to_csv(args.output/'scoring_failures.csv',index=False)
     targets.groupby('category').agg(targets=('target_index','size'),assemblies=('pdb_id','nunique')).to_csv(args.output/'denominators.csv')
-    metadata=dict(assemblies=1522,ready_inputs=len(ready),resource_failed_inputs=sum('resource ceiling' in r.get('error','') for r in inputs),
+    metadata=dict(run_version=args.run_version,assemblies=1522,ready_inputs=len(ready),resource_failed_inputs=sum('resource ceiling' in r.get('error','') for r in inputs),
         unavailable_alignments=len(pending),structures=len(predictions),official_score_rows=len(scores),
         manifest_sha256=hashlib.sha256(args.manifest.read_bytes()).hexdigest(),stages=stages)
     if args.unavailable_alignments_reason:

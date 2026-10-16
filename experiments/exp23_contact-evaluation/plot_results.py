@@ -8,12 +8,14 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
+PLOTS = ROOT / 'plots/corrected'
+PLOTS.mkdir(parents=True, exist_ok=True)
 plt.rcParams.update({'font.size': 10, 'axes.spines.top': False,
                      'axes.spines.right': False, 'savefig.dpi': 180})
 
 
 def conditioning():
-    data = pd.read_csv(ROOT/'data/conditioning-v1/conditioning_summary.csv')
+    data = pd.read_csv(ROOT/'data/conditioning-v2/conditioning_summary.csv')
     groups = ['intra', 'pp', 'pl']
     labels = ['Within protein', 'Protein–protein', 'Protein–ligand*']
     fig, axes = plt.subplots(1, 3, figsize=(12, 4.4))
@@ -35,15 +37,15 @@ def conditioning():
         ax.set_xticks(range(3), labels, rotation=20, ha='right')
         ax.axhline(0, color='.5', linewidth=.7)
     axes[0].legend(frameon=False)
-    fig.suptitle('Contact conditioning: structural control remains weak', fontsize=14, x=.51)
+    fig.suptitle('Structural response to contact conditioning', fontsize=14, x=.51)
     fig.text(.02, .015, 'Oracle validation diagnostic; 8 targets/group, 2 seeds; targets without eligible corrections omitted. 95% target-bootstrap intervals.\n'
              'First two panels request up to four corrections. *Ligand group includes ions/glycans. lDDT uses fixed atom/chain correspondence.', fontsize=9)
     fig.tight_layout(rect=(0,.11,1,.94))
-    fig.savefig(ROOT/'plots/contact-conditioning.png');plt.close(fig)
+    fig.savefig(PLOTS/'contact-conditioning.png');fig.savefig(PLOTS/'contact-conditioning.svg');plt.close(fig)
 
 
 def search():
-    data = pd.read_csv(ROOT/'data/search-v1/search_paired_differences.csv')
+    data = pd.read_csv(ROOT/'data/search-v2/search_paired_differences.csv')
     data = data[data.horizon=='unmask']
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.9))
     for ax, metric, title in zip(axes, ['selected_observed_lddt','oracle_observed_lddt'],
@@ -53,19 +55,19 @@ def search():
                     fmt='o', color='#1e5c93', capsize=5)
         ax.axvline(0,color='.5',linewidth=.8)
         ax.set_yticks([1,0],['Contact tree','Progressive unmasking'])
-        ax.set_ylim(-.5,1.5);ax.set_xlim(-.006,.012)
+        ax.set_ylim(-.5,1.5)
         ax.set_xlabel('Observed-atom lDDT difference\nfrom ordinary sampling')
         ax.set_title(title,fontsize=11)
-    fig.suptitle('No resolved search advantage on the 24-target panel',fontsize=14)
+    fig.suptitle('Matched-time search on the 24-target panel',fontsize=14)
     fig.text(.02,.025,'Same model-compute allowance per target/seed; 200 diffusion steps. 95% paired target-bootstrap intervals.\n'
              'Fixed atom/chain geometry; ordinary sampling batches 4 structures.\n'
              'This unmasking variant generates coordinates at every revelation step.',fontsize=8)
     fig.tight_layout(rect=(0,.18,1,.93))
-    fig.savefig(ROOT/'plots/contact-search.png');plt.close(fig)
+    fig.savefig(PLOTS/'contact-search.png');fig.savefig(PLOTS/'contact-search.svg');plt.close(fig)
 
 
 def full_validation():
-    root=ROOT/'data/validation-structures-v2'
+    root=ROOT/'data/validation-structures-v3'
     paired=pd.read_csv(root/'structure_paired_differences.csv').set_index('metric')
     calibration=pd.read_csv(root/'discrepancy_calibration.csv')
     calibration=calibration[calibration.weights=='ema'].set_index('group').loc[['intra','pp','pl']]
@@ -77,24 +79,24 @@ def full_validation():
     axes[0].set_yticks([1,0],['Full structure\n384 complexes','Interface\n331 evaluable'])
     axes[0].set_ylim(-.5,1.5)
     axes[0].set_xlabel('EMA minus initialization lDDT')
-    axes[0].set_title('Modest overall structure improvement',fontsize=11)
+    axes[0].set_title('Structure quality after contact training',fontsize=11)
     for offset,column,label,color in [(-.18,'mean_predicted_probability','Predicted probability','#1e5c93'),
                                       (.18,'native_contact_fraction','Observed reference frequency','#b07732')]:
         axes[1].bar(np.arange(3)+offset,100*calibration[column],.34,label=label,color=color)
     axes[1].set_xticks(range(3),['Within protein','Protein–protein','Protein–ligand*'])
     axes[1].set_ylabel('Contact probability / frequency (%)')
     axes[1].set_ylim(0,100);axes[1].legend(frameon=False,fontsize=9)
-    axes[1].set_title('Disagreement proposals are overconfident\nrelative to the observed reference',fontsize=11)
+    axes[1].set_title('Disagreement proposal calibration\nagainst the observed reference',fontsize=11)
     fig.suptitle('Full 384-complex validation',fontsize=14)
     fig.text(.02,.025,'Left: confidence-selected best of 2 structures; 95% paired assembly-bootstrap intervals; fixed atom/chain correspondence.\n'
              'Right: top eligible missing-contact proposal per group/sample, generated distance ≥7 Å; unobserved labels excluded after selection.\n'
              '*Includes ions/glycans. One reference structure cannot exclude a physically valid alternative contact.',fontsize=8)
     fig.tight_layout(rect=(0,.17,1,.92))
-    fig.savefig(ROOT/'plots/full-validation.png');plt.close(fig)
+    fig.savefig(PLOTS/'full-validation.png');fig.savefig(PLOTS/'full-validation.svg');plt.close(fig)
 
 
 def contact_hypotheses():
-    data=pd.read_csv(ROOT/'data/contact-hypotheses-v1/search_paired_differences.csv')
+    data=pd.read_csv(ROOT/'data/contact-hypotheses-v2/search_paired_differences.csv')
     fig,axes=plt.subplots(1,3,figsize=(12,4.2))
     specs=[('selected_observed_lddt','Confidence-selected full structure'),
            ('selected_interface_lddt','Confidence-selected interface'),
@@ -107,16 +109,16 @@ def contact_hypotheses():
         ax.axvline(0,color='.5',linewidth=.8);ax.set_ylim(-.5,1.5)
         ax.set_yticks([1,0],['7 contact steps','32 contact steps'])
         ax.set_title(title,fontsize=10);ax.set_xlabel('lDDT difference from\nordinary sampling')
-    fig.suptitle('Contact-only diffusion does not improve matched-time sampling',fontsize=14)
+    fig.suptitle('Contact-only diffusion at matched sampling time',fontsize=14)
     fig.text(.02,.025,'Four independent contact hypotheses, one 200-step coordinate sample each. Ordinary sampling uses each method’s own model-time budget.\n'
              '24 validation targets (20 with evaluable interfaces), 2 seeds; 95% paired target-bootstrap intervals. Fixed atom/chain correspondence.\n'
-             'Ordinary sampling yields 8.83 / 19.33 mean candidates at the 7-step / 32-step budgets, respectively.',fontsize=8)
+             'Candidate counts and timing for each target are retained in the accompanying CSV tables.',fontsize=8)
     fig.tight_layout(rect=(0,.18,1,.92))
-    fig.savefig(ROOT/'plots/contact-hypotheses.png');plt.close(fig)
+    fig.savefig(PLOTS/'contact-hypotheses.png');fig.savefig(PLOTS/'contact-hypotheses.svg');plt.close(fig)
 
 
 if __name__ == '__main__':
-    conditioning()
-    if (ROOT/'data/search-v1/search_paired_differences.csv').exists():search()
-    if (ROOT/'data/validation-structures-v2/structure_paired_differences.csv').exists():full_validation()
-    if (ROOT/'data/contact-hypotheses-v1/search_paired_differences.csv').exists():contact_hypotheses()
+    if (ROOT/'data/conditioning-v2/conditioning_summary.csv').exists():conditioning()
+    if (ROOT/'data/search-v2/search_paired_differences.csv').exists():search()
+    if (ROOT/'data/validation-structures-v3/structure_paired_differences.csv').exists():full_validation()
+    if (ROOT/'data/contact-hypotheses-v2/search_paired_differences.csv').exists():contact_hypotheses()

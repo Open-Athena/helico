@@ -12,6 +12,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--results-revision', required=True)
     parser.add_argument('--foldbench-data', type=Path, required=True)
+    parser.add_argument('--protocol-name', default='foldbench_protocol_v2.json')
     args = parser.parse_args()
     experiment = Path(__file__).resolve().parent
     completion = json.loads((args.foldbench_data / 'completion.json').read_text())
@@ -26,22 +27,22 @@ def main():
         job_type='evaluation-summary', resume='allow',
         config=dict(results_dataset=receipt['repo_id'], results_revision=args.results_revision,
                     source_commit=source,
-                    protocol=json.loads((experiment / 'data/foldbench_protocol.json').read_text())),
+                    protocol=json.loads((experiment / 'data' / args.protocol_name).read_text())),
         allow_val_change=True)
     try:
         tables = {}
         for filename in ['summary', 'paired_differences', 'oracle_summary', 'denominators']:
             tables['foldbench/' + filename] = wandb.Table(
                 dataframe=pd.read_csv(args.foldbench_data / (filename + '.csv')))
-        for filename in ['audit-v1/contact_summary', 'conditioning-v1/conditioning_summary',
-                         'conditioning_head_summary', 'validation-structures-v2/structure_paired_differences',
-                         'search-v1/search_paired_differences',
-                         'contact-hypotheses-v1/search_paired_differences']:
+        for filename in ['audit-v1/contact_summary', 'conditioning-v2/conditioning_summary',
+                         'conditioning-v2/conditioning_head_summary', 'validation-structures-v3/structure_paired_differences',
+                         'search-v2/search_paired_differences',
+                         'contact-hypotheses-v2/search_paired_differences']:
             path = experiment / 'data' / (filename + '.csv')
             tables['validation/' + filename] = wandb.Table(dataframe=pd.read_csv(path))
         for name in ['full-validation', 'contact-conditioning', 'contact-search',
                      'contact-hypotheses', 'alternative-states', 'foldbench']:
-            path = experiment / 'plots' / (name + '.png')
+            path = experiment / 'plots/corrected' / (name + '.png')
             if path.exists():
                 tables['figures/' + name] = wandb.Image(str(path))
         run.log(tables)
