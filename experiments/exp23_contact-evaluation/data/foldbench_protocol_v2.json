@@ -21,7 +21,7 @@
     "assignment": "deterministic greedy balancing by token count squared; exact same target partitions for both model weights"
   },
   "evaluation_inputs": "full sequence/CCD and independently prepared MSAs; no cropping or native pocket",
-  "search_decision": "Repeat validation under the corrected rigid coordinate augmentation; ordinary sampling remains the predeclared primary initialization/EMA comparison.",
+  "search_decision": "Retain ordinary batched coordinate diffusion as the primary and only blind sampling arm. Progressive unmasking has a small nominal selected full-structure gain (+0.002564) but no interface, oracle-best or diversity gain. Contact-only sampling has no resolved selected full-structure advantage; 32-step sampling lowers interface quality. Sparse oracle steering has no resolved improvement over an unconditioned inference repeat. No extra blind search arm is warranted.",
   "alignment_completion_policy": "Complete the existing 13-input alignment request, publish an immutable completion input revision, then run v2 completion stages with the corrected sampler.",
   "features_dataset": {
     "repo_id": "timodonnell/helico-foldbench-eval-v1",
@@ -39,5 +39,15 @@
     "search_selection_blind_quality_inspected": false,
     "search_selection_measurements_sha256": "27f6e62724eb71cd0fb09ea79fad38e58d510137081780ba50c2706f983c9a0b"
   },
-  "corrected_search_selection_pending": true
+  "corrected_search_selection_pending": false,
+  "search_method_selected": "ordinary batched coordinate diffusion",
+  "search_decision_utc": "2026-10-16T02:38:08.831864+00:00",
+  "search_selection_blind_quality_inspected": false,
+  "search_selection_measurements": {
+    "search-v2/search_paired_differences.csv": "e9e989640d5c0baaf4dc413f8d223b474bb0bf3bfec6a7e01f53fd088095d22c",
+    "contact-hypotheses-v2/search_paired_differences.csv": "208dbb1aeee1aa7594514cc07e3ca661ddf9dc5037792b5d3e048e94b636517c",
+    "conditioning-repeat-v1/repeat_control_summary.csv": "141984bf4a85e4a7fa8726911e876d89e73c03bc045bde280e8c49e5068fcb0a",
+    "development-v2/structure_paired_differences.csv": "ab6ed0f23b68cd1179362ee192f6e939a13d5e8fa4a6b71e92c2d7a1437f7fc1"
+  },
+  "selection_note": "Corrected validation measurements only. Historical FoldBench predictions diagnosed the coordinate-precision defect; corrected blind numerical quality scores have not been inspected at this decision."
 }

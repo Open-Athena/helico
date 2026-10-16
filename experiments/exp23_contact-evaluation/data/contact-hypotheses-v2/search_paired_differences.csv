@@ -1,0 +1,17 @@
+weights,horizon,contrast,metric,paired_target_seed_cases,missing_metric_cases,n,mean,low,high
+ema,contact32,contact32-minus-ordinary,selected_observed_lddt,48,0,24,-0.004699653792159443,-0.015712738131742614,0.003332918753477665
+ema,contact32,contact7-minus-ordinary,selected_observed_lddt,48,0,24,-0.0022627809954811062,-0.013460482249963398,0.005343556521034055
+ema,contact32,contact32-minus-ordinary,selected_interface_lddt,40,8,20,-0.039530193178261966,-0.08850135873878101,-0.004413847388667254
+ema,contact32,contact7-minus-ordinary,selected_interface_lddt,40,8,20,-0.01235885950959473,-0.037521612697085975,0.006983359026368435
+ema,contact32,contact32-minus-ordinary,oracle_observed_lddt,48,0,24,-0.006901529293063732,-0.01225922625400293,-0.0028467478771674317
+ema,contact32,contact7-minus-ordinary,oracle_observed_lddt,48,0,24,-0.008832633307586844,-0.01921187029294154,-0.0025384879218076474
+ema,contact32,contact32-minus-ordinary,candidates,48,0,24,-15.333333333333334,-17.0,-13.833333333333334
+ema,contact32,contact7-minus-ordinary,candidates,48,0,24,-15.333333333333334,-17.0,-13.833333333333334
+ema,contact7,contact32-minus-ordinary,selected_observed_lddt,48,0,24,-0.0010667673799086956,-0.007771415183526395,0.0051739708657838526
+ema,contact7,contact7-minus-ordinary,selected_observed_lddt,48,0,24,0.00016384400895945914,-0.006691912471792537,0.005994244301002151
+ema,contact7,contact32-minus-ordinary,selected_interface_lddt,40,8,20,-0.04668062936418761,-0.09804421466616871,-0.007989827312965504
+ema,contact7,contact7-minus-ordinary,selected_interface_lddt,40,8,20,-0.002237874228346959,-0.021501754660373743,0.015098339306172569
+ema,contact7,contact32-minus-ordinary,oracle_observed_lddt,48,0,24,-0.014061343315913665,-0.02497187641604671,-0.006517169894931993
+ema,contact7,contact7-minus-ordinary,oracle_observed_lddt,48,0,24,-0.005237573068751955,-0.015970377274235857,0.0013631538489851957
+ema,contact7,contact32-minus-ordinary,candidates,48,0,24,-7.5,-8.416666666666666,-6.791666666666667
+ema,contact7,contact7-minus-ordinary,candidates,48,0,24,-4.833333333333333,-5.833333333333333,-4.0
