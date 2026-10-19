@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from helico.checkpoint_storage import publish_checkpoint
+from helico.checkpoint_storage import publish_checkpoint, publish_json
 
 
 INCOMPLETE = OSError(22, "You did not provide the number of bytes specified by the Content-Length HTTP header. Received: 0, Expected: 52428800")
@@ -56,6 +56,26 @@ def test_pointer_retry_does_not_repeat_checkpoint_upload(tmp_path):
     fs = Storage(pointer_errors=[INCOMPLETE])
     publish(fs, tmp_path)
     assert len(fs.uploads) == 1 and fs.pointers == 2
+
+
+def test_evaluation_metadata_recovers_incomplete_body():
+    fs = Storage(pointer_errors=[INCOMPLETE])
+    record = dict(status='complete', artifact='result.pt.gz', artifact_bytes=20)
+    publish_json(fs, 'eval/target.json', record, sleep=lambda _: None)
+    assert fs.pointers == 2
+    assert json.loads(fs.objects['eval/target.json']) == record
+
+
+@pytest.mark.parametrize('errors,exception,count', [
+    ([INCOMPLETE] * 4, OSError, 3),
+    ([PermissionError('AccessDenied')], PermissionError, 1),
+])
+def test_failed_evaluation_metadata_does_not_mark_complete(errors, exception, count):
+    fs = Storage(pointer_errors=errors)
+    with pytest.raises(exception):
+        publish_json(fs, 'eval/target.json', dict(status='complete'), sleep=lambda _: None)
+    assert fs.pointers == count
+    assert 'eval/target.json' not in fs.objects
 
 
 @pytest.mark.parametrize("storage,exception,uploads", [

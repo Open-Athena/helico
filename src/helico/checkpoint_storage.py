@@ -16,6 +16,25 @@ def transient_storage_failure(text):
     ))
 
 
+def publish_json(fs, uri, record, *, attempts=3, sleep=time.sleep):
+    """Retry transient metadata uploads using the same immutable byte buffer."""
+    if attempts < 1:
+        raise ValueError("attempts must be positive")
+    content = json.dumps(record, allow_nan=True).encode()
+    for attempt in range(1, attempts + 1):
+        try:
+            fs.pipe_file(uri, content)
+            return
+        except Exception as error:
+            if attempt == attempts or not transient_storage_failure(
+                type(error).__name__ + ': ' + str(error)
+            ):
+                raise
+            print(json.dumps(dict(storage_metadata_retry=uri, failed_attempt=attempt,
+                                  max_attempts=attempts, error_type=type(error).__name__)), flush=True)
+            sleep(2 ** attempt)
+
+
 def publish_checkpoint(fs, path, output_uri, step, data_lock_sha256, *, attempts=3, sleep=time.sleep):
     """Upload immutable bytes before advancing latest.json.
 

@@ -285,7 +285,8 @@ def evaluate(config, config_path):
             resource_failures=sum(r.get('resource_failures', 0) for r in results),
             ranks=len(results), wall_seconds=time.monotonic() - started,
             code_sha=os.environ['HELICO_CODE_SHA'])
-        fs.pipe_file(output_uri + '/result.json', json.dumps(result).encode())
+        from helico.checkpoint_storage import publish_json
+        publish_json(fs, output_uri + '/result.json', result)
         run.summary.update(result)
         run.finish()
     except BaseException:

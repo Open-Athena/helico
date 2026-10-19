@@ -99,7 +99,7 @@ class ArtifactStore:
         return not artifact or self.fs.size(self.uri + '/' + artifact) == row['artifact_bytes']
 
     def save(self, name, record, tensors=None):
-        from helico.checkpoint_storage import transient_storage_failure
+        from helico.checkpoint_storage import publish_json, transient_storage_failure
         row = {**record, 'config_sha256': self.config_hash, 'code_sha': os.environ.get('HELICO_CODE_SHA')}
         if tensors is not None:
             artifact = name + '.pt.gz'
@@ -117,7 +117,7 @@ class ArtifactStore:
                     if attempt == 2 or not transient_storage_failure(str(error)):
                         raise
                     time.sleep(2 ** attempt)
-        self.fs.pipe_file(self.uri + '/' + name + '.json', json.dumps(row, allow_nan=True).encode())
+        publish_json(self.fs, self.uri + '/' + name + '.json', row)
         print(json.dumps(dict(event='result', name=name, status=row['status'])), flush=True)
         return row
 
@@ -530,6 +530,7 @@ def main():
             except Exception as error:
                 row = dict(status='failed', pdb_id=record['pdb_id'], weights=weights,
                     error=repr(error), traceback=traceback.format_exc())
+                print(json.dumps(dict(event='target_failure', **row)), flush=True)
                 store.save(f"errors/{weights}/{record['pdb_id']}", row)
                 if cfg.get('allow_resource_failures') and isinstance(error, torch.cuda.OutOfMemoryError):
                     resource_failed.append(row)
@@ -543,7 +544,8 @@ def main():
     store.save(f'ranks/{rank}', dict(status='complete', rank=rank, targets=len(targets),
                                    failures=len(failed), resource_failures=len(resource_failed)))
     if failed:
-        raise RuntimeError(f'{len(failed)} target/weight evaluations failed; durable errors recorded')
+        raise RuntimeError(f'{len(failed)} target/weight evaluations failed; durable errors recorded: '
+                           + '; '.join(row['error'] for row in failed))
 
 
 if __name__ == '__main__':
