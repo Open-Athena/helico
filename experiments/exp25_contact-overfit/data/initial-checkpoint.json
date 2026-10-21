@@ -1,0 +1,8 @@
+{
+  "step": 1,
+  "checkpoint": "s3://marin-us-east-02a/helico/runs/exp25-contact-overfit-v1/step-000001.pt",
+  "data_lock_sha256": "2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114",
+  "sha256": "d85c9d21233d9b8e1aeae7d723ebb567c0a1589dbe5e9a3d72cf3c65d425917e",
+  "bytes": 5795898755,
+  "remote_size_verified": true
+}
