@@ -14,6 +14,7 @@ _`gh issue list --label experiment` + each notebook's frontmatter._
 
 | Issue | Title | Branch | Notebook |
 |---|---|---|---|
+| [#25](https://github.com/Open-Athena/helico/issues/25) | Fixed-training-set overfit diagnostic for sparse contact control | `—` | _no notebook yet_ |
 | [#24](https://github.com/Open-Athena/helico/issues/24) | Focused masked-contact continuation with sparse constraints and geometric compliance | `—` | _no notebook yet_ |
 | [#23](https://github.com/Open-Athena/helico/issues/23) | Evaluate masked-contact structure control and inference-time search | `—` | _no notebook yet_ |
 | [#22](https://github.com/Open-Athena/helico/issues/22) | Full-data masked-contact fine-tuning on CoreWeave | `—` | _no notebook yet_ |
