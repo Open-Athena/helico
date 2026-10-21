@@ -1,0 +1,17 @@
+{
+  "pdb_id": "2fsx",
+  "parameters": 368537859,
+  "tokens": 148,
+  "compliance_only_loss": 0.005082206800580025,
+  "contact_projection_gradient_norm": 1.0405025482177734,
+  "finite_nonzero_diffusion_gradients": true,
+  "positive_constraints": 305,
+  "negative_constraints": 7711,
+  "backward_seconds": 2.349500549957156,
+  "peak_gpu_gb": 7.849148416,
+  "parent_identity_verified": true,
+  "optimizer_update": false,
+  "full_200_step_inference_seconds": 7.977475127205253,
+  "finite_generated_coordinates": true,
+  "unconditioned_lddt": 0.8925315249307251
+}

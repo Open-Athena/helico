@@ -176,15 +176,19 @@ def train(config, config_path):
                   "code_sha": os.environ["HELICO_CODE_SHA"], "data_lock_sha256": lock["lock_sha256"]}
     with fs.open(config["output_uri"] + "/provenance.json", "w") as f:
         json.dump(provenance, f)
-    data_cache = Path(config.get("data_cache_dir", str(scratch / "data")))
-    hub = MirroredHub(lock, config["mirror_uri"], data_cache)
-    # Warm the downloads concurrently, then use the existing verified extraction
-    # path and its cross-split checks. Metadata is checked before bulk staging.
-    stage_lock(lock, data_cache, metadata_only=True, hub=hub)
-    entries = list(hub.entries)
-    with ThreadPoolExecutor(max_workers=config.get("download_workers", 4)) as pool:
-        list(pool.map(lambda key: hub.download(*key), entries))
-    bundle = stage_lock(lock, data_cache, hub=hub, source_workers=config.get("extract_workers", 1))
+    if config.get('overfit'):
+        from helico.contact_overfit import stage_features
+        bundle = dict(fixed_features=stage_features(config['overfit']['dataset'],
+                      lock['lock_sha256'], scratch / 'overfit-features'))
+    else:
+        data_cache = Path(config.get("data_cache_dir", str(scratch / "data")))
+        hub = MirroredHub(lock, config["mirror_uri"], data_cache)
+        # Metadata is checked before bulk staging and verified extraction.
+        stage_lock(lock, data_cache, metadata_only=True, hub=hub)
+        entries = list(hub.entries)
+        with ThreadPoolExecutor(max_workers=config.get("download_workers", 4)) as pool:
+            list(pool.map(lambda key: hub.download(*key), entries))
+        bundle = stage_lock(lock, data_cache, hub=hub, source_workers=config.get("extract_workers", 1))
     write_json(scratch / "data.paths.json", bundle)
     # A resumed job restores the last fully uploaded optimizer/EMA snapshot.
     resume = []

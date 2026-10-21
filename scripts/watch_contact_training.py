@@ -66,6 +66,10 @@ def completion_status(snapshot):
                     snapshot.get("wandb", {}).get("state") == "finished")
     if not verified:
         return "needs_attention"
+    if 'overfit_summaries' in snapshot and any(
+            not value or value.get('status') != 'complete' or value.get('step') != result['step']
+            for value in snapshot['overfit_summaries'].values()):
+        return 'needs_attention'
     if result.get("finished_steps"):
         return "completed"
     if result.get("wall_seconds", 0) >= snapshot.get("training_budget_seconds", float("inf")):
@@ -113,6 +117,10 @@ def inspect(state):
         uri = snapshot["checkpoint"]["checkpoint"]
         snapshot["checkpoint_bytes"] = fs.size(uri) if fs.exists(uri) else 0
     if str(status.state) == "succeeded":
+        if config.get('overfit') and snapshot['result']:
+            step = snapshot['result']['step']
+            snapshot['overfit_summaries'] = {weight: read_json(fs,
+                base + f'/overfit-eval/step-{step:06d}/summary-{weight}.json') for weight in ('raw', 'ema')}
         code = ("import json,sys,wandb; r=wandb.Api(timeout=30).run('timodonnell/helico/'+sys.argv[1]); "
                 "print(json.dumps({'state':r.state,'step':r.lastHistoryStep}))")
         raw = subprocess.check_output([str(Path(state["workspace"]) / ".venv/bin/python"),
@@ -140,8 +148,11 @@ def save(path, state):
 def recover(state):
     from helico.experiment import ensure_training_run, set_experiment
     workspace = Path(state["workspace"])
-    if subprocess.check_output(["git", "status", "--porcelain"], cwd=workspace, text=True).strip():
+    if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=workspace, text=True).strip():
         raise RuntimeError("Workspace changed; recovery needs review")
+    if subprocess.check_output(['git', 'ls-files', '--others', '--exclude-standard', '--',
+                                'src', 'configs', 'scripts'], cwd=workspace, text=True).strip():
+        raise RuntimeError('Untracked executable/configuration source needs review')
     # A monitor may have been added since submission, but scientific code must
     # still match the inspected attempt. Never silently launch unreviewed code.
     subprocess.run(["git", "diff", "--exit-code", state["spec"]["git_sha"], "HEAD", "--",
@@ -154,9 +165,10 @@ def recover(state):
     spec = {k: v for k, v in state["spec"].items() if k != "git_sha"}
     spec.update(job_name=state["base_job_name"] + f"-recovery-{number}", timeout_seconds=remaining)
     name = state["base_step_name"] + f"-recovery-{number}"
-    set_experiment("exp22_contact-scale")
+    set_experiment(state.get('experiment', "exp22_contact-scale"))
     os.environ.update(HELICO_IRIS_PYTHON=sys.executable, HELICO_IRIS_CONFIG=state["cluster_config"])
-    kwargs = dict(gpu=f"H100:{spec['gpus']}", max_steps=20000, crop_size=384, lr=2e-5,
+    config = json.loads((workspace / spec['config']).read_text())
+    kwargs = dict(gpu=f"H100:{spec['gpus']}", max_steps=config['steps'], crop_size=config['crop_size'], lr=config['lr'],
                   est_wall_hours=remaining / 3600, coreweave=spec)
     os.environ["HELICO_DRY_RUN"] = "1"
     ensure_training_run(name, **kwargs)
@@ -179,11 +191,23 @@ def main():
     state = json.loads(args.state.read_text())
     state.update(owner_pid=os.getpid(), auto_recover=args.auto_recover)
     while True:
-        delay = 570
+        delay = state.get('poll_seconds', 570)
         try:
             snapshot = inspect(state)
             state["latest_signal"] = snapshot
             condition = snapshot["job_state"]
+            if time.time() >= state['deadline'] and condition not in {
+                    'succeeded', 'failed', 'worker_failed', 'preempted', 'killed', 'unschedulable'}:
+                # Iris can reschedule an attempt; the study's original deadline
+                # still bounds the sum of all attempts and their staging time.
+                from iris.cli.connect import open_iris_client
+                from iris.cluster.types import JobName
+                with open_iris_client(config_file=Path(state['cluster_config']), workspace=Path(state['workspace'])) as client:
+                    client.job(JobName.from_wire(state['job_id'])).cancel()
+                state['monitor_status'] = 'resource_deadline'
+                notify('Original study deadline reached; cancelled owned job and retained durable artifacts.')
+                save(args.state, state)
+                return
             event = [state["job_id"], snapshot.get("preemption_count", 0)]
             previous_event = state.get("last_preemption_event")
             if event != previous_event and event[1]:

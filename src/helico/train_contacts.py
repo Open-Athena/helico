@@ -52,6 +52,8 @@ def check_continuation(checkpoint, config, model_config, lock_sha):
     parent = config["continuation"]
     if checkpoint["step"] != parent["step"] or checkpoint["git_sha"] != parent["git_sha"]:
         raise ValueError("Continuation parent step/source mismatch")
+    if 'total_step' in parent and checkpoint.get('total_step', checkpoint['step']) != parent['total_step']:
+        raise ValueError('Continuation cumulative parent step mismatch')
     if checkpoint["data_lock_sha256"] != lock_sha:
         raise ValueError("Continuation data mismatch")
     previous = {**checkpoint["model_config"], "use_msa": True}
@@ -174,7 +176,7 @@ def save_checkpoint(output, model, optimizer, ema, step, config, lock, *, final=
     torch.save({"model_state_dict": model.state_dict(), "ema_state_dict": ema,
                 "model_config": {**asdict(model.config), "use_msa": True}, "optimizer_state_dict": optimizer.state_dict(),
                 "step": step, "parent_step": config.get("continuation", {}).get("step", 0),
-                "total_step": step + config.get("continuation", {}).get("step", 0),
+                "total_step": step + config.get("continuation", {}).get("total_step", config.get("continuation", {}).get("step", 0)),
                 "training_config": config, "data_lock": lock,
                 "data_lock_sha256": lock["lock_sha256"], "git_sha": os.environ["HELICO_CODE_SHA"],
                 "sampler": "global-weighted-draw-seed-v1"}, tmp)
@@ -257,7 +259,14 @@ def main():
         del checkpoint
     elif cfg.get("continuation"):
         raise ValueError("Continuation requires the verified parent checkpoint")
-    train_data, validation = load_datasets(lock, bundle, cfg["crop_size"], args.output / "data-errors")
+    if cfg.get('overfit'):
+        from helico.contact_overfit import FixedCrops, evaluate_fixed
+        train_data = FixedCrops(bundle['fixed_features'], cfg['overfit']['dataset'], lock['lock_sha256'])
+        validation = {}
+        crop_dataset = train_data
+    else:
+        train_data, validation = load_datasets(lock, bundle, cfg["crop_size"], args.output / "data-errors")
+        crop_dataset = SeededCrops(train_data, cfg["seed"], diagnostics_dir=diagnostics / f"rank-{rank}-workers")
     # Validation uses fixed 384-token crops for online diagnostics. The original
     # 384-entry validation membership is unchanged; final FoldBench uses full inputs.
     for dataset in validation.values():
@@ -265,7 +274,7 @@ def main():
     draws = weighted_draws(train_data.merged_datapoint_weights, cfg["steps"], cfg["accumulation"],
                           world, rank, start, cfg["seed"])
     progress("loading_data", step=start)
-    loader = DataLoader(SeededCrops(train_data, cfg["seed"], diagnostics_dir=diagnostics / f"rank-{rank}-workers"), sampler=draws,
+    loader = DataLoader(crop_dataset, sampler=draws,
                         batch_size=1, collate_fn=first, num_workers=cfg["workers"],
                         multiprocessing_context=loader_process_context(cfg["workers"]),
                         persistent_workers=cfg["workers"] > 0, pin_memory=True,
@@ -282,7 +291,19 @@ def main():
                          "parameters": sum(p.numel() for p in model.parameters()),
                          "training_records": len(train_data), "data_lock": lock})
         print(json.dumps({"wandb": run.url, "records": len(train_data), "start_step": start}), flush=True)
+    def diagnostic(step, weights='raw'):
+        progress('overfit_evaluation', step=step, weights=weights)
+        summary = evaluate_fixed(model, train_data, cfg, args.output, step, rank, world, weights=weights)
+        if rank == 0:
+            run.log({f'overfit/{weights}/{k}': v for k, v in summary['mean'].items()}, step=step)
+            print(json.dumps({'event': 'overfit_summary', **summary}), flush=True)
+        dist.barrier()
+
     began = time.monotonic()
+    if cfg.get('overfit') and (start == 0 or start in cfg['overfit']['evaluation_steps']):
+        # A checkpoint is saved before evaluation. Recovery must finish that
+        # checkpoint's paired diagnostics before advancing the optimizer.
+        diagnostic(start)
     step = start
     stop_step = min(cfg["steps"], cfg.get("stop_after_step", cfg["steps"]))
     for step in range(start + 1, stop_step + 1):
@@ -293,6 +314,7 @@ def main():
         for group in optimizer.param_groups:
             group["lr"] = lr * group["lr_scale"]
         totals = torch.zeros(15, device="cuda", dtype=torch.float64)
+        exposure = torch.zeros(4, device='cuda', dtype=torch.float64) if cfg.get('overfit') else None
         crops = []
         for micro in range(cfg["accumulation"]):
             expected_draw = (step - 1) * world * cfg["accumulation"] + micro * world + rank
@@ -325,6 +347,11 @@ def main():
                     raise FloatingPointError(f"Nonfinite loss at step={step}, PDB={pdb_id}, draw={draw}")
                 progress("backward")
                 (loss / cfg["accumulation"]).backward()
+            if exposure is not None:
+                expected_known = int(torch.triu(feature['contact_valid'], 1).sum()) * (1 - t / 1000)
+                sparse = 0 < expected_known <= 64.00001
+                exposure += torch.tensor([float(sparse), float(sparse and gm['positive_count'] > 0),
+                    float(sparse) * gm['positive_count'], float(out['sigma'].mean())], device='cuda')
             totals += torch.tensor([loss.detach(), mse.detach(), smooth.detach(),
                 out["distogram_loss"].detach(), out["contact_loss"].detach(),
                 out["contact_observed_loss"].detach(), float(use_msa), t,
@@ -332,6 +359,8 @@ def main():
                 gm["positive_count"], gm["negative_count"], gm["positive_satisfaction"],
                 gm["negative_satisfaction"]], device="cuda")
         progress("optimizer")
+        projection_grad = (float(model.linear_contact.weight.grad.norm())
+                           if cfg.get('overfit') and model.linear_contact.weight.grad is not None else 0.)
         try:
             grad = torch.nn.utils.clip_grad_norm_(model.parameters(), 1., error_if_nonfinite=True)
         except RuntimeError:
@@ -343,6 +372,8 @@ def main():
             torch._foreach_lerp_(list(ema.values()), list(model.state_dict().values()), .001)
         progress("metrics_sync")
         dist.all_reduce(totals); totals /= world * cfg["accumulation"]
+        if exposure is not None:
+            dist.all_reduce(exposure); exposure /= world * cfg['accumulation']
         if rank == 0 and (step <= 5 or step % 10 == 0):
             metrics = dict(zip(["train/loss", "train/mse", "train/smooth_lddt", "train/distogram",
                 "train/contact_bce", "train/observed_bce", "train/msa_fraction", "train/contact_time",
@@ -353,6 +384,10 @@ def main():
                             "train/step_seconds": time.monotonic() - tick,
                             "train/examples_seen": step * world * cfg["accumulation"],
                             "train/gpu_memory_gb": torch.cuda.max_memory_allocated() / 1e9})
+            if exposure is not None:
+                metrics.update(dict(zip(['overfit/sparse_draw_fraction', 'overfit/sparse_with_positive_fraction',
+                    'overfit/sparse_positive_pairs_per_draw', 'overfit/mean_training_sigma'], exposure.tolist())))
+                metrics['overfit/contact_projection_grad_norm'] = projection_grad
             print(json.dumps({"step": step, **metrics}), flush=True); run.log(metrics, step=step)
         # Save first, so a validation failure does not discard completed updates.
         if checkpoint_due(step, cfg):
@@ -360,7 +395,9 @@ def main():
             if rank == 0:
                 save_checkpoint(args.output, model, optimizer, ema, step, cfg, lock)
             dist.barrier()
-        if step % cfg["validate_every"] == 0:
+        if cfg.get('overfit') and step in cfg['overfit']['evaluation_steps']:
+            diagnostic(step)
+        elif not cfg.get('overfit') and step % cfg["validate_every"] == 0:
             progress("validation")
             metrics = validate(model, validation, cfg["validation_samples"], rank, world, cfg["seed"] + 10000000)
             if rank == 0:
@@ -372,11 +409,20 @@ def main():
         dist.all_reduce(stop, op=dist.ReduceOp.MAX)
         if stop.item():
             break
+    if cfg.get('overfit'):
+        if step not in cfg['overfit']['evaluation_steps']:
+            diagnostic(step)
+        # Preserve the raw model when reporting final EMA behavior.
+        raw = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        model.load_state_dict(ema)
+        diagnostic(step, weights='ema')
+        model.load_state_dict(raw)
+        del raw
     if rank == 0:
         save_checkpoint(args.output, model, optimizer, ema, step, cfg, lock, final=True)
         write_json(args.output / "result.json", {"step": step, "requested_steps": cfg["steps"],
             "finished_steps": step == cfg["steps"], "stage_complete": step == stop_step,
-            "total_step": step + cfg.get("continuation", {}).get("step", 0),
+            "total_step": step + cfg.get("continuation", {}).get("total_step", cfg.get("continuation", {}).get("step", 0)),
             "wall_seconds": time.monotonic() - began})
         run.finish()
     dist.barrier(); dist.destroy_process_group()

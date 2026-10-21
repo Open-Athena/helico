@@ -1,0 +1,2 @@
+57 focused tests passed: overfit data guards and summaries, continuation, compliance gradients, gates, watchdog, storage, and notebooks.
+Full-model compliance-only backward and 200-step inference passed separately; see full-model-preflight.json.

@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "purpose": "training-only fixed-crop overfit diagnostic; not a generalization benchmark",
+  "source_dataset": {
+    "repo_id": "timodonnell/helico-protenix-v1-pdb",
+    "revision": "164e41cf98d7fdf4d437192a9947138ca2464011"
+  },
+  "source_data_lock_sha256": "2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114",
+  "source_seed": 2201,
+  "source_crop_size": 384,
+  "source_msa_depth": 512,
+  "selection": "Six existing frozen training crops, selected before checkpoint predictions for two examples each of intra/PP/PL; group labels designate the contact subset used in diagnostics, not exclusive molecule composition.",
+  "split_audit": {
+    "all_train": true,
+    "validation_pool_overlap": [],
+    "foldbench_overlap": [],
+    "train_ids_sha256": "a7f141382dad047837f372607f38e04298f0b90311000d9881a3052ab024e4f2"
+  },
+  "records": [
+    {
+      "pdb_id": "2fsx",
+      "group": "intra",
+      "status": "ready",
+      "tokens": 148,
+      "atoms": 1162,
+      "path": "2fsx.pt.gz",
+      "sha256": "476cd77520a21f6a6bd20a5c2c3e0c24ef44c698e120d8f856da01f3fcee9526",
+      "bytes": 149511,
+      "source_draw": 2,
+      "source_feature_sha256": "8d0859f971da757b810a880e7f150be5e90dda2383cf2c03d6cf732535722061"
+    },
+    {
+      "pdb_id": "5ahj",
+      "group": "intra",
+      "status": "ready",
+      "tokens": 384,
+      "atoms": 2957,
+      "path": "5ahj.pt.gz",
+      "sha256": "0c2819edea6b0280e5f77d36d3ae45e38bf63a438d732307ab91f976c6d3b3f6",
+      "bytes": 312990,
+      "source_draw": 6,
+      "source_feature_sha256": "2abbb2166af1e168915ff0bafa850e1d23f30c2620188771a2190d5216285fb8"
+    },
+    {
+      "pdb_id": "3bnj",
+      "group": "pp",
+      "status": "ready",
+      "tokens": 252,
+      "atoms": 1980,
+      "path": "3bnj.pt.gz",
+      "sha256": "5af290cde8e2cc5de5fe3c471cdc10b2986d6e89f9b4964dfb7d884c8e9e0d8e",
+      "bytes": 216985,
+      "source_draw": 22,
+      "source_feature_sha256": "2ece6da0007083ddca1452adbaf75426f3d413b89425662a665d15e10b817185"
+    },
+    {
+      "pdb_id": "4qnp",
+      "group": "pp",
+      "status": "ready",
+      "tokens": 384,
+      "atoms": 2921,
+      "path": "4qnp.pt.gz",
+      "sha256": "fdd7c0a5ea7282da3b6906648846e1aeb19b9be68729685df6c405cf0af463cd",
+      "bytes": 332614,
+      "source_draw": 8,
+      "source_feature_sha256": "5c8ed6f48bb842e55d1bdcfa6f290ed5e836a840ece7951432bfe08e9180cc97"
+    },
+    {
+      "pdb_id": "3dn4",
+      "group": "pl",
+      "status": "ready",
+      "tokens": 195,
+      "atoms": 1337,
+      "path": "3dn4.pt.gz",
+      "sha256": "4408affc6252f9fdb8b5c6cc3f2719f19f87f8c755a9091cff01934113beef7a",
+      "bytes": 169579,
+      "source_draw": 17,
+      "source_feature_sha256": "6151fc7d0b7125ec9c5950bc83246854b3ff6cd2d849eb13cb27dc647e136a1e"
+    },
+    {
+      "pdb_id": "3sii",
+      "group": "pl",
+      "status": "ready",
+      "tokens": 312,
+      "atoms": 2140,
+      "path": "3sii.pt.gz",
+      "sha256": "dd3561a77cec51235040cc03005eb4947fc6dda23c0e756836943526551898ab",
+      "bytes": 269172,
+      "source_draw": 24,
+      "source_feature_sha256": "1c8fb1653750ee256384b9f0610221b24ab3b9e3fedff140f37f734c679d84d1"
+    }
+  ]
+}

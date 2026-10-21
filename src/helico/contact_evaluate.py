@@ -204,7 +204,7 @@ def run_focused(model, payload, record, cfg, store, weights):
     for offset in cfg.get('seeds', [0, 1]):
         seed = payload['seed'] + offset * 100000
         prefix = f"focused/{weights}/{record['pdb_id']}/s{offset}-"
-        reference_prefix = f"focused/ema/{record['pdb_id']}/s{offset}-"
+        reference_prefix = f"focused/{cfg.get('reference_weights', 'ema')}/{record['pdb_id']}/s{offset}-"
         baseline = repeat = None
         modes = ['unknown', 'repeat']
         if group in {'intra', 'pp', 'pl'}:

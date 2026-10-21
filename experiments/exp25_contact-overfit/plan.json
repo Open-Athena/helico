@@ -1,0 +1,20 @@
+{
+  "experiment": "exp25_contact-overfit",
+  "max_gpu_hours": 64,
+  "estimated_incremental_cost_usd": 8,
+  "spec": {
+    "job_name": "helico-exp25-contact-overfit-v1",
+    "mode": "train",
+    "gpus": 8,
+    "cpu": 32,
+    "memory": "400g",
+    "disk": "300g",
+    "image": "pytorch/pytorch@sha256:b85566342b86d13a67712e9315d40cdc2dad7f8d86df1aff3831f80835edbcca",
+    "timeout_seconds": 28800,
+    "config": "configs/train/contact-overfit-v1.json",
+    "output_uri": "s3://marin-us-east-02a/helico/runs/exp25-contact-overfit-v1",
+    "priority_band": "interactive",
+    "estimated_incremental_cost_usd": 8,
+    "cost_accounting": "Whole diagnostic: at most 64 prepaid H100-hours including staging, inference and bounded recovery; at most 133 GiB new object storage within the existing $0.06/GiB-month allowance, $8 first month. No fleet expansion."
+  }
+}

@@ -46,3 +46,12 @@ def test_time_budget_stop_requires_durable_finished_artifacts():
     assert watchdog.completion_status({**snapshot, "wandb": {"state": "running"}}) == "needs_attention"
     snapshot["result"]["finished_steps"] = True
     assert watchdog.completion_status(snapshot) == "completed"
+
+
+def test_overfit_completion_requires_final_raw_and_ema_evaluations():
+    snapshot = dict(result=dict(step=5000, finished_steps=True), checkpoint=dict(step=5000),
+                    checkpoint_bytes=123, wandb=dict(state='finished'),
+                    overfit_summaries=dict(raw=dict(status='complete', step=5000), ema=None))
+    assert watchdog.completion_status(snapshot) == 'needs_attention'
+    snapshot['overfit_summaries']['ema'] = dict(status='complete', step=5000)
+    assert watchdog.completion_status(snapshot) == 'completed'
