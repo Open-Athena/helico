@@ -1,0 +1,7 @@
+{
+  "step": 1500,
+  "checkpoint": "s3://marin-us-east-02a/helico/runs/exp24-focused-1500-v1/final.pt",
+  "data_lock_sha256": "2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114",
+  "sha256": "3167b567a602c2c4a7e9b01def1cddbc5c9462d2ab5aed5b65ab98b4221d501f",
+  "bytes": 5795724987
+}

@@ -67,6 +67,8 @@ for name, spec in plan["stages"].items():
 
 ## Status
 
+**Stopped at the predeclared 1,500-update steering gate on October 19 at 12:17 EDT (16:17 UTC).** The complete 500-update evaluation passed its retention gate, and the controller trained to 1,500 additional updates / 21,500 cumulative updates. The complete 1,500-update evaluation passed gross structural retention but failed sparse steering for both raw and EMA weights. The 5,000-update stage was never submitted; all exp24 jobs are terminal. Results were checked against CoreWeave and W&B on October 21.
+
 The first continuation stage completed **500 additional updates / 20,500 cumulative updates** on October 16, processing 16,000 weighted crops in 4,180 training seconds on eight H100s. Model, optimizer and EMA are durable in `exp24-focused-500-v1/final.pt`, SHA256 `ee97fdd0e0a5aeb538641fcf95cc1a67470aa31d2f3b0268b1449f4a6d66170a`. Parent evaluation completed all 336 predictions. See `data/checkpoint-500.json` and `data/result-train-500.json`.
 
 The candidate evaluation then failed at 17:30 UTC on October 16: CoreWeave object storage rejected a 1,629-byte JSON metadata upload for raw-weight 7n8v with `IncompleteBody`. The tensor-upload path already retried, but metadata did not. One rank failed after completing its other targets, and torchrun terminated another rank, leaving **654/672 prediction records**. The controller stopped for inspection; no 1,500- or 5,000-update training stage ran during the pause. This was an infrastructure failure, not a failed scientific gate. The original traceback is retained in `data/evaluation-upload-failure.json`.
@@ -84,3 +86,24 @@ The enabled user service `helico-exp24-controller.service` keeps a durable state
 [Training W&B](https://wandb.ai/timodonnell/helico/runs/exp24-focused-500-v1) · [Parent inference W&B](https://wandb.ai/timodonnell/helico/runs/exp24-focused-eval-parent-v1) · [Issue status](https://github.com/Open-Athena/helico/issues/24#issuecomment-6219362619).
 
 The initial full CI attempt passed 401 tests and skipped three optional fixtures, but repeated the pre-existing `TestTrunkSnapshot.test_z_init` BF16 failure (max absolute difference 0.5), matching the exp23 evidence. The unchanged rerun passed **402 tests, with three optional fixture skips** ([CI](https://github.com/Open-Athena/helico/actions/runs/38927942551/job/117067176075)); snapshots, tolerances and model code were not modified to make this check pass. The startup step-50 checkpoint is also durable, with remote size verified, and W&B independently records finite metrics through step 50 (`data/wandb_initial_metrics.csv`).
+
+## Completed results
+
+Both candidate evaluations contain all 672 prediction records (36 complexes, two seeds, raw and EMA weights), with no resource failures. Sparse steering uses the 24 intra-protein/protein–protein/protein–ligand complexes and measures supplied-contact satisfaction minus matched repeated-unconditioned satisfaction, averaging over 1/4/16-contact modes and seeds within each target. Intervals below bootstrap whole targets; units are percentage points. Parent EMA steering was +1.31 points. These are development-panel results, not FoldBench results.
+
+| Additional updates | Weights | Sparse steering (95% CI) | Change from parent | Retention gate | Steering gate |
+| --- | --- | --- | --- | --- | --- |
+| 500 | Raw | +1.44 [−1.83, +4.65] | +0.13 | Pass | Not required; below criterion |
+| 500 | EMA | +2.00 [+0.24, +4.06] | +0.69 | Pass | Not required; below criterion |
+| 1,500 | Raw | −0.69 [−3.98, +2.11] | −2.00 | Pass | Fail |
+| 1,500 | EMA | −2.35 [−6.28, +0.71] | −3.66 | Pass | Fail |
+
+The required steering thresholds were at least +5 points, at least +3 points improvement over parent, a nonnegative 95% lower bound, and no sparse subgroup below −5 points. Neither 1,500-update weight set met them. The EMA improvement-over-parent interval is [−8.09, −0.06] points; raw is [−5.77, +1.42]. The raw and EMA steering intervals themselves both include zero. See `data/gate-summary.csv`, `data/gate-500.json`, and `data/gate-1500.json` for full metrics.
+
+At 1,500 updates, mean unconditioned observed-lDDT changes relative to parent EMA were −0.001160 (raw) and −0.000246 (EMA). Mean interface-lDDT changes were −0.009300 and −0.004524. The protein–ligand subgroup's interface-lDDT changes were −0.022724 and −0.023761 across eight complexes. These values passed the predeclared gross-regression thresholds; passing those thresholds does not imply unchanged quality in every subgroup.
+
+Validation contact BCE was 0.020844 at 500, 0.020744 at 750, 0.020701 at 1,000, 0.020624 at 1,250, and 0.020901 at 1,500. Logged training BCE averages fell from 0.02859 over updates 510–700 to 0.02189 over 1,300–1,500; these sampled training windows contain different random crops and masks. Validation BCE did not show a sustained decrease. Sources: `data/training-through-500.csv` and `data/training-500-to-1500.csv`.
+
+Training processed 48,000 weighted crops across the continuation. The second training stage completed without recovery in 8,147 seconds on eight H100s; the two training stages total 12,327 seconds (3.42 hours, approximately 27.4 H100-hours excluding staging/evaluation). The final 5,795,724,987-byte model/optimizer/EMA checkpoint is retained at `s3://marin-us-east-02a/helico/runs/exp24-focused-1500-v1/final.pt`, SHA256 `3167b567a602c2c4a7e9b01def1cddbc5c9462d2ab5aed5b65ab98b4221d501f`, with remote size verified. See `data/checkpoint-1500.json` and `data/result-train-1500.json`.
+
+[Continuation training](https://wandb.ai/timodonnell/helico/runs/exp24-focused-1500-v1) · [Completed evaluation](https://wandb.ai/timodonnell/helico/runs/exp24-focused-eval-1500-v1).
