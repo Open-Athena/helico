@@ -10,7 +10,6 @@ import logging
 import os
 import pickle
 import tempfile
-import time
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,7 +26,6 @@ from helico.data import (
     TokenizedStructure,
     _default_data_dir,
     _processed_dir,
-    load_msa_for_chain,
     parse_ccd,
     parse_mmcif,
     tokenize_sequences,
@@ -1199,8 +1197,8 @@ def compute_dockq(
         fnats = []
         for interface_id, interface_result in result_mapping.items():
             dockqs.append(interface_result.get("DockQ", 0.0))
-            irmsds.append(interface_result.get("iRMS", float("nan")))
-            lrmsds.append(interface_result.get("LRMS", float("nan")))
+            irmsds.append(interface_result.get("iRMSD", float("nan")))
+            lrmsds.append(interface_result.get("LRMSD", float("nan")))
             fnats.append(interface_result.get("fnat", 0.0))
 
         return {
@@ -1484,6 +1482,7 @@ def run_benchmark(
                     gt_structure = parse_mmcif(gt_path_for_score, max_resolution=float("inf"))
 
                     best_scores = None
+                    best_key = float("-inf")
                     best_pred_coords_np = None
                     best_plddt_np = None
                     best_pred_pdb_str = ""

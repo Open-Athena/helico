@@ -35,10 +35,9 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import yaml
 
@@ -410,10 +409,13 @@ def ensure_bench_run(
         "gpu": gpu,
         "workers": workers,
         "n_samples": n_samples,
+        "n_seeds": n_seeds,
         "max_tokens": max_tokens,
         "n_cycles": n_cycles,
         "cutoff_date": cutoff_date,
         "categories": categories,
+        "contacts_arm": env.get("HELICO_BENCH_CONTACTS_ARM", ""),
+        "oracle_contacts": env.get("HELICO_BENCH_ORACLE_CONTACTS", "0") == "1",
         "git_sha": _git_sha(),
         "est_cost_usd": est_cost,
     }
