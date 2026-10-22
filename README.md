@@ -6,10 +6,6 @@
 [![HF Model](https://img.shields.io/badge/🤗%20model-helico-yellow)](https://huggingface.co/timodonnell/helico)
 [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Open-Athena/helico/blob/main/notebooks/helico_contact_conditioned_folding.ipynb)
 
-Our goal is to enable robust experimentation around modeling and data improvements for AlphaFold3-like architectures.
-
-## Folding from contacts instead of MSAs
-
 Helico can fold a protein from a **residue–residue contact map** in place of a
 multiple sequence alignment. Contacts are computed by
 [pyconfind](https://github.com/Open-Athena/pyconfind) with the same
