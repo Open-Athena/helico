@@ -1,0 +1,3 @@
+# Preserve fixed-width PDB fields and the byte-identical RCSB reference download.
+*.pdb whitespace=-blank-at-eol
+*.cif whitespace=-blank-at-eol
