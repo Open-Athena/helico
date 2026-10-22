@@ -6,6 +6,8 @@ The [animated version](../contact_sweep.gif) shows six independent Helico
 predictions for the 74-residue SH3-like domain from *Penicillium virgatum*
 muramidase, [PDB 8B2G, chain A](https://www.rcsb.org/structure/8B2G).
 The model receives only the sequence and the stated contact subset.
+The [sequence](sequence.txt) and [ordered contact list](contacts.txt) are ready
+to use with the main README's Python and command-line examples.
 
 This target was selected from experiment 14 for its large improvement with
 oracle contacts. It illustrates the conditioning behavior, not average

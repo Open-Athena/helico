@@ -52,6 +52,8 @@ def main():
     pairs = torch.triu(oracle == CONTACT_PRESENT, diagonal=1).nonzero()
     pairs = pairs[torch.randperm(len(pairs), generator=torch.Generator().manual_seed(0))]
     pairs = pairs.tolist()
+    (OUTPUT / "sequence.txt").write_text(sequence + "\n")
+    (OUTPUT / "contacts.txt").write_text("".join(f"{i} {j}\n" for i, j in pairs))
     counts = sorted(set(min(n, len(pairs)) for n in [0, 5, 10, 20, 30, len(pairs)]))
 
     truth = np.array([

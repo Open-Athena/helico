@@ -49,16 +49,25 @@ uv pip install -e .
 source .venv/bin/activate
 ```
 
-Prepare `sequence.txt` with a single amino acid sequence (no FASTA header) and
-`contacts.txt` with one pair of **zero-based residue positions** per line:
+Start with the animation's inputs: a 74-residue sequence and 59 contacts derived
+from its known structure. Copy these demo files into the repository root:
 
-```text
-3 41
-7 65
+```bash
+cp docs/images/contact_sweep/sequence.txt sequence.txt
+cp docs/images/contact_sweep/contacts.txt contacts.txt
 ```
 
-Use a sequence long enough for every supplied position. These two pairs only
-illustrate the file format; replace them with contacts for your protein.
+For your own protein, replace `sequence.txt` with a single amino acid sequence
+(no FASTA header) and `contacts.txt` with one pair of **zero-based residue
+positions** per line. For example, the demo contact list starts with:
+
+```text
+21 53
+40 46
+```
+
+Use positions within the supplied sequence. The demo uses ground-truth contacts;
+for prediction, supply contacts from your predictor or other source.
 
 ```python
 from pathlib import Path
@@ -131,8 +140,8 @@ for name, contact_map in candidate_maps.items():
 print(sorted(scores.items(), key=lambda item: item[1], reverse=True))
 ```
 
-Use a longer, ranked contact list to compare different cutoffs, or substitute
-maps from different predictors. Keep the sequence, checkpoint, seed, and
+For your own data, compare cutoffs of a ranked contact list or substitute maps
+from different predictors. Keep the sequence, checkpoint, seed, and
 sampling budget fixed. Confidence is a **proxy for map quality**, not a
 calibrated contact precision or a guarantee of correctness. Measured lDDT
 requires a reference; predicted lDDT (pLDDT) does not.
@@ -203,8 +212,15 @@ maps. The conditioning mechanism and training recipe are documented in
 
 ## Development and resources
 
+The full test suite also checks Protenix weight loading and benchmark scoring.
+Install both sets of test dependencies and download the Protenix test checkpoint:
+
 ```bash
-uv pip install -e ".[dev]"
+uv sync --python 3.10 --extra dev --extra bench
+source .venv/bin/activate
+mkdir -p checkpoints
+curl -fL https://protenix.tos-cn-beijing.volces.com/checkpoint/protenix_base_default_v1.0.0.pt \
+  -o checkpoints/protenix_base_default_v1.0.0.pt
 pytest
 ```
 
@@ -217,7 +233,7 @@ pytest
 - [Published benchmark artifacts](https://huggingface.co/buckets/timodonnell/helico-experiments/exp14_foldbench_held_out_monomers):
   predicted structures, scores, and run manifests.
 - `helico-bench --help`: FoldBench evaluation. Install benchmark dependencies
-  with `uv sync --extra bench`; benchmark data downloads on first use.
+  with `uv sync --python 3.10 --extra bench`; benchmark data downloads on first use.
 
 ## License
 
