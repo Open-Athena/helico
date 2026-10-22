@@ -55,16 +55,36 @@ run = ensure_training_run("fixed-six-v1", gpu="H100:8", max_steps=5000,
 print(run.meta)
 ```
 
-## Status
+## Results as of October 22
 
-The cost dry run estimates $8 additional first-month storage, within the whole-study cap. The 57 focused tests pass, including final raw/EMA diagnostic completion checks. A full 368,537,859-parameter preflight restored the exact parent on real training crop 2fsx (148 tokens): compliance-only loss 0.005082, contact-input projection gradient norm 1.0405, finite nonzero diffusion-module gradients, and 7.85 GB peak GPU allocation. No optimizer update was performed. Full 200-step structure sampling also completed with finite coordinates; see `data/full-model-preflight.json`.
+The diagnostic stopped at update **4,500 of 5,000** (26,000 cumulative), while publishing its next checkpoint. CoreWeave object storage returned `MethodNotAllowed` / `PermissionError`: “Account is write suspended for this availability zone. Please check capacity quota and contact support.” Rank zero exited at this storage operation; the distributed launcher then terminated the other ranks. The full traceback was recovered from the separate Iris output archive and its SHA256 verified; see `data/failure-excerpt.txt`. This was not the scientific steering gate. The last durable model/optimizer/EMA checkpoint is update **4,000** (25,500 cumulative), 5,795,898,755 bytes, SHA256 `5342f7c3d106d0f5149e0f1451ae16d79757a3a53bacd55f1460eb3f0175a51a`.
 
-The preflight caught missing inference-only atom-count metadata in the older training cache. `FixedCrops` now derives `atoms_per_token` from input tokenization, matching the standard evaluation preparation; it adds no geometry or labels to inference. The second full-model preflight passed. This verifies execution and a nonzero structural gradient path, not useful conditional behavior.
+Both Iris and W&B report failure. The monitor stopped without restarting because its available error tail did not identify a retryable transient failure. Storage failures also left its diagnostic progress at 4,214; W&B and the recovered full log establish that optimizer updates reached 4,500. The original eight-hour recovery deadline has elapsed. The task ran for 2h 53m 22s, approximately 23.12 H100-hours. It is no longer using GPUs. A fresh October 22 multipart-upload creation probe succeeded and was immediately aborted; that specific storage operation is available again, but a complete large upload has not been retested. No recovery job was launched during this status review.
 
-Job `/bizon/helico-exp25-contact-overfit-v1` launched on October 21 from source `4278cbead7e02ac225c39f1c7c7de7309ce036b4`. Eight H100s are allocated and initial paired inference is producing durable records. `data/submission.json` retains the exact receipt. The enabled `helico-exp25-monitor.service` inspects the owned job every two minutes and can resume transient failures from verified checkpoints within the original deadline. It cancels the owned job at that deadline and requires both final raw and EMA evaluation summaries before reporting completion. The service's state is `scratch/exp25-monitor-state.json`; it does not modify the scientific recipe or launch further experiments.
+Raw paired evaluation completed at 0/100/500/1,500/3,000: **72 records at every checkpoint**, all six targets measured, two seeds per target. Final raw and EMA evaluations are missing; no `result.json` was published. The frozen requests are native contacts missed by the initial raw checkpoint. Satisfaction is averaged over rescue1/4/16 and seeds within each target, then over targets equally.
+
+| Additional updates | Supplied satisfaction | Masked satisfaction | Supplied minus masked | Unconditioned lDDT |
+|---:|---:|---:|---:|---:|
+| 0 | 1.83% | 2.01% | −0.19 pp | 0.9165 |
+| 100 | 9.69% | 5.15% | +4.54 pp | 0.9236 |
+| 500 | 48.86% | 50.19% | −1.34 pp | 0.9613 |
+| 1,500 | 65.74% | 65.43% | +0.31 pp | 0.9820 |
+| 3,000 | 67.64% | 67.46% | +0.17 pp | 0.9881 |
+
+At update 3,000, the intra-protein group has mean steering +0.52 pp; protein–protein and protein–ligand each have 0.00 pp on their two targets. These are tiny descriptive groups, not generalization estimates. Contact-head response at requested pairs also shows no sustained positive trajectory: mean −0.00220 at 3,000. Per-target and aggregate values are in `data/eval-summary-step-*-raw.json` and `data/trajectory.csv`.
+
+Training masked-contact BCE fell from **0.01911** over updates 1–500 to **0.01441** over 4,001–4,500, approximately **25%**. These are means of 50 equally spaced logged updates per window, not every training batch. Corresponding loss/exposure windows are in `data/training-windows.csv`. Pre-clipping gradient norms grew substantially late in training: the median rose from about 492 in the first window to 19,319 in the last. Global clipping is enabled at norm 1. These finite but large norms deserve investigation before treating further updates as equivalent effective learning; they were not the recorded crash cause.
+
+## Interpretation and remaining work
+
+Repeated training clearly improved native structure fit and satisfaction of the frozen initially missed contacts. Almost the same improvement occurs with the conditioning matrix entirely masked. The transient +4.54 pp result at update 100 was dominated by one target and was not sustained. This diagnostic therefore supports memorization under the current recipe, without demonstrating useful sparse contact control. It neither proves that the architecture is incapable of conditioning nor rules out substantially longer training on the broad dataset. The limited exposure of any particular pair in the sparse regime, and the absence of alternate native states for the same sequence in this six-example set, limit the inference.
+
+The unfinished work is to resume the verified update-4,000 checkpoint through 5,000 and obtain final raw/EMA comparisons, after explicitly accounting for the recovery allocation and verifying durable writes. Before a large broad-data extension, inspect why supplied contacts contribute so little, including sparse task exposure and the increasing pre-clipping norms. Do not count the overfit checkpoint as a candidate production model or any of these six examples as held-out evidence.
+
+## Validation and provenance
+
+The cost dry run estimated $8 additional first-month storage, within the whole-study cap. All 57 focused tests passed. Full GPU CI for the submitted source passed **412 tests**, with three optional fixture skips ([CI](https://github.com/Open-Athena/helico/actions/runs/39615141453/job/119274053808)). A full 368,537,859-parameter preflight restored the parent on real training crop 2fsx: compliance-only loss 0.005082, contact-input projection gradient norm 1.0405, finite nonzero diffusion-module gradients, and 7.85 GB peak allocation. Full 200-step inference passed without an optimizer update. The preflight caught missing inference-only atom-count metadata in the old training cache; deriving it from input tokenization fixed execution without adding native geometry or labels.
+
+Job `/bizon/helico-exp25-contact-overfit-v1` launched October 21 from source `4278cbead7e02ac225c39f1c7c7de7309ce036b4`. See `data/submission.json`, `data/partial-run-status.json`, and `data/storage-probe.json`. The monitor's historical state is `scratch/exp25-monitor-state.json`; its service is inactive after marking the failure as needing attention.
 
 [Training and diagnostic W&B](https://wandb.ai/timodonnell/helico/runs/exp25-contact-overfit-v1) · [Experiment issue](https://github.com/Open-Athena/helico/issues/25).
-
-Initial inference completed all 72 records across six targets. On the frozen initial-missed-contact tasks, supplied satisfaction is 0.01828 and repeated-unconditioned satisfaction is 0.02013, a steering difference of −0.00185; mean unconditioned observed lDDT is 0.91650. These are the pre-diagnostic-training baseline, not evidence of an overfitting result (`data/baseline-summary.json`).
-
-Training advanced beyond 20 updates with finite loss/gradients at approximately 2.1 seconds/update. The first 5.80 GB model/optimizer/EMA checkpoint was published with SHA256 and verified remote size; see `data/initial-checkpoint.json` and `data/initial-training.json`. Full GPU CI for the submitted source passed **412 tests**, with three optional fixture skips ([CI](https://github.com/Open-Athena/helico/actions/runs/39615141453/job/119274053808)).
