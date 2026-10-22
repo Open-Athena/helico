@@ -61,7 +61,7 @@ class TriangleMultiplicativeUpdate(nn.Module):
     def forward(self, z: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         """z: (B, N, N, D). mask: (B, N, N) or None."""
         dt = z.dtype
-        return cuet.triangle_multiplicative_update(
+        out = cuet.triangle_multiplicative_update(
             x=z,
             direction=self.direction,
             mask=mask.to(dt) if mask is not None else None,
@@ -75,6 +75,9 @@ class TriangleMultiplicativeUpdate(nn.Module):
             g_out_weight=self.output_gate.weight.to(dt),
             eps=1e-5,
         )
+        # Padded products have zero variance. Mask their output as well as the
+        # inputs so normalization cannot amplify gradients through padding.
+        return out if mask is None else out * mask.unsqueeze(-1).to(out.dtype)
 
 
 class TriangleAttention(nn.Module):

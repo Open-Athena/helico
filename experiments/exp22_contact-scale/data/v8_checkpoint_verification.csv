@@ -1,0 +1,2 @@
+checked_at_utc,checkpoint,step,bytes,git_sha,data_lock_sha256,model_tensors,ema_tensors,optimizer_states,optimizer_groups,model_finite,ema_finite,optimizer_finite,read_and_verify_seconds
+2026-10-09 23:37:10 UTC,s3://marin-us-east-02a/helico/runs/exp22-contact-scale-v8/step-000250.pt,250,5795897795,d66df6cc23409e659d4b7bc19588125a8ddd5215,2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114,3832,3832,3538,2,True,True,True,17.227479153079912

@@ -1,0 +1,28 @@
+{
+  "selection": "Identical protein sequences among validation structures, monomeric protein, common observed CA RMSD > 2 angstrom. Selected using references before predictions; these are validation diagnostics, not a test set.",
+  "pairs": [
+    {
+      "apo": "8dp6",
+      "bound": "8dp7",
+      "protein": "EgtU",
+      "rmsd": 4.39730356,
+      "common_ca": 265,
+      "reference_urls": [
+        "https://www.rcsb.org/structure/8DP6",
+        "https://www.rcsb.org/structure/8DP7"
+      ]
+    },
+    {
+      "apo": "7ztq",
+      "bound": "7zvr",
+      "protein": "BmCBP",
+      "rmsd": 2.17288713,
+      "common_ca": 235,
+      "reference_urls": [
+        "https://www.rcsb.org/structure/7ZTQ",
+        "https://www.rcsb.org/structure/7ZVR"
+      ]
+    }
+  ],
+  "limitation": "Apo and bound references differ in ligand conditions; two proteins cannot establish general state-recovery performance."
+}

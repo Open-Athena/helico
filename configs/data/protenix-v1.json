@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "contact-diffusion-protenix-v1-pdb",
+  "datasets": [
+    {
+      "repo_id": "timodonnell/helico-protenix-v1-pdb",
+      "revision": "164e41cf98d7fdf4d437192a9947138ca2464011",
+      "manifest": "dataset.json",
+      "train_split": "train",
+      "validation_split": "validation",
+      "weight": 1.0
+    }
+  ]
+}

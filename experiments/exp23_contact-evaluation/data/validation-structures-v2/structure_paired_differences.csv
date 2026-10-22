@@ -1,0 +1,3 @@
+msa,mode,metric,contrast,n,mean,low,high
+True,unknown,observed_lddt,ema-minus-protenix,384,0.010762264550600522,0.007281777896907835,0.014745962413572747
+True,unknown,interface_lddt,ema-minus-protenix,331,0.00552038488807208,-0.007016019782127781,0.01919735242159187

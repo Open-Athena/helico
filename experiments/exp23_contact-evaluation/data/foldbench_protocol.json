@@ -1,0 +1,36 @@
+{
+  "model_weights": "ema",
+  "initialization_baseline": "protenix_base_default_v1.0.0",
+  "cycles": 1,
+  "diffusion_steps": 200,
+  "msa_max_rows": 512,
+  "seeds": [
+    0
+  ],
+  "samples": 4,
+  "max_full_input_tokens": 2048,
+  "templates": false,
+  "contacts": "all unknown for the baseline model comparison",
+  "model_selection": "predicted ranking score across samples; report oracle separately",
+  "reference_geometry": "unavailable during inference",
+  "failure_policy": "all official category denominators retained; resource/input/scoring failures explicit",
+  "parallelism": {
+    "gpus_per_job": 4,
+    "shards_per_model": 4,
+    "models": 2,
+    "assignment": "deterministic greedy balancing by token count squared; exact same target partitions for both model weights"
+  },
+  "evaluation_inputs": "full sequence/CCD and independently prepared MSAs; no cropping or native pocket",
+  "search_decision": "No tested contact-search method improves confidence-selected whole-structure validation quality at matched model-compute time. For contact7 at its own horizon: delta +0.000718, 95% CI [-0.003515,0.004631]; contact32 at its own horizon: -0.001676 [-0.007853,0.003615]. Contact32 interface delta -0.036541 [-0.080991,-0.006810]. No additional blind adaptive-method arm is warranted.",
+  "alignment_completion_policy": "Freeze initial ready inputs while 13 assemblies await the original MMseqs2 job; evaluate deferred inputs under a second immutable HF revision with identical model settings, then combine disjoint predictions. All 1522 assemblies remain in denominators.",
+  "features_dataset": {
+    "repo_id": "timodonnell/helico-foldbench-eval-v1",
+    "revision": "3c934affcd88442011cb270564fcd3b6e2ba80b1",
+    "manifest_sha256": "fbd9d5832930a9f62ae7e9c23e57266253bbbff9e849fb075e959f97ec00fb32"
+  },
+  "initialization_and_ema_comparison_frozen_before_scoring": true,
+  "search_method_selected": "ordinary batched coordinate diffusion",
+  "search_decision_utc": "2026-10-15T23:50:30.387175+00:00",
+  "search_selection_blind_quality_inspected": false,
+  "search_selection_measurements_sha256": "27f6e62724eb71cd0fb09ea79fad38e58d510137081780ba50c2706f983c9a0b"
+}

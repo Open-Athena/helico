@@ -1,0 +1,10 @@
+{
+  "error": {
+    "foldbench-ema-2-v2": {
+      "stage": "foldbench-ema-2-v2",
+      "error": "ModuleNotFoundError(\"No module named 'protenix'\")"
+    }
+  },
+  "cause": "The CPU postprocessing watcher restart omitted the pinned Protenix module path.",
+  "recovery": "Restart the idle watcher with PYTHONPATH=/tmp/helico-protenix-v1-code and PROTENIX_ROOT_DIR=/tmp/helico-exp23-assets. Reuse verified inference artifacts; no GPU rerun."
+}

@@ -1,0 +1,245 @@
+{
+  "step": 500,
+  "decision": "continue",
+  "weights": {
+    "raw": {
+      "retention": {
+        "observed_lddt": {
+          "mean": -0.00040617883871371587,
+          "ci95": [
+            -0.0036624128251407737,
+            0.002356520829983282
+          ],
+          "n": 36
+        },
+        "interface_lddt": {
+          "mean": -0.0005721049406870177,
+          "ci95": [
+            -0.008336647110504447,
+            0.0076226048582603775
+          ],
+          "n": 32
+        },
+        "clash_fraction": {
+          "mean": 0.027777777777777776,
+          "ci95": [
+            -0.041666666666666664,
+            0.09027777777777778
+          ],
+          "n": 36
+        }
+      },
+      "retention_groups": {
+        "pl/observed_lddt": {
+          "mean": -6.931722797307721e-05,
+          "n": 8
+        },
+        "pl/interface_lddt": {
+          "mean": -0.000742039996229231,
+          "n": 8
+        },
+        "pl/clash_fraction": {
+          "mean": 0.0,
+          "n": 8
+        },
+        "pp/observed_lddt": {
+          "mean": 0.0006192337797751753,
+          "n": 8
+        },
+        "pp/interface_lddt": {
+          "mean": 0.0008347824561924823,
+          "n": 8
+        },
+        "pp/clash_fraction": {
+          "mean": 0.0625,
+          "n": 8
+        },
+        "intra/observed_lddt": {
+          "mean": 0.00032742196530798767,
+          "n": 8
+        },
+        "intra/clash_fraction": {
+          "mean": 0.0,
+          "n": 8
+        },
+        "intra/interface_lddt": {
+          "mean": -0.001948668806561268,
+          "n": 4
+        },
+        "dna_prot/observed_lddt": {
+          "mean": -0.0021333836119057717,
+          "n": 8
+        },
+        "dna_prot/interface_lddt": {
+          "mean": 0.00042320231738532735,
+          "n": 8
+        },
+        "dna_prot/clash_fraction": {
+          "mean": 0.0,
+          "n": 8
+        },
+        "rna_prot/observed_lddt": {
+          "mean": -0.0011435193588320708,
+          "n": 4
+        },
+        "rna_prot/interface_lddt": {
+          "mean": -0.003660060273632031,
+          "n": 4
+        },
+        "rna_prot/clash_fraction": {
+          "mean": 0.125,
+          "n": 4
+        }
+      },
+      "retention_pass": true,
+      "sparse": {
+        "mean": 0.014413682381725974,
+        "ci95": [
+          -0.018303744960576296,
+          0.0465443121890227
+        ],
+        "improvement": 0.0013338802382349985,
+        "improvement_ci95": [
+          -0.04760473914858367,
+          0.0414711158308718
+        ],
+        "n": 24
+      },
+      "sparse_groups": {
+        "pl": {
+          "mean": 0.04011656747510036,
+          "n": 8
+        },
+        "pp": {
+          "mean": -0.006510416666666667,
+          "n": 8
+        },
+        "intra": {
+          "mean": 0.00963489633674423,
+          "n": 8
+        }
+      },
+      "steering_pass": false
+    },
+    "ema": {
+      "retention": {
+        "observed_lddt": {
+          "mean": 0.0014740984759696626,
+          "ci95": [
+            -0.0020622655330855256,
+            0.005730341125631831
+          ],
+          "n": 36
+        },
+        "interface_lddt": {
+          "mean": 0.00414152642925006,
+          "ci95": [
+            -0.00511026687624148,
+            0.0161935655040529
+          ],
+          "n": 32
+        },
+        "clash_fraction": {
+          "mean": 0.013888888888888888,
+          "ci95": [
+            -0.041666666666666664,
+            0.0625
+          ],
+          "n": 36
+        }
+      },
+      "retention_groups": {
+        "pl/observed_lddt": {
+          "mean": 0.00019321548080482656,
+          "n": 8
+        },
+        "pl/interface_lddt": {
+          "mean": 0.0018246296246447469,
+          "n": 8
+        },
+        "pl/clash_fraction": {
+          "mean": 0.0,
+          "n": 8
+        },
+        "pp/observed_lddt": {
+          "mean": -0.0035955292291985318,
+          "n": 8
+        },
+        "pp/interface_lddt": {
+          "mean": -0.005854644597281917,
+          "n": 8
+        },
+        "pp/clash_fraction": {
+          "mean": -0.125,
+          "n": 8
+        },
+        "intra/observed_lddt": {
+          "mean": -0.000631002936184337,
+          "n": 8
+        },
+        "intra/clash_fraction": {
+          "mean": 0.0,
+          "n": 8
+        },
+        "intra/interface_lddt": {
+          "mean": -0.009017855634504184,
+          "n": 4
+        },
+        "dna_prot/observed_lddt": {
+          "mean": 0.011014766610578292,
+          "n": 8
+        },
+        "dna_prot/interface_lddt": {
+          "mean": 0.025468099535025795,
+          "n": 8
+        },
+        "dna_prot/clash_fraction": {
+          "mean": 0.09375,
+          "n": 8
+        },
+        "rna_prot/observed_lddt": {
+          "mean": -0.0006960135682735347,
+          "n": 4
+        },
+        "rna_prot/interface_lddt": {
+          "mean": -0.0007261020562725908,
+          "n": 4
+        },
+        "rna_prot/clash_fraction": {
+          "mean": 0.1875,
+          "n": 4
+        }
+      },
+      "retention_pass": true,
+      "sparse": {
+        "mean": 0.01997655133406321,
+        "ci95": [
+          0.0023786978175242735,
+          0.04061259929504659
+        ],
+        "improvement": 0.006896749190572236,
+        "improvement_ci95": [
+          -0.015338827752404742,
+          0.027496375298748415
+        ],
+        "n": 24
+      },
+      "sparse_groups": {
+        "pl": {
+          "mean": 0.009486607275903225,
+          "n": 8
+        },
+        "pp": {
+          "mean": 0.009114583333333332,
+          "n": 8
+        },
+        "intra": {
+          "mean": 0.041328463392953076,
+          "n": 8
+        }
+      },
+      "steering_pass": false
+    }
+  },
+  "rationale": "500-update retention gate"
+}

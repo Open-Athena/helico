@@ -1,0 +1,8 @@
+{
+  "status": "complete",
+  "targets": 36,
+  "resource_failures": 0,
+  "ranks": 8,
+  "wall_seconds": 173.50974749028683,
+  "code_sha": "d51f467296e10280b2b0963fedba4e605c6b31a3"
+}

@@ -1,0 +1,71 @@
+{
+  "run_name": "exp25-contact-overfit-v1",
+  "data_lock": "configs/data/protenix-v1.lock.json",
+  "mirror_uri": "s3://marin-us-east-02a/helico/data/protenix-v1-shards",
+  "output_uri": "s3://marin-us-east-02a/helico/runs/exp25-contact-overfit-v1",
+  "data_cache_dir": "/cache/helico-bizon/datasets",
+  "download_workers": 8,
+  "extract_workers": 4,
+  "upstream_sha": "85767b811c40ed46e73a9b39519cf6bfca8701ba",
+  "steps": 5000,
+  "train_seconds": 25200,
+  "crop_size": 384,
+  "gpus": 8,
+  "accumulation": 1,
+  "diffusion_samples": 4,
+  "msa_depth": 512,
+  "lr": 1e-05,
+  "contact_lr": 0.0001,
+  "warmup_steps": 100,
+  "save_every": 500,
+  "validate_every": 250,
+  "validation_samples": 32,
+  "workers": 0,
+  "seed": 2501,
+  "startup_save_every": 100,
+  "loader_timeout_seconds": 300,
+  "collective_timeout_seconds": 1800,
+  "mask_mixture": {
+    "unknown": 0.2,
+    "full": 0.1,
+    "sparse": 0.5,
+    "uniform": 0.2,
+    "expected_counts": [
+      1,
+      4,
+      16,
+      64
+    ]
+  },
+  "compliance": {
+    "weight": 0.2,
+    "threshold": 5.0,
+    "margin": 0.1,
+    "chunk_size": 256
+  },
+  "continuation": {
+    "checkpoint_uri": "s3://marin-us-east-02a/helico/runs/exp24-focused-1500-v1/final.pt",
+    "sha256": "3167b567a602c2c4a7e9b01def1cddbc5c9462d2ab5aed5b65ab98b4221d501f",
+    "step": 1500,
+    "total_step": 21500,
+    "git_sha": "d67b1f4ea8233eae5072bda93f8d3abc034a926d"
+  },
+  "overfit": {
+    "dataset": {
+      "repo_id": "timodonnell/helico-contact-overfit-v1",
+      "revision": "ed0f7372cf033e18168236fb4dadd8a12cb211e7",
+      "manifest_sha256": "1733da59edae03d98a132d12a0c3e2b1f69f6eda5cdc6743431a527ba44e3791"
+    },
+    "evaluation_steps": [
+      100,
+      500,
+      1500,
+      3000,
+      5000
+    ],
+    "evaluation_seeds": [
+      0,
+      1
+    ]
+  }
+}

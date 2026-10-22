@@ -1,0 +1,94 @@
+{
+  "evaluation_config": {
+    "checkpoint_step": 500,
+    "cycles": 1,
+    "diffusion_steps": 200,
+    "features_dataset": {
+      "manifest_sha256": "1733da59edae03d98a132d12a0c3e2b1f69f6eda5cdc6743431a527ba44e3791",
+      "repo_id": "timodonnell/helico-contact-overfit-v1",
+      "revision": "ed0f7372cf033e18168236fb4dadd8a12cb211e7"
+    },
+    "output_uri": "s3://marin-us-east-02a/helico/runs/exp25-contact-overfit-v1/overfit-eval/step-000500",
+    "parent": {
+      "checkpoint_uri": "s3://marin-us-east-02a/helico/runs/exp24-focused-1500-v1/final.pt",
+      "git_sha": "d67b1f4ea8233eae5072bda93f8d3abc034a926d",
+      "sha256": "3167b567a602c2c4a7e9b01def1cddbc5c9462d2ab5aed5b65ab98b4221d501f",
+      "step": 1500,
+      "total_step": 21500
+    },
+    "reference_uri": "s3://marin-us-east-02a/helico/runs/exp25-contact-overfit-v1/overfit-eval/step-000000",
+    "reference_weights": "raw",
+    "seeds": [
+      0,
+      1
+    ],
+    "stage": "focused",
+    "target_groups": {
+      "2fsx": "intra",
+      "3bnj": "pp",
+      "3dn4": "pl",
+      "3sii": "pl",
+      "4qnp": "pp",
+      "5ahj": "intra"
+    },
+    "weights": [
+      "raw"
+    ]
+  },
+  "mean": {
+    "head_response": 0.0022812096091608205,
+    "masked_satisfaction": 0.5019230768084526,
+    "steering": -0.013372506532404157,
+    "supplied_satisfaction": 0.4885505702760484,
+    "unconditioned_lddt": 0.9613196568684893
+  },
+  "measured_steering_targets": 6,
+  "prediction_records": 72,
+  "status": "complete",
+  "step": 500,
+  "targets": {
+    "2fsx": {
+      "head_response": 0.0015918307860071461,
+      "masked_satisfaction": 0.36944444477558136,
+      "steering": 0.011111115415891012,
+      "supplied_satisfaction": 0.38055556019147235,
+      "unconditioned_lddt": 0.9439051800598272
+    },
+    "3bnj": {
+      "head_response": 0.0035603841145833335,
+      "masked_satisfaction": 0.847222218910853,
+      "steering": -0.16666666666666666,
+      "supplied_satisfaction": 0.6805555522441864,
+      "unconditioned_lddt": 0.9553387191692553
+    },
+    "3dn4": {
+      "head_response": 0.0013497670491536458,
+      "masked_satisfaction": 0.10416666666666667,
+      "steering": 0.03125,
+      "supplied_satisfaction": 0.13541666666666666,
+      "unconditioned_lddt": 0.9630652281541381
+    },
+    "3sii": {
+      "head_response": 0.00015385945638020834,
+      "masked_satisfaction": 0.6666666666666666,
+      "steering": 0.0,
+      "supplied_satisfaction": 0.6666666666666666,
+      "unconditioned_lddt": 0.9743041659086775
+    },
+    "4qnp": {
+      "head_response": 0.0034653100883588195,
+      "masked_satisfaction": 0.21153846383094788,
+      "steering": 0.05448717872301737,
+      "supplied_satisfaction": 0.26602564255396527,
+      "unconditioned_lddt": 0.9525637650503498
+    },
+    "5ahj": {
+      "head_response": 0.003566106160481771,
+      "masked_satisfaction": 0.8125,
+      "steering": -0.010416666666666666,
+      "supplied_satisfaction": 0.8020833333333334,
+      "unconditioned_lddt": 0.9787408828686879
+    }
+  },
+  "weights": "raw"
+}

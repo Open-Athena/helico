@@ -1,0 +1,1 @@
+[helico.experiment] ensure_training_run('fixed-six-v1') — dry-run (~$8.00)

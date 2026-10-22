@@ -57,6 +57,14 @@ class TestStructure:
         del batch["contact_state"]
         assert build_contact_onehot(batch, torch.float32) is None
 
+    def test_omitted_conditioning_can_mean_all_unknown(self):
+        batch = make_synthetic_batch(n_tokens=8, device="cpu")
+        batch["contact_state"].zero_()
+        expected = build_contact_onehot(batch, torch.float32)
+        del batch["contact_state"]
+        actual = build_contact_onehot(batch, torch.float32, default_unknown=True)
+        torch.testing.assert_close(actual, expected)
+
     def test_config_fields_reach_checkpoint_dict(self):
         """asdict(TrainConfig) is what loaders rebuild HelicoConfig from."""
         from dataclasses import asdict
@@ -135,6 +143,18 @@ class TestForward:
         with torch.no_grad(), torch.amp.autocast("cuda", dtype=torch.bfloat16):
             out = model(batch, compute_confidence=False)
         assert torch.isfinite(out["pair"].float()).all()
+
+    def test_contact_prediction_model_defaults_to_learned_unknown_embedding(self):
+        model = Helico(_small_cfg(predict_contacts=True)).cuda().eval()
+        with torch.no_grad():
+            model.linear_contact.weight.normal_(0, 0.02)
+        batch = _bf16(make_synthetic_batch(n_tokens=32, device="cuda"))
+        batch["contact_state"].zero_()
+        explicit = _capture_contact_contribution(model, batch)
+        del batch["contact_state"]
+        implicit = _capture_contact_contribution(model, batch)
+        assert len(implicit) == 1
+        torch.testing.assert_close(implicit[0], explicit[0])
 
 
 @cuda_only

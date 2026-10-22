@@ -1,0 +1,8 @@
+{
+  "prediction_records": 64,
+  "target_scores": 80,
+  "failed_target_scores": 0,
+  "output_directory": "/tmp/helico-exp23-official-preflight-scores-v3",
+  "purpose": "Scoring format/mapping preflight only; numerical performance not inspected for protocol selection",
+  "model_settings_frozen": true
+}

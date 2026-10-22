@@ -50,6 +50,12 @@ image = (
     # Project code last (changes most frequently)
     .add_local_dir(str(ROOT / "src"), remote_path="/root/helico/src")
     .add_local_dir(str(ROOT / "tests"), remote_path="/root/helico/tests")
+    .add_local_dir(str(ROOT / "notebooks"), remote_path="/root/helico/notebooks")
+    # The watchdog tests import this standalone entry point by repository path.
+    .add_local_file(
+        str(ROOT / "scripts/watch_contact_training.py"),
+        remote_path="/root/helico/scripts/watch_contact_training.py",
+    )
     .add_local_file(str(ROOT / "pyproject.toml"), remote_path="/root/helico/pyproject.toml")
     .add_local_file(str(ROOT / "README.md"), remote_path="/root/helico/README.md")
 )

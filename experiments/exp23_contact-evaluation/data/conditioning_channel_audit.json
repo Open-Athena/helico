@@ -1,0 +1,29 @@
+{
+  "lr": 2e-05,
+  "contact_lr": 0.0002,
+  "warmup_steps": 500,
+  "steps": 20000,
+  "conditioning_flags": {
+    "use_contacts": true,
+    "predict_contacts": true,
+    "use_msa": true
+  },
+  "model_state_dict": {
+    "column_norms": [
+      1.6161433458328247,
+      1.5067459344863892,
+      4.761000633239746
+    ],
+    "present_minus_unknown_norm": 5.042862892150879,
+    "absent_minus_unknown_norm": 2.272779941558838
+  },
+  "ema_state_dict": {
+    "column_norms": [
+      1.6106808185577393,
+      1.5013772249221802,
+      4.750287055969238
+    ],
+    "present_minus_unknown_norm": 5.03255558013916,
+    "absent_minus_unknown_norm": 2.2642970085144043
+  }
+}

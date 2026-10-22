@@ -1,0 +1,3 @@
+wrapped,draw,pdb_id,error,seconds,n_tokens,n_atoms,msa_rows,atomic_bonds,structural_bond_sum
+False,5315,1ob5,"Duplicate indices are not supported, but index 956 appeared multiple times",0.3929623169824481,,,,,
+True,5315,1ob5,,4.668514848686755,374,1590,16384,1678,510

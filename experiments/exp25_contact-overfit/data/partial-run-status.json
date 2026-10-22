@@ -1,0 +1,51 @@
+{
+  "checked_at": "2026-10-22T15:03:28.570221+00:00",
+  "job_id": "/bizon/helico-exp25-contact-overfit-v1",
+  "job_state": "failed",
+  "wandb_state": "failed",
+  "last_logged_optimizer_step": 4500,
+  "total_logged_optimizer_step": 26000,
+  "last_durable_checkpoint": {
+    "step": 4000,
+    "checkpoint": "s3://marin-us-east-02a/helico/runs/exp25-contact-overfit-v1/step-004000.pt",
+    "data_lock_sha256": "2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114",
+    "sha256": "5342f7c3d106d0f5149e0f1451ae16d79757a3a53bacd55f1460eb3f0175a51a",
+    "bytes": 5795898755
+  },
+  "last_durable_total_step": 25500,
+  "complete_raw_evaluations": [
+    0,
+    100,
+    500,
+    1500,
+    3000
+  ],
+  "missing_evaluations": [
+    "step-005000 raw",
+    "final EMA"
+  ],
+  "result_json_present": false,
+  "monitor_status": "needs_attention",
+  "automatic_restarts": 0,
+  "original_deadline_expired": true,
+  "failure_evidence": {
+    "first_failed_rank": 0,
+    "rank_exit_code": 1,
+    "diagnostic_upload_error": "OSError",
+    "diagnostic_uploads_stop_after_step": 4214,
+    "at_checkpoint_boundary": 4500,
+    "root_exception": "PermissionError: [Errno 1] Account is write suspended for this availability zone. Please check capacity quota and contact support.",
+    "operation": "CreateMultipartUpload",
+    "failure_location": "publish_checkpoint at step 4500",
+    "archive_uri": "s3://marin-us-east-08a/tmp/ttl=7d/iris/task-outputs/bizon/helico-exp25-contact-overfit-v1/0/90a8ce1e534ec398/outputs.tar.zst",
+    "archive_sha256": "a4e39057c3dbc69d3b9a93e64001c70abf8472dc8e7c318046ec30a45922d312"
+  },
+  "task_duration_seconds": 10402.45,
+  "task_h100_hours": 23.116555555555557,
+  "storage_probe": {
+    "checked_at": "2026-10-22T15:04:49.017662+00:00",
+    "operation": "CreateMultipartUpload then abort",
+    "bucket": "marin-us-east-02a",
+    "status": "writable"
+  }
+}

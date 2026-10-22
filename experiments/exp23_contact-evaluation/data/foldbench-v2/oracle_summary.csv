@@ -1,0 +1,19 @@
+model,category,denominator,scored,selection,successes,success_rate_all,mean_lddt_all,mean_lddt_scored
+ema,interface_antibody_antigen,172,161,per-target oracle,52.0,0.3023255813953488,,
+ema,interface_protein_dna,330,308,per-target oracle,226.0,0.6848484848484848,,
+ema,interface_protein_ligand,558,541,per-target oracle,302.0,0.5412186379928315,,
+ema,interface_protein_peptide,51,46,per-target oracle,38.0,0.7450980392156863,,
+ema,interface_protein_protein,279,261,per-target oracle,170.0,0.6093189964157706,,
+ema,interface_protein_rna,70,54,per-target oracle,36.0,0.5142857142857142,,
+ema,monomer_dna,14,14,per-target oracle,,,0.5805714285714286,0.5805714285714286
+ema,monomer_protein,334,330,per-target oracle,,,0.8389970059880241,0.8491666666666667
+ema,monomer_rna,15,15,per-target oracle,,,0.6816,0.6816
+protenix,interface_antibody_antigen,172,161,per-target oracle,51.0,0.29651162790697677,,
+protenix,interface_protein_dna,330,308,per-target oracle,227.0,0.6878787878787879,,
+protenix,interface_protein_ligand,558,541,per-target oracle,296.0,0.5304659498207885,,
+protenix,interface_protein_peptide,51,46,per-target oracle,41.0,0.803921568627451,,
+protenix,interface_protein_protein,279,261,per-target oracle,178.0,0.6379928315412187,,
+protenix,interface_protein_rna,70,54,per-target oracle,37.0,0.5285714285714286,,
+protenix,monomer_dna,14,14,per-target oracle,,,0.5969285714285714,0.5969285714285714
+protenix,monomer_protein,334,330,per-target oracle,,,0.8384850299401199,0.848648484848485
+protenix,monomer_rna,15,15,per-target oracle,,,0.6613333333333333,0.6613333333333333

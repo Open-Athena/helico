@@ -1,0 +1,60 @@
+{
+  "parent_restoration_ranks": [
+    {
+      "restored_step": 20000,
+      "new_recipe": true,
+      "optimizer_restored": true,
+      "ema_restored": true
+    },
+    {
+      "restored_step": 20000,
+      "new_recipe": true,
+      "optimizer_restored": true,
+      "ema_restored": true
+    },
+    {
+      "restored_step": 20000,
+      "new_recipe": true,
+      "optimizer_restored": true,
+      "ema_restored": true
+    },
+    {
+      "restored_step": 20000,
+      "new_recipe": true,
+      "optimizer_restored": true,
+      "ema_restored": true
+    },
+    {
+      "restored_step": 20000,
+      "new_recipe": true,
+      "optimizer_restored": true,
+      "ema_restored": true
+    },
+    {
+      "restored_step": 20000,
+      "new_recipe": true,
+      "optimizer_restored": true,
+      "ema_restored": true
+    },
+    {
+      "restored_step": 20000,
+      "new_recipe": true,
+      "optimizer_restored": true,
+      "ema_restored": true
+    },
+    {
+      "restored_step": 20000,
+      "new_recipe": true,
+      "optimizer_restored": true,
+      "ema_restored": true
+    }
+  ],
+  "first_checkpoint": {
+    "step": 1,
+    "checkpoint": "s3://marin-us-east-02a/helico/runs/exp24-focused-500-v1/step-000001.pt",
+    "data_lock_sha256": "2855c34acc97c8990eb49268f0f17a35f014f76fcd1fac9195dbdd9aaa699114",
+    "sha256": "19a08bbb4097ee6e2154986102f9b6ac519088cd8c946b9420de4e9f67cd5cea",
+    "bytes": 5795898563
+  },
+  "remote_size_verified": true
+}

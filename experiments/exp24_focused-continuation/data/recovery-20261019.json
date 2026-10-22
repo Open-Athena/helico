@@ -1,0 +1,15 @@
+{
+  "date": "2026-10-19",
+  "reason": "Transient IncompleteBody on raw/7n8v JSON metadata upload",
+  "previous_source_sha": "8fae3f211dfddce630df12358f3f8ef8df4d9c44",
+  "recovery_source_sha": "d51f467296e10280b2b0963fedba4e605c6b31a3",
+  "previous_deadline": 1792176120.267571,
+  "charged_previous_seconds": 1200,
+  "remaining_seconds": 4200,
+  "original_stage_seconds": 5400,
+  "whole_study_gpu_hours": 192,
+  "incremental_storage_usd": 24,
+  "unchanged_evaluation_config": true,
+  "existing_records": 654,
+  "expected_records": 672
+}

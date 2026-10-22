@@ -1,0 +1,8 @@
+{
+  "scored_stage_files": 8,
+  "failed_prediction_target_rows": 257,
+  "tested_assemblies": 26,
+  "tested_native_targets": 35,
+  "native_scoring_failures": 19,
+  "policy": "Diagnostic only; original model scores and denominators unchanged."
+}

@@ -1,0 +1,101 @@
+{
+  "observed_utc": "2026-10-16T02:50:50.081696+00:00",
+  "runs": [
+    {
+      "stage": "audit-v1",
+      "run_name": "exp23-contact-eval-audit-v1",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-audit-v1"
+    },
+    {
+      "stage": "development-v2",
+      "run_name": "exp23-contact-eval-development-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-development-v2"
+    },
+    {
+      "stage": "conditioning-v2",
+      "run_name": "exp23-contact-eval-conditioning-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-conditioning-v2"
+    },
+    {
+      "stage": "conditioning-repeat-v1",
+      "run_name": "exp23-contact-eval-conditioning-repeat-v1",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-conditioning-repeat-v1"
+    },
+    {
+      "stage": "search-v2",
+      "run_name": "exp23-contact-eval-search-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-search-v2"
+    },
+    {
+      "stage": "contact-hypotheses-v2",
+      "run_name": "exp23-contact-eval-contact-hypotheses-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-contact-hypotheses-v2"
+    },
+    {
+      "stage": "validation-structures-v3",
+      "run_name": "exp23-contact-eval-validation-structures-v3",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-validation-structures-v3"
+    },
+    {
+      "stage": "alternative-states-v2",
+      "run_name": "exp23-contact-eval-alternative-states-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-alternative-states-v2"
+    },
+    {
+      "stage": "foldbench-ema-0-v2",
+      "run_name": "exp23-contact-eval-foldbench-ema-0-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-foldbench-ema-0-v2"
+    },
+    {
+      "stage": "foldbench-ema-1-v2",
+      "run_name": "exp23-contact-eval-foldbench-ema-1-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-foldbench-ema-1-v2"
+    },
+    {
+      "stage": "foldbench-ema-2-v2",
+      "run_name": "exp23-contact-eval-foldbench-ema-2-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-foldbench-ema-2-v2"
+    },
+    {
+      "stage": "foldbench-ema-3-v2",
+      "run_name": "exp23-contact-eval-foldbench-ema-3-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-foldbench-ema-3-v2"
+    },
+    {
+      "stage": "foldbench-protenix-0-v2",
+      "run_name": "exp23-contact-eval-foldbench-protenix-0-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-foldbench-protenix-0-v2"
+    },
+    {
+      "stage": "foldbench-protenix-1-v2",
+      "run_name": "exp23-contact-eval-foldbench-protenix-1-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-foldbench-protenix-1-v2"
+    },
+    {
+      "stage": "foldbench-protenix-2-v2",
+      "run_name": "exp23-contact-eval-foldbench-protenix-2-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-foldbench-protenix-2-v2"
+    },
+    {
+      "stage": "foldbench-protenix-3-v2",
+      "run_name": "exp23-contact-eval-foldbench-protenix-3-v2",
+      "state": "finished",
+      "url": "https://wandb.ai/timodonnell/helico/runs/exp23-contact-eval-foldbench-protenix-3-v2"
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "reason": "BF16 autocast quantized a rigid rotation at every coordinate-diffusion step; corrected in 5806c0f",
+  "structure_generation_results_require_rerun": true,
+  "contact_audit_unchanged": true,
+  "model_checkpoint_unchanged": true,
+  "original_foldbench_completed": [
+    "foldbench-ema-0-v1",
+    "foldbench-protenix-0-v1",
+    "foldbench-ema-2-v1"
+  ],
+  "original_foldbench_cancelled": [
+    "foldbench-ema-1-v1",
+    "foldbench-protenix-1-v1",
+    "foldbench-protenix-2-v1",
+    "foldbench-ema-3-v1",
+    "foldbench-protenix-3-v1"
+  ],
+  "reruns": [
+    {
+      "old": "development-v1",
+      "new": "development-v2"
+    },
+    {
+      "old": "conditioning-v1",
+      "new": "conditioning-v2"
+    },
+    {
+      "old": "search-v1",
+      "new": "search-v2"
+    },
+    {
+      "old": "alternative-states-v1",
+      "new": "alternative-states-v2"
+    },
+    {
+      "old": "contact-hypotheses-v1",
+      "new": "contact-hypotheses-v2"
+    },
+    {
+      "old": "validation-structures-v2",
+      "new": "validation-structures-v3"
+    },
+    {
+      "old": "foldbench-ema-0-v1",
+      "new": "foldbench-ema-0-v2"
+    },
+    {
+      "old": "foldbench-protenix-0-v1",
+      "new": "foldbench-protenix-0-v2"
+    },
+    {
+      "old": "foldbench-ema-1-v1",
+      "new": "foldbench-ema-1-v2"
+    },
+    {
+      "old": "foldbench-protenix-1-v1",
+      "new": "foldbench-protenix-1-v2"
+    },
+    {
+      "old": "foldbench-ema-2-v1",
+      "new": "foldbench-ema-2-v2"
+    },
+    {
+      "old": "foldbench-protenix-2-v1",
+      "new": "foldbench-protenix-2-v2"
+    },
+    {
+      "old": "foldbench-ema-3-v1",
+      "new": "foldbench-ema-3-v2"
+    },
+    {
+      "old": "foldbench-protenix-3-v1",
+      "new": "foldbench-protenix-3-v2"
+    }
+  ]
+}

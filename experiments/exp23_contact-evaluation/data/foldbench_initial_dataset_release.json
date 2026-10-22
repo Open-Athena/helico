@@ -1,0 +1,53 @@
+{
+  "repo_id": "timodonnell/helico-foldbench-eval-v1",
+  "revision": "3c934affcd88442011cb270564fcd3b6e2ba80b1",
+  "verified_files": 3014,
+  "features_uri": "s3://marin-us-east-02a/helico/evaluations/exp23/foldbench-initial-v1",
+  "target_assemblies": 1522,
+  "ready": 1482,
+  "resource_failures": 27,
+  "alignment_pending": 13,
+  "alignment_pending_ids": [
+    "8bmv-assembly1",
+    "8fz9-assembly1",
+    "8por-assembly1",
+    "8q6q-assembly1",
+    "8rja-assembly1",
+    "8s4h-assembly1",
+    "8ubs-assembly1",
+    "8urf-assembly1",
+    "8vqk-assembly1",
+    "8vvl-assembly1",
+    "8whi-assembly1",
+    "8x5v-assembly1",
+    "9dp2-assembly1"
+  ],
+  "verified_source_files": 1540,
+  "failure_categories": {
+    "interface_protein_peptide": 3,
+    "interface_protein_protein": 5,
+    "interface_protein_ligand": 12,
+    "interface_antibody_antigen": 2,
+    "interface_protein_rna": 5
+  },
+  "alignment_sources": {
+    "pinned_protenix": 1298,
+    "query_only": 15,
+    "colabfold_unpaired_2026-10-15": 256,
+    "foldbench_bundled": 56,
+    "cached_colabfold_uniref": 4
+  },
+  "fine_tuning_train_overlap": [],
+  "train_ids_sha256": "a7f141382dad047837f372607f38e04298f0b90311000d9881a3052ab024e4f2",
+  "feature_manifest_sha256": "fbd9d5832930a9f62ae7e9c23e57266253bbbff9e849fb075e959f97ec00fb32",
+  "archives": {
+    "alignments.tar.gz": {
+      "sha256": "ab9611f13b5f51d298539c40fcec68caf990894b324b6c36b51cc8b2077fcddc",
+      "bytes": 1400515750
+    },
+    "chemical_inputs.tar.gz": {
+      "sha256": "bf395bd117914817f52ef729e18809b073f26bbe1e8cc8b5e25b4f7a6c4c6e36",
+      "bytes": 600690
+    }
+  }
+}

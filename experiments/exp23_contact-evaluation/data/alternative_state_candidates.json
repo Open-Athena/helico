@@ -1,0 +1,289 @@
+[
+  {
+    "pdb_a": "8dp7",
+    "pdb_b": "8dp6",
+    "ca_pairs": 265,
+    "rmsd": 4.397303560326365,
+    "ligands": [
+      [
+        "LW8"
+      ],
+      []
+    ]
+  },
+  {
+    "pdb_a": "7zvr",
+    "pdb_b": "7ztq",
+    "ca_pairs": 235,
+    "rmsd": 2.1728871305311155,
+    "ligands": [
+      [
+        "ZEX"
+      ],
+      []
+    ]
+  },
+  {
+    "pdb_a": "7veu",
+    "pdb_b": "7vev",
+    "ca_pairs": 612,
+    "rmsd": 1.2327571867470568,
+    "ligands": [
+      [
+        "ADA"
+      ],
+      [
+        "CA"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7w5g",
+    "pdb_b": "7w5i",
+    "ca_pairs": 339,
+    "rmsd": 0.5867289065767314,
+    "ligands": [
+      [],
+      [
+        "FPP",
+        "MG",
+        "MLI"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7waj",
+    "pdb_b": "7wak",
+    "ca_pairs": 479,
+    "rmsd": 0.5670020870497258,
+    "ligands": [
+      [
+        "ATP",
+        "BME",
+        "CL",
+        "CO"
+      ],
+      [
+        "1PE",
+        "ADP",
+        "CL"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7wak",
+    "pdb_b": "7wal",
+    "ca_pairs": 476,
+    "rmsd": 0.5544773596341604,
+    "ligands": [
+      [
+        "1PE",
+        "ADP",
+        "CL"
+      ],
+      [
+        "BME",
+        "CL",
+        "CO"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7x0e",
+    "pdb_b": "7x17",
+    "ca_pairs": 375,
+    "rmsd": 0.5246416722512705,
+    "ligands": [
+      [
+        "7Z8"
+      ],
+      [
+        "868"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7w5g",
+    "pdb_b": "7w5h",
+    "ca_pairs": 343,
+    "rmsd": 0.4680274086830539,
+    "ligands": [
+      [],
+      [
+        "FPS",
+        "MG",
+        "MLI"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7w5i",
+    "pdb_b": "7w5h",
+    "ca_pairs": 339,
+    "rmsd": 0.46267988924565423,
+    "ligands": [
+      [
+        "FPP",
+        "MG",
+        "MLI"
+      ],
+      [
+        "FPS",
+        "MG",
+        "MLI"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7wxr",
+    "pdb_b": "7xte",
+    "ca_pairs": 310,
+    "rmsd": 0.3913935392280563,
+    "ligands": [
+      [],
+      []
+    ]
+  },
+  {
+    "pdb_a": "7wzv",
+    "pdb_b": "7x0b",
+    "ca_pairs": 299,
+    "rmsd": 0.3693701097198237,
+    "ligands": [
+      [
+        "7P8",
+        "CL",
+        "NA",
+        "SAM",
+        "SF4"
+      ],
+      [
+        "CL",
+        "SAM",
+        "SF4"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7tds",
+    "pdb_b": "7tdr",
+    "ca_pairs": 288,
+    "rmsd": 0.30621441958561735,
+    "ligands": [
+      [
+        "NA",
+        "NO3"
+      ],
+      [
+        "NO3"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7xd8",
+    "pdb_b": "7xd9",
+    "ca_pairs": 620,
+    "rmsd": 0.25877515447930904,
+    "ligands": [
+      [
+        "ZN"
+      ],
+      [
+        "CTP",
+        "MG",
+        "ZN"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7rev",
+    "pdb_b": "7t68",
+    "ca_pairs": 765,
+    "rmsd": 0.23509327123178037,
+    "ligands": [
+      [
+        "5RK"
+      ],
+      [
+        "GII"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7waj",
+    "pdb_b": "7wal",
+    "ca_pairs": 483,
+    "rmsd": 0.2320853758882239,
+    "ligands": [
+      [
+        "ATP",
+        "BME",
+        "CL",
+        "CO"
+      ],
+      [
+        "BME",
+        "CL",
+        "CO"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7t8v",
+    "pdb_b": "7t68",
+    "ca_pairs": 765,
+    "rmsd": 0.19724039412540567,
+    "ligands": [
+      [
+        "NAG",
+        "W9Y"
+      ],
+      [
+        "GII"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7rev",
+    "pdb_b": "7t8v",
+    "ca_pairs": 765,
+    "rmsd": 0.19719599004810365,
+    "ligands": [
+      [
+        "5RK"
+      ],
+      [
+        "NAG",
+        "W9Y"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7tw8",
+    "pdb_b": "7tw9",
+    "ca_pairs": 261,
+    "rmsd": 0.1797569935057462,
+    "ligands": [
+      [
+        "SAH",
+        "ZN"
+      ],
+      [
+        "EOH",
+        "MOH",
+        "SFG",
+        "ZN"
+      ]
+    ]
+  },
+  {
+    "pdb_a": "7v0q",
+    "pdb_b": "7uzs",
+    "ca_pairs": 658,
+    "rmsd": 0.14533226701260898,
+    "ligands": [
+      [],
+      []
+    ]
+  }
+]

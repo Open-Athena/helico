@@ -1,0 +1,2 @@
+training_records,validation_entries,global_draws_identical,reproduced_draw,n_tokens,n_atoms,msa_rows
+1839712,384,640000,5315,374,1590,16384

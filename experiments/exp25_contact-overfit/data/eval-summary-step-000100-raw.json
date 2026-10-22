@@ -1,0 +1,94 @@
+{
+  "evaluation_config": {
+    "checkpoint_step": 100,
+    "cycles": 1,
+    "diffusion_steps": 200,
+    "features_dataset": {
+      "manifest_sha256": "1733da59edae03d98a132d12a0c3e2b1f69f6eda5cdc6743431a527ba44e3791",
+      "repo_id": "timodonnell/helico-contact-overfit-v1",
+      "revision": "ed0f7372cf033e18168236fb4dadd8a12cb211e7"
+    },
+    "output_uri": "s3://marin-us-east-02a/helico/runs/exp25-contact-overfit-v1/overfit-eval/step-000100",
+    "parent": {
+      "checkpoint_uri": "s3://marin-us-east-02a/helico/runs/exp24-focused-1500-v1/final.pt",
+      "git_sha": "d67b1f4ea8233eae5072bda93f8d3abc034a926d",
+      "sha256": "3167b567a602c2c4a7e9b01def1cddbc5c9462d2ab5aed5b65ab98b4221d501f",
+      "step": 1500,
+      "total_step": 21500
+    },
+    "reference_uri": "s3://marin-us-east-02a/helico/runs/exp25-contact-overfit-v1/overfit-eval/step-000000",
+    "reference_weights": "raw",
+    "seeds": [
+      0,
+      1
+    ],
+    "stage": "focused",
+    "target_groups": {
+      "2fsx": "intra",
+      "3bnj": "pp",
+      "3dn4": "pl",
+      "3sii": "pl",
+      "4qnp": "pp",
+      "5ahj": "intra"
+    },
+    "weights": [
+      "raw"
+    ]
+  },
+  "mean": {
+    "head_response": -0.0016473480791319162,
+    "masked_satisfaction": 0.05149572673771116,
+    "steering": 0.04542378936376837,
+    "supplied_satisfaction": 0.09691951610147953,
+    "unconditioned_lddt": 0.9236219122960906
+  },
+  "measured_steering_targets": 6,
+  "prediction_records": 72,
+  "status": "complete",
+  "step": 100,
+  "targets": {
+    "2fsx": {
+      "head_response": 0.0003294944763183594,
+      "masked_satisfaction": 0.08541666716337204,
+      "steering": -0.021527777115503948,
+      "supplied_satisfaction": 0.06388889004786809,
+      "unconditioned_lddt": 0.9080130341609602
+    },
+    "3bnj": {
+      "head_response": -0.0025533040364583335,
+      "masked_satisfaction": 0.0,
+      "steering": 0.0,
+      "supplied_satisfaction": 0.0,
+      "unconditioned_lddt": 0.8954051544113448
+    },
+    "3dn4": {
+      "head_response": 0.00016466776529947916,
+      "masked_satisfaction": 0.041666666666666664,
+      "steering": 0.041666666666666664,
+      "supplied_satisfaction": 0.08333333333333333,
+      "unconditioned_lddt": 0.9540581937453585
+    },
+    "3sii": {
+      "head_response": -0.005503336588541667,
+      "masked_satisfaction": 0.09375,
+      "steering": -0.010416666666666666,
+      "supplied_satisfaction": 0.08333333333333333,
+      "unconditioned_lddt": 0.9372055503468092
+    },
+    "4qnp": {
+      "head_response": -0.0021788768353872,
+      "masked_satisfaction": 0.06730769326289494,
+      "steering": 0.012820513298114141,
+      "supplied_satisfaction": 0.0801282065610091,
+      "unconditioned_lddt": 0.9170776866812087
+    },
+    "5ahj": {
+      "head_response": -0.0001427332560221354,
+      "masked_satisfaction": 0.020833333333333332,
+      "steering": 0.25,
+      "supplied_satisfaction": 0.2708333333333333,
+      "unconditioned_lddt": 0.9299718544308623
+    }
+  },
+  "weights": "raw"
+}
